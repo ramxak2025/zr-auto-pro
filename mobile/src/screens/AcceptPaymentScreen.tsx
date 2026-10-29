@@ -26,7 +26,6 @@ import { captureDataSession } from '../contexts/dataSession';
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -614,14 +613,14 @@ export default function AcceptPaymentScreen() {
   }
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top']}>
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
         title={check ? `Заказ-наряд #${check.number}` : 'Приём оплаты'}
         subtitle="Приём оплаты"
         onBack={() => navigation.goBack()}
       />
       {body}
-    </SafeAreaView>
+    </View>
   );
 }
 

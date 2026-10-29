@@ -247,8 +247,10 @@ export default function CashierPaymentScreen() {
       <IosScreenHeader
         title="Оплата"
         subtitle={board ? `${ready.length} готов${ready.length === 1 ? '' : 'ы'} к оплате` : undefined}
-        trailing={<FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />}
       />
+      <View style={styles.headerStatus}>
+        <FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} style={styles.statusBadge} />
+      </View>
 
       {/* ── КРУПНЫЙ поиск по госномеру ──────────────────────────────────── */}
       <View style={styles.searchWrap}>
@@ -382,6 +384,8 @@ export default function CashierPaymentScreen() {
 }
 
 const styles = StyleSheet.create({
+  headerStatus: { paddingHorizontal: spacing[4] },
+  statusBadge: { alignSelf: 'flex-start', maxWidth: '100%', marginBottom: spacing[2] },
   safe: { flex: 1 },
   centerFill: { flex: 1, justifyContent: 'center' },
   scrollContent: { paddingHorizontal: spacing[4], paddingTop: spacing[2], gap: spacing[2.5] },

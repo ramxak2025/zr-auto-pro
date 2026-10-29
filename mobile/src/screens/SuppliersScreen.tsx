@@ -9,6 +9,7 @@ import {
   RefreshControl,
   Alert,
   ActivityIndicator,
+  Platform,
 } from 'react-native';
 
 import { Swipeable } from 'react-native-gesture-handler';
@@ -549,37 +550,17 @@ export default function SuppliersScreen() {
             /* Suppliers segment — управляющие действия видны только с
                `suppliers_manage`. Без него экран строго view-only: ни
                «Возврат брака», ни «+ Новый» не рендерим (мёртвых кнопок
-               не оставляем).
-               1) «Возврат брака» — secondary, opens a supplier picker
-                  sheet that forwards to SupplierDetail with the
-                  auto-open flag.
-               2) «+ Новый» — primary, opens the create-supplier modal. */
+               не оставляем). Вторичное действие находится под шапкой. */
             canManageSuppliers ? (
-              <View style={styles.headerTrailing}>
-                <TouchableOpacity
-                  onPress={() => setDefectPickerOpen(true)}
-                  style={[
-                    styles.headerSecondaryBtn,
-                    { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-                  ]}
-                  hitSlop={8}
-                  accessibilityRole="button"
-                  accessibilityLabel="Возврат брака"
-                >
-                  <Ionicons name="return-down-back-outline" size={16} color={colors.orange[600]} />
-                  <Text style={[styles.headerSecondaryText, { color: palette.text.primary }]} numberOfLines={1}>
-                    Возврат брака
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.addBtn}
-                  onPress={openCreate}
-                  hitSlop={8}
-                  accessibilityLabel="Новый поставщик"
-                >
-                  <Ionicons name="add" size={18} color={colors.white} />
-                </TouchableOpacity>
-              </View>
+              <TouchableOpacity
+                style={styles.addBtn}
+                onPress={openCreate}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Новый поставщик"
+              >
+                <Ionicons name="add" size={18} color={colors.white} />
+              </TouchableOpacity>
             ) : undefined
           ) : canManageSuppliers ? (
             /* Orders segment — single «+» that opens order creation. The
@@ -600,6 +581,23 @@ export default function SuppliersScreen() {
           ) : undefined
         }
       />
+
+      {view === 'suppliers' && canManageSuppliers && (
+        <View style={styles.headerSecondaryRow}>
+          <TouchableOpacity
+            onPress={() => setDefectPickerOpen(true)}
+            style={[
+              styles.headerSecondaryBtn,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Возврат брака"
+          >
+            <Ionicons name="return-down-back-outline" size={16} color={colors.orange[600]} />
+            <Text style={[styles.headerSecondaryText, { color: palette.text.primary }]}>Возврат брака</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Segmented control — «Поставщики | Заказы». Compact iOS-style track
           with a sliding active pill; switches the section body below. */}
@@ -625,10 +623,7 @@ export default function SuppliersScreen() {
                   size={15}
                   color={active ? palette.text.primary : palette.text.tertiary}
                 />
-                <Text
-                  style={[styles.segmentText, { color: active ? palette.text.primary : palette.text.secondary }]}
-                  numberOfLines={1}
-                >
+                <Text style={[styles.segmentText, { color: active ? palette.text.primary : palette.text.secondary }]}>
                   {key === 'suppliers' ? 'Поставщики' : 'Заказы'}
                 </Text>
               </TouchableOpacity>
@@ -857,6 +852,8 @@ export default function SuppliersScreen() {
   );
 }
 
+const headerTouchSize = Platform.OS === 'android' ? 48 : 44;
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
   header: {
@@ -870,24 +867,20 @@ const styles = StyleSheet.create({
   headerIcon: { width: 36, height: 36, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center' },
   backText: { fontSize: fontSize.sm, color: colors.primary[600], fontWeight: fontWeight.medium },
   title: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  // ── Header trailing slot ────────────────────────────────────────
-  // Two compact actions live in the 36pt trailing zone. The defect
-  // return CTA is a pill (icon + label) so the label is discoverable
-  // for first-time users; «+ Новый» is a squircle icon-only button —
-  // it's the screen's primary mutation and the icon alone is
-  // unambiguous in iOS UX (this is exactly the pattern Mail / Notes
-  // use for "compose").
-  headerTrailing: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[2],
+  // The secondary action has a separate row; only add stays beside the title.
+  headerSecondaryRow: {
+    paddingHorizontal: spacing[4],
+    paddingBottom: spacing[2],
+    alignItems: 'flex-start',
   },
   headerSecondaryBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
     paddingHorizontal: spacing[2.5],
-    height: 32,
+    paddingVertical: spacing[2],
+    minHeight: headerTouchSize,
+    maxWidth: '100%',
     borderRadius: 16,
     borderWidth: StyleSheet.hairlineWidth,
   },
@@ -895,12 +888,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     letterSpacing: -0.1,
-    maxWidth: 110,
+    flexShrink: 1,
   },
   addBtn: {
     backgroundColor: colors.primary[600],
-    width: 32,
-    height: 32,
+    width: headerTouchSize,
+    height: headerTouchSize,
     borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
@@ -915,6 +908,8 @@ const styles = StyleSheet.create({
   },
   segmentItem: {
     flex: 1,
+    minHeight: headerTouchSize,
+    minWidth: 0,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -929,7 +924,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 1 },
     elevation: 2,
   },
-  segmentText: { fontSize: 14, fontWeight: '600', letterSpacing: -0.2 },
+  segmentText: { fontSize: 14, fontWeight: '600', letterSpacing: -0.2, flexShrink: 1 },
   searchWrap: { paddingHorizontal: spacing[4] },
   // FreshnessBadge slot — sits below the header, right-aligned.
   freshnessRow: {

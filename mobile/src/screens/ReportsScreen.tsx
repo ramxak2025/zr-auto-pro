@@ -888,7 +888,6 @@ export default function ReportsScreen() {
         title="Финансовые отчёты"
         subtitle="Полный контроль над деньгами"
         onBack={() => navigation.goBack()}
-        trailing={<FreshnessBadge query={dashboardQuery} />}
       />
 
       <ScrollView
@@ -903,6 +902,7 @@ export default function ReportsScreen() {
         removeClippedSubviews
         scrollEventThrottle={16}
       >
+        <FreshnessBadge query={dashboardQuery} style={styles.headerStatus} />
         <View ref={captureViewRef} collapsable={false} style={{ gap: spacing[3] }}>
           {/* PERIOD SWITCHER */}
           <View style={styles.periodWrap}>
@@ -2392,6 +2392,7 @@ function buildTableHtml({
 // ─────────────────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
+  headerStatus: { alignSelf: 'flex-start', maxWidth: '100%', marginBottom: spacing[2] },
   safe: { flex: 1 },
   scrollContent: { padding: spacing[4], paddingBottom: spacing[12] },
   accessDenied: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[8] },

@@ -92,13 +92,31 @@ it.each(['ios', 'android'] as const)(
     const ios = IosScreenHeader({ title, onBack: jest.fn() });
     const heading = nodes(ios).find((node) => node.type === 'Text' && node.props.children === title)!;
     expect(style(heading.props.style).fontSize).toBe(platform === 'android' ? 16 : 17);
-    expect(heading.props.numberOfLines).toBe(platform === 'android' ? 2 : 1);
+    expect(heading.props.numberOfLines).toBe(2);
+    expect(heading.props.accessibilityRole).toBe('header');
     expect(heading.props.allowFontScaling).not.toBe(false);
     const back = nodes(ios).find((node) => node.props.accessibilityLabel === 'Назад')!;
-    expect(style(back.props.style).width).toBe(platform === 'android' ? 48 : 36);
-    expect(style(back.props.style).height).toBe(platform === 'android' ? 48 : 36);
+    expect(style(back.props.style).width).toBe(platform === 'android' ? 48 : 44);
+    expect(style(back.props.style).height).toBe(platform === 'android' ? 48 : 44);
   },
 );
+it('keeps navigation and supplied actions independent in the inline header', () => {
+  const back = jest.fn();
+  const save = jest.fn();
+  const trailing = React.createElement('Pressable', { accessibilityLabel: 'Сохранить', onPress: save });
+  const tree = IosScreenHeader({ title: 'Настройки публичной записи клиентов', onBack: back, trailing });
+  const buttons = nodes(tree);
+  (buttons.find((node) => node.props.accessibilityLabel === 'Назад')!.props.onPress as () => void)();
+  expect(back).toHaveBeenCalledTimes(1);
+  expect(save).not.toHaveBeenCalled();
+  (buttons.find((node) => node.props.accessibilityLabel === 'Сохранить')!.props.onPress as () => void)();
+  expect(save).toHaveBeenCalledTimes(1);
+  const leading = React.createElement('Pressable', { accessibilityLabel: 'Закрыть', onPress: save });
+  const custom = nodes(IosScreenHeader({ title: 'Выбор', onBack: back, leading, trailing }));
+  expect(custom.some((node) => node.props.accessibilityLabel === 'Закрыть')).toBe(true);
+  expect(custom.some((node) => node.props.accessibilityLabel === 'Назад')).toBe(false);
+  expect(custom.some((node) => node.props.accessibilityLabel === 'Сохранить')).toBe(true);
+});
 it('warehouse title and back are distinct accessible actions even with a long name', () => {
   const back = jest.fn();
   const warehouse = jest.fn();

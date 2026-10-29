@@ -35,9 +35,9 @@ import {
   RefreshControl,
   ActivityIndicator,
   Alert,
+  Platform,
   useWindowDimensions,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -470,14 +470,13 @@ export default function WorkBoardScreen() {
   const totalActive = board ? columns.reduce((sum, col) => sum + (board.groups[col.key]?.length ?? 0), 0) : 0;
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top']}>
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
         title="Доска заказ-нарядов"
         subtitle={board ? `${totalActive} активных` : undefined}
         onBack={() => navigation.goBack()}
         trailing={
           <View style={styles.headerTrailing}>
-            <FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />
             {orderMode ? (
               <TouchableOpacity
                 style={[styles.addBtn, { backgroundColor: colors.primary[600] }]}
@@ -512,6 +511,9 @@ export default function WorkBoardScreen() {
           </View>
         }
       />
+      <View style={styles.headerStatus}>
+        <FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} style={styles.statusBadge} />
+      </View>
 
       {/* ── Фильтр по исполнителю (Round 14) ────────────────────────────
           Владелец/админ: чипы «Все» + мастера (?assigneeId=). Мастер с
@@ -797,9 +799,11 @@ export default function WorkBoardScreen() {
           </View>
         ) : null}
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }
+
+const headerTouchSize = Platform.OS === 'android' ? 48 : 44;
 
 const styles = StyleSheet.create({
   safe: { flex: 1 },
@@ -807,8 +811,22 @@ const styles = StyleSheet.create({
 
   // ── Header trailing ────────────────────────────────────────────────
   headerTrailing: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  gearBtn: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
-  addBtn: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  headerStatus: { paddingHorizontal: spacing[4] },
+  statusBadge: { alignSelf: 'flex-start', maxWidth: '100%', marginBottom: spacing[2] },
+  gearBtn: {
+    width: headerTouchSize,
+    height: headerTouchSize,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addBtn: {
+    width: headerTouchSize,
+    height: headerTouchSize,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
   // ── Empty board (нет колонок) ──────────────────────────────────────
   emptyBoard: { alignItems: 'center', gap: spacing[3], paddingHorizontal: spacing[6] },

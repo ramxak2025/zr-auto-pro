@@ -749,7 +749,7 @@ export default function CashFlowScreen() {
     </View>
   );
 
-  // ── Trailing slot: 4-segment period switcher ─────────────────────────
+  // ── Content toolbar: 4-segment period switcher ──────────────────────
   // Только 4 регулярных чипа: День / Неделя / Месяц / Год. Произвольный
   // диапазон вынесен отдельной кнопкой ниже, чтобы не загромождать
   // переключатель пятым редко используемым состоянием.
@@ -765,6 +765,7 @@ export default function CashFlowScreen() {
             activeOpacity={0.7}
             accessibilityRole="button"
             accessibilityLabel={`Период: ${PERIOD_LABELS[p]}`}
+            accessibilityState={{ selected: active }}
           >
             <Text
               style={[
@@ -801,7 +802,7 @@ export default function CashFlowScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title="Движение денег" onBack={() => navigation.goBack()} trailing={periodSwitcher} />
+      <IosScreenHeader title="Движение денег" onBack={() => navigation.goBack()} />
 
       <ScrollView
         contentContainerStyle={[
@@ -815,6 +816,7 @@ export default function CashFlowScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
         }
       >
+        {periodSwitcher}
         {/* ── Period sub-header: arrows + central label ───────────────
             Один и тот же контрол для day / week / month / year — пользователю
             не нужно держать в голове два разных способа листать. Для
@@ -1635,25 +1637,32 @@ function CheckRow({
   );
 }
 
+const headerTouchSize = Platform.OS === 'android' ? 48 : 44;
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
   noAccessWrap: { flex: 1, justifyContent: 'center', paddingHorizontal: spacing[6] },
   scrollContent: { padding: spacing[4], gap: spacing[3] },
 
-  // Period switcher (header trailing)
+  // Period switcher has its own full-width row below navigation.
   periodSeg: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     backgroundColor: colors.gray[100],
     borderRadius: borderRadius.full,
     padding: 2,
   },
   periodSegBtn: {
+    flexGrow: 1,
+    flexShrink: 1,
+    flexBasis: 0,
     paddingVertical: 5,
     paddingHorizontal: 8,
     borderRadius: borderRadius.full,
     alignItems: 'center',
     justifyContent: 'center',
-    minWidth: 38,
+    minWidth: headerTouchSize,
+    minHeight: headerTouchSize,
   },
   periodSegBtnActive: {
     backgroundColor: colors.white,
@@ -1668,6 +1677,8 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.gray[500],
     letterSpacing: -0.1,
+    textAlign: 'center',
+    flexShrink: 1,
   },
   periodSegTextActive: { color: colors.gray[900], fontWeight: '700' },
 
@@ -1677,8 +1688,8 @@ const styles = StyleSheet.create({
   // и масштабируется одинаково на день / неделю / месяц / год.
   rangeRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
   rangeArrow: {
-    width: 40,
-    height: 40,
+    width: headerTouchSize,
+    height: headerTouchSize,
     borderRadius: borderRadius.xl,
     backgroundColor: colors.white,
     borderWidth: StyleSheet.hairlineWidth,
@@ -1691,12 +1702,12 @@ const styles = StyleSheet.create({
   // Placeholder ровно той же ширины, что и rangeArrow — нужен в
   // 'custom'-режиме, чтобы центральная подпись осталась по центру
   // строки, а не уехала к краю.
-  rangeArrowSpacer: { width: 40, height: 40 },
+  rangeArrowSpacer: { width: headerTouchSize, height: headerTouchSize },
   rangeChip: {
     flex: 1,
     // minHeight вместо жёсткой высоты: вторая строка «к текущему» (когда
     // улистали в прошлое) не должна клипаться.
-    minHeight: 40,
+    minHeight: headerTouchSize,
     borderRadius: borderRadius.xl,
     borderWidth: StyleSheet.hairlineWidth,
     backgroundColor: colors.white,

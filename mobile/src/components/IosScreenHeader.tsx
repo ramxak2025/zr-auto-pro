@@ -25,7 +25,7 @@ import { useColors } from '../contexts/ThemeContext';
  *   • title 17pt semibold, letter-spacing -0.4 (San Francisco rule for
  *     headline-grade text)
  *   • subtitle 12pt regular, gray-500
- *   • leading/trailing slots are 36pt squircles
+ *   • back targets are 44pt on iOS and 48dp on Android
  *   • respects useSafeAreaInsets().top — the header always sits below the
  *     Dynamic Island / notch
  *
@@ -35,8 +35,7 @@ import { useColors } from '../contexts/ThemeContext';
 export interface IosScreenHeaderProps {
   title: string;
   subtitle?: string;
-  /** Tap handler for an automatic back button (chevron.left).
-   *  When provided, a leading 36pt squircle button is rendered. */
+  /** Tap handler for an automatic, platform-sized back button (chevron.left). */
   onBack?: () => void;
   /** Custom leading slot. Overrides the built-in back button. */
   leading?: React.ReactNode;
@@ -70,23 +69,25 @@ export default function IosScreenHeader({
   const effectiveShowDivider = isAndroid ? true : showDivider;
   const effectiveCenterTitle = isAndroid ? false : centerTitle;
 
-  const leadingNode = leading ? (
-    leading
-  ) : onBack ? (
-    <Pressable
-      onPress={onBack}
-      hitSlop={10}
-      style={[styles.iconBtn, isAndroid && styles.androidIconBtn, { backgroundColor: palette.bg.muted }]}
-      accessibilityRole="button"
-      accessibilityLabel="Назад"
-    >
-      <Ionicons name="chevron-back" size={20} color={palette.text.primary} />
-    </Pressable>
-  ) : (
-    <View style={styles.iconBtnPlaceholder} />
-  );
+  const leadingNode =
+    leading != null ? (
+      leading
+    ) : onBack ? (
+      <Pressable
+        onPress={onBack}
+        hitSlop={10}
+        style={[styles.iconBtn, isAndroid && styles.androidIconBtn, { backgroundColor: palette.bg.muted }]}
+        accessibilityRole="button"
+        accessibilityLabel="Назад"
+      >
+        <Ionicons name="chevron-back" size={20} color={palette.text.primary} />
+      </Pressable>
+    ) : null;
 
-  const trailingNode = trailing ?? <View style={styles.iconBtnPlaceholder} />;
+  // Only centered titles need a balancing slot. Ordinary section titles start
+  // at the content edge when there is no back action.
+  const balance = effectiveCenterTitle && (leadingNode != null || trailing != null);
+  const emptySlot = balance ? <View style={styles.iconBtnPlaceholder} /> : null;
 
   return (
     <View
@@ -102,22 +103,25 @@ export default function IosScreenHeader({
       ]}
     >
       <View style={[styles.row, effectiveCenterTitle && styles.rowCenter]}>
-        {leadingNode}
-        <View style={[styles.center, effectiveCenterTitle && styles.centerCentered]}>
-          <Text
-            variant="bodyEmph"
-            numberOfLines={isAndroid ? 2 : 1}
-            style={[styles.title, isAndroid && styles.androidTitle, { color: palette.text.primary }]}
-          >
-            {title}
-          </Text>
-          {subtitle ? (
-            <Text variant="caption" numberOfLines={1} style={[styles.subtitle, { color: palette.text.secondary }]}>
-              {subtitle}
+        <View style={styles.primary}>
+          {(leadingNode != null || balance) && <View style={styles.side}>{leadingNode ?? emptySlot}</View>}
+          <View style={[styles.center, effectiveCenterTitle && styles.centerCentered]}>
+            <Text
+              variant="bodyEmph"
+              accessibilityRole="header"
+              numberOfLines={2}
+              style={[styles.title, isAndroid && styles.androidTitle, { color: palette.text.primary }]}
+            >
+              {title}
             </Text>
-          ) : null}
+            {subtitle ? (
+              <Text variant="caption" numberOfLines={1} style={[styles.subtitle, { color: palette.text.secondary }]}>
+                {subtitle}
+              </Text>
+            ) : null}
+          </View>
         </View>
-        {trailingNode}
+        {(trailing != null || balance) && <View style={[styles.side, styles.trailing]}>{trailing ?? emptySlot}</View>}
       </View>
     </View>
   );
@@ -130,13 +134,29 @@ const styles = StyleSheet.create({
   },
   row: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
+    rowGap: spacing[1],
+    minHeight: Platform.OS === 'android' ? 48 : 44,
   },
+  // Keep navigation and its title together; move a wide action group before
+  // it can reduce the identity to a few letters on a narrow screen.
+  primary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexBasis: '70%',
+    minWidth: '70%',
+    flexGrow: 1,
+    flexShrink: 1,
+  },
+  side: { flexShrink: 0, justifyContent: 'center' },
+  trailing: { marginLeft: 'auto', maxWidth: '100%' },
   rowCenter: {
     justifyContent: 'space-between',
   },
   center: {
     flex: 1,
+    minWidth: 0,
     paddingHorizontal: spacing[2],
   },
   centerCentered: {
@@ -144,6 +164,7 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: 17,
+    lineHeight: 22,
     fontWeight: '600',
     letterSpacing: -0.4,
   },
@@ -153,15 +174,15 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
   iconBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
   },
   androidIconBtn: { width: 48, height: 48, borderRadius: 24 },
   iconBtnPlaceholder: {
-    width: 36,
-    height: 36,
+    width: 44,
+    height: 44,
   },
 });

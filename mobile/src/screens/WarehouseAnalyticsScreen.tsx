@@ -98,6 +98,9 @@ function MonthPeriodSwitcher({ value, onChange }: MonthPeriodSwitcherProps) {
               },
             ]}
             hitSlop={6}
+            accessibilityRole="button"
+            accessibilityLabel={`Период: ${p.label}`}
+            accessibilityState={{ selected: active }}
           >
             <Text
               variant="caption"
@@ -380,11 +383,7 @@ export default function WarehouseAnalyticsScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader
-        title="Складская аналитика"
-        onBack={() => navigation.goBack()}
-        trailing={<MonthPeriodSwitcher value={period} onChange={setPeriod} />}
-      />
+      <IosScreenHeader title="Складская аналитика" onBack={() => navigation.goBack()} />
       {/* Автосервис (169): склад и аналитика — филиала сессии. Только подпись. */}
       <PointIndicator variant="chip" style={styles.pointChipRow} />
 
@@ -407,6 +406,7 @@ export default function WarehouseAnalyticsScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />
         }
       >
+        <MonthPeriodSwitcher value={period} onChange={setPeriod} />
         {/* Warehouse switcher chip row */}
         <WarehouseChipRow
           warehouses={warehouses ?? []}
@@ -1121,6 +1121,8 @@ function GmroiCard({
 // Styles
 // ────────────────────────────────────────────────────────────────────────
 
+const headerTouchSize = Platform.OS === 'android' ? 48 : 44;
+
 const styles = StyleSheet.create({
   pointChipRow: { marginHorizontal: spacing[4], marginBottom: spacing[2], alignSelf: 'flex-start' },
   safe: { flex: 1 },
@@ -1129,24 +1131,32 @@ const styles = StyleSheet.create({
     gap: spacing[3],
   },
 
-  // Period segmented control (trailing in header)
+  // Period segmented control uses the content width below navigation.
   segWrap: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     backgroundColor: colors.gray[100],
     borderRadius: 999,
     padding: 2,
     gap: 2,
   },
   segItem: {
+    flexGrow: 1,
+    flexShrink: 1,
+    flexBasis: 0,
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 999,
-    minWidth: 56,
+    minWidth: headerTouchSize,
+    minHeight: headerTouchSize,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   segItemText: {
     fontSize: 12,
     letterSpacing: -0.1,
+    textAlign: 'center',
+    flexShrink: 1,
   },
 
   // Warehouse chips row
