@@ -34,6 +34,7 @@ import { invalidateAttendanceQueries } from '../../../../../shared/utils/attenda
 import type { OwnerHomeProfit } from '../../../../../shared/types/ownerHome';
 import OwnerHomeOperational, { OwnerHomeRetry } from './OwnerHomeOperational';
 import OwnerHomeDetails, { type OwnerHomeDetail } from './OwnerHomeDetails';
+import OwnerHomeWidgetSync from './OwnerHomeWidgetSync';
 import {
   loadOwnerHome,
   moveOwnerDay,
@@ -210,6 +211,7 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
   const stackMonthValue = fontScale > 1.2 || monthMoneyLength > 15 || (width < 370 && monthMoneyLength > 12);
   return (
     <View style={[styles.screen, { backgroundColor: p.bg.canvas }]}>
+      {enabled && <OwnerHomeWidgetSync scope={scope} enabled={enabled} />}
       <TabBarScrollView
         contentContainerStyle={[styles.content, { paddingTop: insets.top + 6 }]}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshAll} tintColor={p.accent.primary} />}
