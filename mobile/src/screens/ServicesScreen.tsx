@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -8,9 +8,12 @@ import {
   RefreshControl,
   Alert,
   ActivityIndicator,
+  Platform,
 } from 'react-native';
 
-import IosScreenHeader from '../components/IosScreenHeader';
+import type { FlashListRef } from '@shopify/flash-list';
+import ServicesHeader from './services/ServicesHeader';
+import { ServicesList, useServicesScroll } from './services/ServicesScroll';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -18,7 +21,6 @@ import { useNavigation } from '@react-navigation/native';
 import { servicesApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
-import SearchInput from '../components/SearchInput';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import Modal from '../components/Modal';
@@ -28,25 +30,12 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system/legacy';
-import * as Sharing from 'expo-sharing';
-import * as Crypto from 'expo-crypto';
-import * as XLSX from 'xlsx';
 import type { Service, ServiceVisibilityConfig, ServicePriceHistoryEntry, ServiceFolder } from '../../../shared/types';
-import type { ServiceImportPreview } from '../../../shared/api/types';
 import { normalizeServiceCategoryPath } from '../../../shared/utils/normalizeServiceCategoryPath';
-import {
-  assertNoServiceWorkbookFormulas,
-  assertServiceWorkbookSafe,
-  parseServiceImportMatrix,
-  serviceExportMatrix,
-  serviceWorkbookBytesFromBase64,
-} from '../../../shared/utils/serviceSpreadsheet';
 import { loadAllPages } from '../../../shared/utils/loadAllPages';
 import { serviceBrowserLevel } from '../../../shared/utils/serviceBrowser';
 import { servicePriceFormValue, preservePlaceholderServicePrice } from '../../../shared/utils/servicePrices';
-import { TabBarScrollView as ScrollView, TabBarFlashList as FlashList } from '../components/TabBarScrollable';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 function formatMoney(v: number) {
   return (
@@ -118,6 +107,8 @@ export default function ServicesScreen() {
   const [showAllServices, setShowAllServices] = useState(false);
   const preferredOnly = !isOwner && !showAllServices;
   const tabBarHeight = useTabBarHeight();
+  const catalogScroll = useServicesScroll();
+  const catalogList = useRef<FlashListRef<Service>>(null);
   const [search, setSearch] = useState('');
   const [refreshing, setRefreshing] = useState(false);
 
@@ -240,16 +231,13 @@ export default function ServicesScreen() {
   const [visibilityRoleIds, setVisibilityRoleIds] = useState<string[]>([]);
   const [visibilityRuleActive, setVisibilityRuleActive] = useState(false);
   const [folderListOpen, setFolderListOpen] = useState(false);
-  const [importPreview, setImportPreview] = useState<ServiceImportPreview | null>(null);
-  const [importRequestId, setImportRequestId] = useState<string | null>(null);
-  const [importBusy, setImportBusy] = useState(false);
-  const importStatusLabel = importPreview ? 'Импорт услуг…' : 'Подготовка импорта…';
-
-  const { data, isLoading, isError, refetch } = useQuery<Service[]>({
+  const servicesQuery = useQuery<Service[]>({
     queryKey: ['services', { preferredOnly }],
     queryFn: () =>
       loadAllPages(async (page, limit) => (await servicesApi.getAll({ page, limit, preferredOnly })).data, 500),
   });
+
+  const { data, isLoading, isError, refetch } = servicesQuery;
 
   const visibilityConfigQuery = useQuery<ServiceVisibilityConfig>({
     queryKey: ['service-visibility-config'],
@@ -450,86 +438,6 @@ export default function ServicesScreen() {
     setRefreshing(false);
   };
 
-  const exportCatalog = async () => {
-    try {
-      const response = await servicesApi.exportCatalog();
-      const sheet = XLSX.utils.aoa_to_sheet(serviceExportMatrix(response.data));
-      const book = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(book, sheet, 'Услуги');
-      const base64 = XLSX.write(book, { type: 'base64', bookType: 'xlsx' }) as string;
-      const directory = FileSystem.cacheDirectory;
-      if (!directory) throw new Error('Нет временной папки для файла');
-      const uri = `${directory}Каталог-услуг-Autexa.xlsx`;
-      await FileSystem.writeAsStringAsync(uri, base64, { encoding: 'base64' });
-      if (!(await Sharing.isAvailableAsync())) throw new Error('На этом устройстве недоступна отправка файла');
-      await Sharing.shareAsync(uri, {
-        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        dialogTitle: 'Экспорт услуг',
-      });
-    } catch (error) {
-      Alert.alert('Экспорт не выполнен', error instanceof Error ? error.message : 'Не удалось выгрузить каталог услуг');
-    }
-  };
-
-  const chooseImportFile = async () => {
-    setImportBusy(true);
-    try {
-      const picked = await DocumentPicker.getDocumentAsync({
-        type: [
-          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-          'application/vnd.ms-excel',
-          'text/csv',
-        ],
-        copyToCacheDirectory: true,
-        multiple: false,
-      });
-      if (picked.canceled) return;
-      const file = picked.assets[0];
-      if ((file.size ?? 0) > 5 * 1024 * 1024) throw new Error('Файл больше 5 МБ');
-      const base64 = await FileSystem.readAsStringAsync(file.uri, { encoding: 'base64' });
-      const bytes = serviceWorkbookBytesFromBase64(base64);
-      assertServiceWorkbookSafe(bytes);
-      const book = XLSX.read(base64, { type: 'base64', raw: true, cellFormula: true, sheetRows: 2001 });
-      assertNoServiceWorkbookFormulas(Object.values(book.Sheets) as Array<Record<string, { f?: unknown }>>);
-      const sheet = book.Sheets[book.SheetNames[0]];
-      if (!sheet) throw new Error('В книге нет листа с услугами');
-      const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '', raw: true });
-      const rows = parseServiceImportMatrix(matrix);
-      const preview = await servicesApi.previewImport(rows);
-      setImportPreview(preview.data);
-      setImportRequestId(Crypto.randomUUID());
-    } catch (error) {
-      Alert.alert('Импорт не выполнен', error instanceof Error ? error.message : 'Не удалось прочитать файл услуг');
-    } finally {
-      setImportBusy(false);
-    }
-  };
-
-  const confirmImport = async () => {
-    if (!importPreview || !importRequestId || importPreview.summary.errors > 0) return;
-    setImportBusy(true);
-    try {
-      const result = await servicesApi.confirmImport(importPreview.previewId, importRequestId);
-      await queryClient.invalidateQueries({ queryKey: ['services'] });
-      await queryClient.invalidateQueries({ queryKey: ['all-services'] });
-      haptic('success');
-      Alert.alert('Импорт завершён', `Создано: ${result.data.created}. Обновлено: ${result.data.updated}.`);
-      setImportPreview(null);
-      setImportRequestId(null);
-    } catch (error) {
-      haptic('error');
-      const status = (error as { response?: { status?: number } })?.response?.status;
-      Alert.alert(
-        'Импорт не выполнен',
-        status === 409
-          ? 'Каталог изменился после просмотра. Загрузите файл повторно.'
-          : 'Изменения не применены. Повторите подтверждение.',
-      );
-    } finally {
-      setImportBusy(false);
-    }
-  };
-
   const services = data ?? [];
   const total = services.length;
   const [activePath, setActivePath] = useState<string[]>([]);
@@ -554,67 +462,15 @@ export default function ServicesScreen() {
     [openEdit, canManageServices, openVisibility, visibilityConfigQuery.isSuccess, palette],
   );
 
-  return (
-    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader
-        title="Услуги"
-        subtitle={total > 0 ? `Услуг: ${total}` : undefined}
-        onBack={() => navigation.goBack()}
-        trailing={
-          canManageServices ? (
-            <TouchableOpacity style={styles.addBtn} onPress={openCreate}>
-              <Text style={styles.addBtnText}>+ Новая</Text>
-            </TouchableOpacity>
-          ) : undefined
-        }
-      />
-
-      <View
-        style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: spacing[4],
-          marginHorizontal: spacing[4],
-          paddingVertical: spacing[2],
-        }}
-      >
-        {!isOwner && (
-          <TouchableOpacity
-            onPress={() => {
-              setShowAllServices((value) => !value);
-            }}
-            accessibilityRole="button"
-            accessibilityState={{ selected: showAllServices }}
-          >
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1] }}>
-              <Ionicons
-                name={showAllServices ? 'eye-off-outline' : 'eye-outline'}
-                size={18}
-                color={colors.primary[600]}
-              />
-              <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold }}>
-                {showAllServices ? 'Показ по роли' : 'Все услуги'}
-              </Text>
-            </View>
-          </TouchableOpacity>
-        )}
-        {canManageServices && (
-          <TouchableOpacity
-            disabled={!visibilityConfigQuery.isSuccess}
-            onPress={() => setFolderListOpen(true)}
-            accessibilityRole="button"
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: spacing[1],
-              opacity: visibilityConfigQuery.isSuccess ? 1 : 0.45,
-            }}
-          >
-            <Ionicons name="shield-checkmark-outline" size={18} color={colors.primary[600]} />
-            <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold }}>Видимость</Text>
-          </TouchableOpacity>
-        )}
-      </View>
+  const folderPath = activePath.join('/');
+  const resetScroll = catalogScroll.reset;
+  useEffect(() => {
+    catalogList.current?.scrollToOffset({ offset: 0, animated: false });
+    resetScroll();
+  }, [folderPath, search, preferredOnly, resetScroll]);
+  const catalogReady = !isError && !folderQuery.isError && data !== undefined;
+  const listHeader = (
+    <View>
       {canManageServices && visibilityConfigQuery.isError && (
         <View
           style={{
@@ -631,47 +487,6 @@ export default function ServicesScreen() {
           </TouchableOpacity>
         </View>
       )}
-
-      {canManageServices && (
-        <View
-          style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: spacing[4], paddingHorizontal: spacing[4] }}
-        >
-          <TouchableOpacity
-            onPress={() => void exportCatalog()}
-            accessibilityRole="button"
-            accessibilityLabel="Экспортировать каталог в Excel"
-          >
-            <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold }}>Экспорт Excel</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => void chooseImportFile()}
-            disabled={importBusy}
-            accessibilityRole="button"
-            accessibilityLabel="Импортировать услуги из Excel"
-          >
-            <Text
-              style={{ color: colors.primary[600], fontWeight: fontWeight.semibold, opacity: importBusy ? 0.5 : 1 }}
-            >
-              Импорт Excel
-            </Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {importBusy && (
-        <View
-          accessible
-          accessibilityRole="progressbar"
-          accessibilityLabel={importStatusLabel}
-          accessibilityState={{ busy: true }}
-          accessibilityLiveRegion="polite"
-          style={styles.importStatus}
-        >
-          <ActivityIndicator size="small" color={palette.accent.primary} accessible={false} />
-          <Text style={{ flex: 1, fontSize: fontSize.sm, color: palette.text.secondary }}>{importStatusLabel}</Text>
-        </View>
-      )}
-
       {/* Breadcrumbs — appear when navigating folders */}
       {!search && activePath.length > 0 && (
         <View style={styles.breadcrumb}>
@@ -700,149 +515,149 @@ export default function ServicesScreen() {
           ))}
         </View>
       )}
-
-      <View style={styles.searchWrap}>
-        <SearchInput
-          value={search}
-          onChange={(v) => {
-            setSearch(v);
-          }}
-          placeholder="Поиск во всех папках"
-        />
-      </View>
-
-      {canManageServices && !search && (
-        <View
-          style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            paddingHorizontal: spacing[4],
-            paddingVertical: spacing[3],
-          }}
-        >
-          <TouchableOpacity
-            accessibilityRole="button"
-            style={{ minHeight: 44, justifyContent: 'center' }}
-            accessibilityLabel="Новая папка"
-            onPress={() => setNewFolder({ parentPath: activePath.join('/'), session: captureDataSession() })}
-          >
-            <Text style={{ color: palette.accent.primaryText, fontWeight: '600' }}>Новая папка</Text>
-          </TouchableOpacity>
-          {activePath.length > 0 && (
-            <TouchableOpacity
-              accessibilityRole="button"
-              style={{ minHeight: 44, justifyContent: 'center' }}
-              onPress={() => folderActions(activePath.join('/'))}
-            >
-              <Text style={{ color: palette.accent.primaryText }}>Управление папкой</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      )}
-      {isError || folderQuery.isError ? (
-        <View style={{ padding: spacing[4] }}>
-          <Text style={{ color: palette.text.primary }}>Не удалось загрузить каталог.</Text>
-          <TouchableOpacity
-            onPress={() => {
-              void refetch();
-              void folderQuery.refetch();
-            }}
-            style={{ paddingVertical: 12 }}
-          >
-            <Text style={{ color: palette.accent.primaryText }}>Повторить</Text>
-          </TouchableOpacity>
-        </View>
-      ) : data === undefined ? (
-        // Cold-start: skeleton until ANY data (cached or freshly
-        // fetched) lands. After that, SWR keeps the list visible
-        // across filter mutations.
-        <ListSkeleton count={8} />
-      ) : !search && folders.length === 0 && currentServices.length === 0 && !isLoading ? (
-        <EmptyState
-          title={preferredOnly ? 'Нет услуг по вашей роли' : 'Нет услуг'}
-          description={
-            preferredOnly
-              ? 'Покажите полный каталог или попросите владельца настроить видимость.'
-              : canManageServices
-                ? 'Добавьте первую услугу'
-                : 'Каталог услуг пуст'
-          }
-          action={
-            preferredOnly
-              ? { label: 'Показать все услуги', onPress: () => setShowAllServices(true) }
-              : canManageServices
-                ? { label: 'Добавить', onPress: openCreate }
-                : undefined
-          }
-        />
-      ) : (
-        <FlashList
-          data={currentServices}
-          keyExtractor={(item) => item.id}
-          renderItem={renderService}
-          contentContainerStyle={{ ...styles.list, paddingBottom: tabBarHeight + spacing[4] }}
-          scrollIndicatorInsets={{ bottom: tabBarHeight }}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
-          }
-          ListEmptyComponent={
-            search ? (
-              <View style={{ padding: 24 }}>
-                <Text style={{ color: palette.text.primary, fontWeight: '600' }}>Ничего не найдено</Text>
-                <Text style={{ color: palette.text.secondary, marginTop: 6 }}>
-                  Попробуйте другое название услуги или папки.
-                </Text>
-              </View>
-            ) : null
-          }
-          ListHeaderComponent={
-            !search && folders.length > 0 ? (
-              <View style={[styles.foldersList, { backgroundColor: palette.bg.card }]}>
-                {folders.map(([folderName, count]) => (
+      {catalogReady &&
+        (!search && folders.length > 0 ? (
+          <View style={[styles.foldersList, { backgroundColor: palette.bg.card }]}>
+            {folders.map(([folderName, count]) => (
+              <TouchableOpacity
+                key={folderName}
+                style={[styles.folderRow, { borderBottomColor: palette.border.subtle }]}
+                onPress={() => setActivePath((prev) => [...prev, folderName])}
+                activeOpacity={0.6}
+              >
+                <View
+                  style={[
+                    styles.folderIconBox,
+                    palette.mode === 'dark' && { backgroundColor: softTint(colors.primary[600], 'dark') },
+                  ]}
+                >
+                  <Ionicons name="folder-open-outline" size={18} color={colors.primary[500]} />
+                </View>
+                <View style={styles.folderInfo}>
+                  <Text style={[styles.folderName, { color: palette.text.primary }]} numberOfLines={1}>
+                    {folderName}
+                  </Text>
+                  <Text style={[styles.folderCount, { color: palette.text.tertiary }]}>
+                    {count ? `${count} услуг` : 'Пустая папка'}
+                  </Text>
+                </View>
+                {canManageServices && (
                   <TouchableOpacity
-                    key={folderName}
-                    style={[styles.folderRow, { borderBottomColor: palette.border.subtle }]}
-                    onPress={() => setActivePath((prev) => [...prev, folderName])}
-                    activeOpacity={0.6}
+                    disabled={!visibilityConfigQuery.isSuccess}
+                    onPress={() => openVisibility({ kind: 'category', path: [...activePath, folderName].join('/') })}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Видимость папки ${folderName}`}
+                    style={{ padding: spacing[2] }}
                   >
-                    <View
-                      style={[
-                        styles.folderIconBox,
-                        palette.mode === 'dark' && { backgroundColor: softTint(colors.primary[600], 'dark') },
-                      ]}
-                    >
-                      <Ionicons name="folder-open-outline" size={18} color={colors.primary[500]} />
-                    </View>
-                    <View style={styles.folderInfo}>
-                      <Text style={[styles.folderName, { color: palette.text.primary }]} numberOfLines={1}>
-                        {folderName}
-                      </Text>
-                      <Text style={[styles.folderCount, { color: palette.text.tertiary }]}>
-                        {count ? `${count} услуг` : 'Пустая папка'}
-                      </Text>
-                    </View>
-                    {canManageServices && (
-                      <TouchableOpacity
-                        disabled={!visibilityConfigQuery.isSuccess}
-                        onPress={() =>
-                          openVisibility({ kind: 'category', path: [...activePath, folderName].join('/') })
-                        }
-                        accessibilityRole="button"
-                        accessibilityLabel={`Видимость папки ${folderName}`}
-                        style={{ padding: spacing[2] }}
-                      >
-                        <Ionicons name="shield-checkmark-outline" size={18} color={colors.primary[600]} />
-                      </TouchableOpacity>
-                    )}
-                    <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+                    <Ionicons name="shield-checkmark-outline" size={18} color={colors.primary[600]} />
                   </TouchableOpacity>
-                ))}
-              </View>
-            ) : null
-          }
-        />
-      )}
+                )}
+                <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+              </TouchableOpacity>
+            ))}
+          </View>
+        ) : null)}
+    </View>
+  );
+  const listEmpty =
+    isError || folderQuery.isError ? (
+      <View style={{ padding: spacing[4] }}>
+        <Text style={{ color: palette.text.primary }}>Не удалось загрузить каталог.</Text>
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel="Повторить загрузку каталога"
+          onPress={() => {
+            void refetch();
+            void folderQuery.refetch();
+          }}
+          style={{ paddingVertical: 12 }}
+        >
+          <Text style={{ color: palette.accent.primaryText }}>Повторить</Text>
+        </TouchableOpacity>
+      </View>
+    ) : data === undefined ? (
+      <ListSkeleton count={8} />
+    ) : !search && folders.length === 0 && currentServices.length === 0 && !isLoading ? (
+      <EmptyState
+        title={preferredOnly ? 'Нет услуг по вашей роли' : 'Нет услуг'}
+        description={
+          preferredOnly
+            ? 'Покажите полный каталог или попросите владельца настроить видимость.'
+            : canManageServices
+              ? 'Добавьте первую услугу'
+              : 'Каталог услуг пуст'
+        }
+        action={
+          preferredOnly
+            ? { label: 'Показать все услуги', onPress: () => setShowAllServices(true) }
+            : canManageServices
+              ? { label: 'Добавить', onPress: openCreate }
+              : undefined
+        }
+      />
+    ) : search ? (
+      <View style={{ padding: 24 }}>
+        <Text style={{ color: palette.text.primary, fontWeight: '600' }}>Ничего не найдено</Text>
+        <Text style={{ color: palette.text.secondary, marginTop: 6 }}>
+          Попробуйте другое название услуги или папки.
+        </Text>
+      </View>
+    ) : null;
+
+  return (
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+      <ServicesHeader
+        scroll={catalogScroll}
+        folderName={activePath[activePath.length - 1] || (preferredOnly ? 'Услуги по роли' : 'Все услуги')}
+        folderPath={folderPath}
+        countLabel={
+          data === undefined
+            ? undefined
+            : search
+              ? `Найдено: ${currentServices.length}`
+              : `Услуг: ${activePath.length ? currentServices.length : total} · Папок: ${folders.length}`
+        }
+        queries={[servicesQuery, folderQuery]}
+        search={search}
+        onSearchChange={setSearch}
+        onBack={() => (activePath.length ? setActivePath((path) => path.slice(0, -1)) : navigation.goBack())}
+        onAdd={canManageServices ? openCreate : undefined}
+        onCreateFolder={
+          canManageServices && !search
+            ? () => setNewFolder({ parentPath: activePath.join('/'), session: captureDataSession() })
+            : undefined
+        }
+        onVisibility={canManageServices ? () => setFolderListOpen(true) : undefined}
+        visibilityDisabled={!visibilityConfigQuery.isSuccess}
+        onToggleShowAll={!isOwner ? () => setShowAllServices((value) => !value) : undefined}
+        showAll={showAllServices}
+        onManageFolder={
+          canManageServices && !search && activePath.length > 0 ? () => folderActions(activePath.join('/')) : undefined
+        }
+      />
+      <ServicesList
+        ref={catalogList}
+        onScroll={catalogScroll.onScroll}
+        scrollEventThrottle={16}
+        data={catalogReady ? currentServices : []}
+        keyExtractor={(item) => item.id}
+        renderItem={renderService}
+        contentContainerStyle={{
+          ...styles.list,
+          paddingTop: catalogScroll.contentTop,
+          paddingBottom: tabBarHeight + spacing[4],
+        }}
+        contentInsetAdjustmentBehavior="never"
+        automaticallyAdjustContentInsets={false}
+        scrollIndicatorInsets={{ bottom: tabBarHeight }}
+        keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+        keyboardShouldPersistTaps="handled"
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
+        }
+        ListHeaderComponent={listHeader}
+        ListEmptyComponent={listEmpty}
+      />
 
       {newFolder && (
         <NewCatalogFolderModal
@@ -944,80 +759,6 @@ export default function ServicesScreen() {
             <Text style={{ color: palette.text.tertiary, paddingVertical: spacing[3] }}>Папок пока нет</Text>
           )}
         </ScrollView>
-      </Modal>
-
-      <Modal
-        visible={!!importPreview}
-        onClose={() => {
-          if (!importBusy) {
-            setImportPreview(null);
-            setImportRequestId(null);
-          }
-        }}
-        title="Просмотр импорта"
-      >
-        {importPreview && (
-          <>
-            <Text style={{ color: palette.text.primary, fontWeight: fontWeight.semibold, marginBottom: spacing[3] }}>
-              {importPreview.summary.totalRows} строк · создать {importPreview.summary.create} · обновить{' '}
-              {importPreview.summary.update} · ошибок {importPreview.summary.errors}
-            </Text>
-            <ScrollView style={{ maxHeight: 300 }} reserveBottomNavigation={false}>
-              {importPreview.rows.map((row) => (
-                <View
-                  key={row.sourceRow}
-                  style={{
-                    paddingVertical: spacing[2],
-                    borderBottomWidth: StyleSheet.hairlineWidth,
-                    borderBottomColor: palette.border.subtle,
-                  }}
-                >
-                  <Text style={{ color: palette.text.primary, fontWeight: fontWeight.semibold }} numberOfLines={2}>
-                    {row.name}
-                  </Text>
-                  <Text
-                    style={{
-                      color: row.action === 'error' ? colors.red[500] : palette.text.tertiary,
-                      fontSize: fontSize.xs,
-                    }}
-                  >
-                    Строка {row.sourceRow} ·{' '}
-                    {row.action === 'create' ? 'создать' : row.action === 'update' ? 'обновить' : row.message}
-                  </Text>
-                </View>
-              ))}
-            </ScrollView>
-            {importPreview.summary.errors > 0 && (
-              <Text style={{ color: colors.red[500], marginTop: spacing[3] }}>
-                Исправьте ошибки и загрузите файл снова. Ни одна строка не будет применена.
-              </Text>
-            )}
-            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: spacing[4], marginTop: spacing[4] }}>
-              <TouchableOpacity
-                disabled={importBusy}
-                onPress={() => {
-                  setImportPreview(null);
-                  setImportRequestId(null);
-                }}
-              >
-                <Text style={{ color: palette.text.secondary }}>Отмена</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                disabled={importBusy || importPreview.summary.errors > 0}
-                onPress={() => void confirmImport()}
-              >
-                <Text
-                  style={{
-                    color: importBusy || importPreview.summary.errors > 0 ? palette.text.tertiary : colors.primary[600],
-                    fontWeight: fontWeight.bold,
-                  }}
-                >
-                  {importBusy ? 'Импорт…' : 'Подтвердить'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </>
-        )}
       </Modal>
 
       <Modal visible={!!historyTarget} onClose={() => setHistoryTarget(null)} title="Услуга">
@@ -1516,48 +1257,6 @@ export default function ServicesScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[3],
-    borderBottomWidth: 1,
-    borderBottomColor: colors.gray[100],
-  },
-  backBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: colors.primary[50],
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  headerCenter: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  headerIcon: { width: 30, height: 30, borderRadius: borderRadius.lg, alignItems: 'center', justifyContent: 'center' },
-  title: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900], letterSpacing: -0.3 },
-  countBadge: {
-    backgroundColor: colors.primary[50],
-    paddingHorizontal: spacing[2],
-    paddingVertical: 2,
-    borderRadius: borderRadius.full,
-  },
-  countBadgeText: { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: colors.primary[600] },
-  addBtn: {
-    backgroundColor: colors.primary[600],
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[2.5],
-    borderRadius: borderRadius.lg,
-  },
-  addBtnText: { color: colors.white, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
-  importStatus: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[2],
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[2],
-  },
-  searchWrap: { paddingHorizontal: spacing[4] },
   // iOS plain-list style (matches warehouse).
   list: { paddingHorizontal: 0, paddingBottom: 120, paddingTop: 0 },
   serviceCard: {

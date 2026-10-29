@@ -184,6 +184,11 @@ jest.doMock('../../components/TabBarScrollable', () => ({
   TabBarScrollView: 'ScrollView',
 }));
 jest.doMock('../TrashScreen', () => ({ __esModule: true, default: 'TrashScreen' }));
+jest.doMock('../services/ServicesHeader', () => ({ __esModule: true, default: 'ServicesHeader' }));
+jest.doMock('../services/ServicesScroll', () => ({
+  ServicesList: 'FlashList',
+  useServicesScroll: () => ({ contentTop: 124, reset: jest.fn(), onScroll: jest.fn() }),
+}));
 const ProductsScreen = jest.requireActual<{ default: () => React.ReactElement }>('../ProductsScreen').default;
 const ServicesScreen = jest.requireActual<{ default: () => React.ReactElement }>('../ServicesScreen').default;
 type Element = React.ReactElement<{ children?: React.ReactNode; [key: string]: unknown }>;
@@ -197,7 +202,7 @@ const nodes = (node: React.ReactNode): Element[] =>
           // Header presentation has its own tests. Preserve its public callbacks
           // while these fixtures exercise the real product/folder handlers.
           ...nodes(
-            node.type === 'WarehouseHeader'
+            node.type === 'WarehouseHeader' || node.type === 'ServicesHeader'
               ? [
                   (node as Element).props.onAdd
                     ? React.createElement('TouchableOpacity', {
