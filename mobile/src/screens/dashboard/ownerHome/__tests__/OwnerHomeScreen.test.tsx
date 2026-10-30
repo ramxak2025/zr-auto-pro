@@ -132,6 +132,7 @@ jest.mock('../OwnerHomeTimelineChart', () => {
 jest.mock('../OwnerHomeDateNavigation', () => 'OwnerHomeDateNavigation');
 jest.mock('../OwnerHomeWidgetSync', () => 'OwnerHomeWidgetSync');
 jest.mock('../OwnerHomeLiveWidgets', () => 'OwnerHomeLiveWidgets');
+jest.mock('../OwnerHomeCash', () => 'OwnerHomeCash');
 import OwnerHomeScreen, { OwnerHomeContent } from '../OwnerHomeScreen';
 import { timelineFixture } from '../__fixtures__/timeline';
 

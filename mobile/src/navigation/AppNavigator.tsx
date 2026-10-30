@@ -302,6 +302,9 @@ export type RootStackParamList = {
 
 /** The dashboard's nested destinations. Registered names are verified against the navigator JSX by router tests. */
 export type DashboardMoreStackParamList = {
+  Calls:
+    | { focusToday: true; filter: 'all' | 'incoming' | 'outgoing' | 'missed' | 'pending'; entryRequestId: string }
+    | undefined;
   Schedule: { focusToday: true; focusEmployeeId?: string; focusRequestId: string } | undefined;
   SalaryEmployee: { employeeId: string; employeeName?: string; month?: string; entryRequestId?: string };
   PublicBookingRequests: { pendingOnly?: boolean } | undefined;

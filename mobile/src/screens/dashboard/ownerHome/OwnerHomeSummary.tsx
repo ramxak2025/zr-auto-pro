@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { ActivityIndicator, AppState, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, AppState, Image, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, {
@@ -95,6 +95,7 @@ export default function OwnerHomeSummary({
   return (
     <Animated.View style={[styles.card, entrance]} testID="owner-home-summary">
       <LinearGradient colors={p.heroGradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.surface}>
+        <BrandClouds ink={ink} />
         <View style={styles.heading}>
           <Text style={[styles.label, { color: ink }]}>Чистая прибыль</Text>
           <TouchableOpacity
@@ -185,6 +186,7 @@ export function OwnerHomeSummaryPlaceholder({
         end={{ x: 1, y: 1 }}
         style={[styles.surface, styles.placeholder]}
       >
+        <BrandClouds ink={ink} />
         <Text style={[styles.label, { color: ink }]}>Чистая прибыль</Text>
         <View style={styles.status} accessibilityLiveRegion="polite">
           <Text style={[styles.statusTitle, { color: ink }]}>{errorMessage ?? 'Загружаем сводку'}</Text>
@@ -210,21 +212,58 @@ export function OwnerHomeSummaryPlaceholder({
   );
 }
 
+function BrandClouds({ ink }: { ink: string }) {
+  return (
+    <View
+      pointerEvents="none"
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      style={styles.brand}
+    >
+      {[styles.cloudUpper, styles.cloudLower].map((position, index) => (
+        <View key={index} style={[styles.cloudClip, position]}>
+          <Image
+            source={require('../../../../assets/logo.png')}
+            resizeMode="stretch"
+            accessible={false}
+            style={[styles.cloudImage, { tintColor: ink }]}
+          />
+        </View>
+      ))}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   card: { borderRadius: 20, overflow: 'hidden' },
-  surface: { minHeight: 244, paddingHorizontal: 18, paddingTop: 4, paddingBottom: 17 },
+  surface: { minHeight: 244, paddingHorizontal: 20, paddingTop: 4, paddingBottom: 18 },
+  brand: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, overflow: 'hidden' },
+  // The existing logo is 1501 × 361. Clip at x=600, before the wordmark starts at x≈630.
+  // Tinting its alpha preserves the original cloud contour without introducing another asset.
+  cloudClip: { position: 'absolute', width: 120, height: 72.2, overflow: 'hidden' },
+  cloudImage: { position: 'absolute', left: 0, top: 0, width: 300.2, height: 72.2 },
+  cloudUpper: { top: 22, right: 23, opacity: 0.055, transform: [{ rotate: '-12deg' }] },
+  cloudLower: { bottom: 33, right: -40, opacity: 0.045, transform: [{ rotate: '-12deg' }] },
   heading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   label: { flex: 1, fontSize: 14, lineHeight: 20, fontWeight: '500' },
   info: { width: touchSize, minHeight: touchSize, alignItems: 'center', justifyContent: 'center', marginRight: -10 },
   period: { minHeight: touchSize, gap: 5 },
   valueRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  profit: { flex: 1, minWidth: 0, fontSize: 30, lineHeight: 37, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  profit: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 34,
+    lineHeight: 42,
+    fontWeight: '600',
+    letterSpacing: -0.6,
+    fontVariant: ['tabular-nums'],
+  },
   turnover: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', columnGap: 7, rowGap: 2 },
   secondaryLabel: { fontSize: 13, lineHeight: 19, opacity: 0.84 },
   turnoverValue: { fontSize: 16, lineHeight: 22, fontWeight: '500', fontVariant: ['tabular-nums'] },
   divider: { height: StyleSheet.hairlineWidth, opacity: 0.2, marginTop: 14, marginBottom: 12 },
   month: { minHeight: touchSize, gap: 3 },
-  monthProfit: { flex: 1, minWidth: 0, fontSize: 18, lineHeight: 25, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  monthProfit: { flex: 1, minWidth: 0, fontSize: 20, lineHeight: 27, fontWeight: '600', fontVariant: ['tabular-nums'] },
   comparisonRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   comparison: { flex: 1, minWidth: 0, fontSize: 13, lineHeight: 19 },
   change: { fontWeight: '600', fontVariant: ['tabular-nums'] },

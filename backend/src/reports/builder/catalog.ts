@@ -32,6 +32,39 @@ export interface ReportDefinition {
 export const REPORT_CATALOG: ReportDefinition[] = [
   { id: 'summary', title: 'Сводный отчёт', permission: 'financial_reports' },
   {
+    id: 'sales',
+    title: 'Продажи',
+    permission: 'financial_reports',
+    groupByOptions: [
+      { value: 'all', label: 'Все' },
+      { value: 'products', label: 'Товары' },
+      { value: 'services', label: 'Услуги' },
+    ],
+  },
+  {
+    id: 'gross-profit',
+    title: 'Валовая прибыль',
+    permission: 'financial_reports',
+    groupByOptions: [
+      { value: 'all', label: 'Все' },
+      { value: 'products', label: 'Товары' },
+      { value: 'services', label: 'Услуги' },
+    ],
+  },
+  {
+    id: 'abc',
+    title: 'ABC-анализ',
+    permission: 'financial_reports',
+    groupByOptions: [
+      { value: 'revenue-all', label: 'Выручка · все' },
+      { value: 'revenue-products', label: 'Выручка · товары' },
+      { value: 'revenue-services', label: 'Выручка · услуги' },
+      { value: 'gross-all', label: 'Валовая прибыль · все' },
+      { value: 'gross-products', label: 'Валовая прибыль · товары' },
+      { value: 'gross-services', label: 'Валовая прибыль · услуги' },
+    ],
+  },
+  {
     id: 'masters',
     title: 'По мастерам',
     entityFilter: { kind: 'masters', label: 'Мастера', multi: true },

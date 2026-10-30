@@ -37,6 +37,7 @@ import { invalidateAttendanceQueries } from '../../../../../shared/utils/attenda
 import type { OwnerHomeTimeline, OwnerHomeTimelinePeriod } from '../../../../../shared/types/ownerHome';
 import OwnerHomeOperational, { OwnerHomeRetry } from './OwnerHomeOperational';
 import OwnerHomeLiveWidgets from './OwnerHomeLiveWidgets';
+import OwnerHomeCash from './OwnerHomeCash';
 import OwnerHomeDetails, { type OwnerHomeDetail } from './OwnerHomeDetails';
 import OwnerHomeWidgetSync from './OwnerHomeWidgetSync';
 import {
@@ -285,6 +286,7 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
           />
         )}
 
+        <OwnerHomeCash scope={scope} enabled={enabled} />
         <View style={[styles.clients, { backgroundColor: clientTone.background }]}>
           <View style={styles.clientHeading}>
             <Ionicons name="people-outline" size={19} color={clientTone.ink} />
@@ -416,7 +418,7 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
           </View>
         )}
         <Text style={[styles.caption, { color: p.text.secondary }]}>
-          Период меняет финансы и клиентов. Смены, звонки и заработок показаны за сегодня.
+          Период меняет прибыль, оборот и клиентов. Касса, смены, звонки и заработок показаны за сегодня.
         </Text>
       </Modal>
       {detail && (

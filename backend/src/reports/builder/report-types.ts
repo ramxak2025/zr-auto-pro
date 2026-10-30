@@ -9,6 +9,9 @@
  */
 
 export type ReportId =
+  | 'sales'
+  | 'gross-profit'
+  | 'abc'
   | 'summary'
   | 'masters'
   | 'salary'

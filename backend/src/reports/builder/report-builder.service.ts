@@ -37,6 +37,7 @@ import { PaymentsBuilder } from './builders/payments.builder';
 import { ExpensesBuilder } from './builders/expenses.builder';
 import { BookingsBuilder } from './builders/bookings.builder';
 import { PointsBuilder } from './builders/points.builder';
+import { AbcBuilder, GrossProfitBuilder, SalesBuilder } from './builders/analyses.builder';
 
 /** Максимальная длина периода в днях — зеркало REPORT_MAX_DAYS из shared/reports/catalog.ts. */
 export const REPORT_MAX_DAYS = 366;
@@ -81,6 +82,9 @@ export class ReportBuilderService {
     expenses: ExpensesBuilder,
     bookings: BookingsBuilder,
     points: PointsBuilder,
+    sales: SalesBuilder = new SalesBuilder(pool),
+    grossProfit: GrossProfitBuilder = new GrossProfitBuilder(pool),
+    abc: AbcBuilder = new AbcBuilder(pool),
   ) {
     const list: ReportBuilder[] = [
       summary,
@@ -94,6 +98,9 @@ export class ReportBuilderService {
       expenses,
       bookings,
       points,
+      sales,
+      grossProfit,
+      abc,
     ];
     this.builders = new Map(list.map((b) => [b.id, b]));
   }

@@ -95,7 +95,9 @@ function ReportCard({ to, icon: Icon, title, description, meta = [], reason }: R
 function cardMeta(def: ReportDefinition): string[] {
   const meta: string[] = [];
   if (def.entityFilter) meta.push(`Фильтр: ${def.entityFilter.label.toLowerCase()}`);
-  if (def.groupByOptions && def.groupByOptions.length > 0) {
+  if (def.id === 'abc') {
+    meta.push('Выручка / валовая прибыль', 'Товары / услуги');
+  } else if (def.groupByOptions && def.groupByOptions.length > 0) {
     meta.push(def.groupByOptions.map((o) => o.label.toLowerCase()).join(' / '));
   }
   if (def.requiresMultiPoint) meta.push('Несколько филиалов');

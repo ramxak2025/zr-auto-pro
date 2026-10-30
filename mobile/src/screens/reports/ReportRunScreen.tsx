@@ -60,6 +60,7 @@ import {
 } from '../../utils/reportFormat';
 import { shareReportPdf } from '../../utils/reportPdf';
 import { getReportDefinition, isReportId, type ReportDefinition } from '../../../../shared/reports/catalog';
+import { ABC_BASES, ANALYSIS_KINDS, readAbcSelection } from '../../../../shared/reports/analysisOptions';
 import type {
   ReportColumnType,
   ReportFilterOptions,
@@ -157,7 +158,37 @@ export default function ReportRunScreen() {
   const [customRange, setCustomRange] = useState<DateRange>(() => getDateRange('month'));
   const [showPicker, setShowPicker] = useState<null | 'from' | 'to'>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [groupBy, setGroupBy] = useState<string | null>(def?.groupByOptions?.[0]?.value ?? null);
+  const [selectedGroupBy, setGroupBy] = useState<string | null>(def?.groupByOptions?.[0]?.value ?? null);
+  const groupBy = def?.groupByOptions?.some((option) => option.value === selectedGroupBy)
+    ? selectedGroupBy
+    : (def?.groupByOptions?.[0]?.value ?? null);
+  const abcSelection = readAbcSelection(groupBy);
+  const groupControls =
+    def?.id === 'abc'
+      ? [
+          {
+            label: 'База ABC',
+            options: [...ABC_BASES],
+            value: abcSelection.basis,
+            onChange: (value: string) => setGroupBy(`${value}-${abcSelection.kind}`),
+          },
+          {
+            label: 'Состав ABC',
+            options: [...ANALYSIS_KINDS],
+            value: abcSelection.kind,
+            onChange: (value: string) => setGroupBy(`${abcSelection.basis}-${value}`),
+          },
+        ]
+      : def?.groupByOptions && def.groupByOptions.length > 1
+        ? [
+            {
+              label: 'Состав отчёта',
+              options: def.groupByOptions,
+              value: groupBy ?? def.groupByOptions[0].value,
+              onChange: (value: string) => setGroupBy(value),
+            },
+          ]
+        : [];
   const [filterOpen, setFilterOpen] = useState(false);
   const [sort, setSort] = useState<SortState | null>(null);
   // Сортировка доп. секций — своя на каждую, по ключу секции: тап по
@@ -202,9 +233,9 @@ export default function ReportRunScreen() {
       runQuery.groupBy ?? '',
     ],
     queryFn: async () => (await reportBuilderApi.run(def!.id, runQuery)).data,
-    enabled: !!def && !runError,
+    enabled: !!def && !runError && (runQuery.groupBy ?? null) === groupBy,
     staleTime: 30_000,
-    placeholderData: (prev) => prev,
+    placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[1] === def?.id ? prev : undefined),
   });
   const result = reportQuery.data;
 
@@ -769,21 +800,26 @@ export default function ReportRunScreen() {
         </ScrollView>
       )}
 
-      {def.groupByOptions && def.groupByOptions.length > 1 && (
-        <View style={[styles.segmentRow, { backgroundColor: palette.bg.muted }]}>
-          {def.groupByOptions.map((opt) => {
-            const active = (groupBy ?? def.groupByOptions![0].value) === opt.value;
+      {groupControls.map((control) => (
+        <View
+          key={control.label}
+          accessibilityLabel={control.label}
+          style={[styles.segmentRow, { backgroundColor: palette.bg.muted }]}
+        >
+          {control.options.map((opt) => {
+            const active = control.value === opt.value;
             return (
               <TouchableOpacity
                 key={opt.value}
                 style={[styles.segment, active && [styles.segmentActive, { backgroundColor: palette.bg.card }]]}
                 onPress={() => {
                   haptic('select');
-                  setGroupBy(opt.value);
+                  control.onChange(opt.value);
                 }}
                 activeOpacity={0.7}
-                accessibilityRole="button"
-                accessibilityState={{ selected: active }}
+                accessibilityRole="radio"
+                accessibilityLabel={`${control.label}: ${opt.label}`}
+                accessibilityState={{ checked: active }}
               >
                 <Text
                   style={[
@@ -798,7 +834,7 @@ export default function ReportRunScreen() {
             );
           })}
         </View>
-      )}
+      ))}
 
       <Button
         title="Сформировать"

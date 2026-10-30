@@ -8,6 +8,7 @@ import { reportBuilderApi } from '../../api/services';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTenantCalendar } from '../../hooks/useTenantTimezone';
 import { getReportDefinition, isReportId } from '../../../../shared/reports/catalog';
+import { ABC_BASES, ANALYSIS_KINDS, readAbcSelection } from '../../../../shared/reports/analysisOptions';
 import { apiErrorMessage, apiErrorStatus } from '../../../../shared/utils/apiError';
 import type { ReportFilterKind, ReportResult } from '../../types';
 import PageHeader from '../../components/PageHeader';
@@ -226,7 +227,23 @@ export default function ReportRunPage() {
             onRetry={() => filterQuery.refetch()}
           />
         )}
-        {groupBy && (
+        {def.id === 'abc' && (
+          <>
+            <SegmentedControl
+              aria-label="База ABC"
+              options={[...ABC_BASES]}
+              value={readAbcSelection(groupBy).basis}
+              onChange={(basis) => update({ groupBy: `${basis}-${readAbcSelection(groupBy).kind}` })}
+            />
+            <SegmentedControl
+              aria-label="Состав ABC"
+              options={[...ANALYSIS_KINDS]}
+              value={readAbcSelection(groupBy).kind}
+              onChange={(kind) => update({ groupBy: `${readAbcSelection(groupBy).basis}-${kind}` })}
+            />
+          </>
+        )}
+        {groupBy && def.id !== 'abc' && (
           <SegmentedControl
             aria-label="Группировка"
             options={groupByOptions.map((o) => ({ value: o.value, label: o.label }))}

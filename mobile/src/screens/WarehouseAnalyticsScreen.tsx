@@ -824,9 +824,9 @@ function AbcAnalysisCard({
   };
 
   const tierLabel: Record<'A' | 'B' | 'C', string> = {
-    A: 'A — 80% выручки',
-    B: 'B — 15% выручки',
-    C: 'C — 5% выручки',
+    A: 'A — основной вклад',
+    B: 'B — средний вклад',
+    C: 'C — остальные товары',
   };
 
   const aCount = sorted.find((r) => r.tier === 'A')?.count ?? 0;
@@ -837,7 +837,10 @@ function AbcAnalysisCard({
       index={index}
       style={[styles.sectionCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
     >
-      <Text style={[iosSectionLabel, { color: palette.text.tertiary }]}>📊 ABC-анализ</Text>
+      <Text style={[iosSectionLabel, { color: palette.text.tertiary }]}>📊 ABC склада</Text>
+      <Text style={[styles.cardCaption, { color: palette.text.tertiary }]}>
+        Классы — по выручке после скидок и возвратов. Суммы и полосы — остатки по себестоимости.
+      </Text>
       {totalCount === 0 ? (
         <EmptyState
           title="Нет данных"
@@ -864,7 +867,7 @@ function AbcAnalysisCard({
           })}
           {aCount > 0 && (
             <Text style={[styles.cardCaption, { color: palette.text.tertiary }]}>
-              {aCount} товар{plural(aCount, 'ов', 'а', 'ов')} приносят 80% выручки — фокусируйтесь на них
+              В группе A — {aCount} товар{plural(aCount, '', 'а', 'ов')}. ABC по валовой прибыли и услугам — в отчётах.
             </Text>
           )}
         </>

@@ -1,15 +1,16 @@
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, RefreshControl } from 'react-native';
 import { setAudioModeAsync } from 'expo-audio';
 import IosScreenHeader from '../components/IosScreenHeader';
 import DateTimePickerModal from '../components/DateTimePickerModal';
 import { useQuery } from '@tanstack/react-query';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute, type NavigationProp, type RouteProp } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, fontSize, fontWeight, borderRadius, softTint } from '../theme';
 import { callsApi } from '../api/services';
 import { useColors } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
+import { captureDataSession } from '../contexts/dataSession';
 import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
 import { formatDayKey } from '../../../shared/utils/formatters';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
@@ -17,63 +18,122 @@ import { haptic } from '../platform/haptics';
 // CallRow + встроенный плеер записей извлечены в переиспользуемый компонент
 // (Round 13 #8 — деталка рассрочки показывает звонки той же строкой). Визуал и
 // perf-паттерны (React.memo + playerRef) сохранены один-в-один.
-import { CallRow, type Call } from '../components/calls/CallRow';
+import { CallRow } from '../components/calls/CallRow';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+import type { DashboardMoreStackParamList } from '../navigation/AppNavigator';
+import {
+  CALLS_TABS,
+  callsEntry,
+  callsFilterCount,
+  callsJournalSnapshot,
+  filterCalls,
+  telephonyDisconnected,
+  type CallsFilter,
+  type CallsJournalSnapshot,
+} from './callsJournalState';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-interface CallsSummary {
-  incoming: number;
-  outgoing: number;
-  missed: number;
-  notCalledBack: number;
-  total: number;
+interface CallsScreenProps {
+  navigation: { goBack: () => void };
 }
 
-type FilterTab = 'all' | 'incoming' | 'outgoing' | 'missed';
-
-// ---------------------------------------------------------------------------
-// Filter tabs
-// ---------------------------------------------------------------------------
-
-const TABS: { key: FilterTab; label: string }[] = [
-  { key: 'all', label: 'Все' },
-  { key: 'incoming', label: 'Вх.' },
-  { key: 'outgoing', label: 'Исх.' },
-  { key: 'missed', label: 'Пропущ.' },
-];
+interface CallsScope {
+  key: readonly (string | number | boolean | null)[];
+  isCurrent: () => boolean;
+}
 
 // ---------------------------------------------------------------------------
 // Main Screen
 // ---------------------------------------------------------------------------
 
-export default function CallsScreen({ navigation }: { navigation: any }) {
+export default function CallsScreen() {
+  const navigation = useNavigation<NavigationProp<DashboardMoreStackParamList, 'Calls'>>();
+  const route = useRoute<RouteProp<DashboardMoreStackParamList, 'Calls'>>();
+  const { user, activeAccountId, sessionGeneration, hasPermission } = useAuth();
+  const tenantTz = useTenantTimezone();
+  const lease = captureDataSession();
+  const canView = !!user && hasPermission('calls_view');
+  const canListen = canView && hasPermission('calls_listen');
+  const key = [
+    activeAccountId,
+    user?.tenantId ?? null,
+    user?.id ?? null,
+    user?.currentPointId ?? null,
+    user?.role ?? null,
+    sessionGeneration,
+    lease.generation,
+    tenantTz,
+    canView,
+    canListen,
+    JSON.stringify(user?.permissions ?? {}),
+  ];
+  const scope: CallsScope = {
+    key,
+    isCurrent: () =>
+      lease.isCurrent() &&
+      lease.owner?.userId === user?.id &&
+      lease.owner?.tenantId === (user?.tenantId ?? null) &&
+      lease.owner?.pointId === (user?.currentPointId ?? null),
+  };
+  const entry = callsEntry(route.params);
+  // Only a fresh entry or data-owner change resets browsing and the expanded recording.
+  return (
+    <CallsJournal
+      key={JSON.stringify([key, entry?.entryRequestId ?? null])}
+      navigation={navigation}
+      scope={scope}
+      canView={canView}
+      canListen={canListen}
+      tenantTz={tenantTz}
+      initialFilter={entry?.filter ?? 'all'}
+    />
+  );
+}
+
+export function CallsJournal({
+  navigation,
+  scope,
+  canView,
+  canListen,
+  tenantTz,
+  initialFilter,
+}: {
+  navigation: CallsScreenProps['navigation'];
+  scope: CallsScope;
+  canView: boolean;
+  canListen: boolean;
+  tenantTz: string;
+  initialFilter: CallsFilter;
+}) {
   const palette = useColors();
-  const { hasPermission } = useAuth();
   // ROLE-ONLY (консолидация 2026-07): список звонков доступен по calls_view (гейт
   // меню), а ПРОСЛУШИВАНИЕ записей — отдельное право calls_listen. «Права как в
   // Битрикс24» (2026-07): admin живёт по матрице из /auth/me; superadmin/director
   // байпасятся внутри hasPermission. Без права — кнопка play не показывается
   // (бэкенд закрывает signed-URL 403 → не будет мёртвой кнопки).
-  const canListen = hasPermission('calls_listen');
   // День ленты звонков — календарный день АВТОСЕРВИСА: сервер режет звонки по
   // его суткам (calls.service), и «Сегодня» на экране обязано означать тот же
   // день, что «сегодня» в запросе.
-  const tenantTz = useTenantTimezone();
   const tabBarHeight = useTabBarHeight();
   const [selectedDate, setSelectedDate] = useState(new Date());
-  const [activeTab, setActiveTab] = useState<FilterTab>('all');
+  const [activeTab, setActiveTab] = useState<CallsFilter>(initialFilter);
   const [datePickerOpen, setDatePickerOpen] = useState(false);
   // Single global "currently expanded player" — exactly one recording can
   // play at a time, tapping a different row swaps which one is open.
   const [playingId, setPlayingId] = useState<string | null>(null);
+  const access = useRef({ mounted: true, canView, scope });
+  const tabsRef = useRef<ScrollView>(null);
+  Object.assign(access.current, { canView, scope });
+  const current = useCallback(() => access.current.mounted && access.current.canView && scope.isCurrent(), [scope]);
 
   // Configure audio session once when the screen mounts. Without this
   // call iOS silences playback if the ringer switch is set to silent —
   // which is the case for most autosalon owners during work hours.
   useEffect(() => {
+    access.current.mounted = true;
     setAudioModeAsync({
       playsInSilentMode: true,
       shouldPlayInBackground: false,
@@ -81,6 +141,7 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
       allowsRecording: false,
     }).catch(() => {});
     return () => {
+      access.current.mounted = false;
       // Stop any audio when leaving the screen
       setPlayingId(null);
     };
@@ -111,60 +172,72 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
   useFocusEffect(
     useCallback(() => {
       setPollEnabled(true);
-      return () => setPollEnabled(false);
+      return () => {
+        setPollEnabled(false);
+        setPlayingId(null);
+      };
     }, []),
   );
 
-  const { data, isLoading, refetch } = useQuery({
-    queryKey: ['calls', dateStr],
-    queryFn: async () => {
-      const res = await callsApi.getCalls({ date: dateStr });
-      return res.data;
-    },
-    staleTime: 30_000,
-    refetchInterval: pollEnabled ? 60_000 : false,
-  });
+  const { data, isPending, isError, isPlaceholderData, fetchStatus, isFetching, refetch } =
+    useQuery<CallsJournalSnapshot>({
+      queryKey: ['calls', ...scope.key, dateStr],
+      queryFn: async () => {
+        if (!current()) throw new Error('Сессия изменилась');
+        let res;
+        try {
+          res = await callsApi.getCalls({ date: dateStr });
+        } catch (error) {
+          if (!current()) throw new Error('Сессия изменилась');
+          if (telephonyDisconnected(error)) return { kind: 'disconnected' };
+          throw new Error('Не удалось обновить звонки');
+        }
+        if (!current()) throw new Error('Сессия изменилась');
+        return callsJournalSnapshot(res.data);
+      },
+      enabled: pollEnabled && canView && scope.isCurrent(),
+      staleTime: 30_000,
+      refetchOnMount: 'always',
+      placeholderData: undefined,
+      refetchInterval: (query) =>
+        pollEnabled && current() && query.state.data?.kind !== 'disconnected' ? 60_000 : false,
+    });
 
   // Pull-to-refresh — local `refreshing` state (same pattern as ChecksScreen)
   // instead of raw `isFetching`, so the 60-second background poll never
   // yanks the spinner open mid-scroll.
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(async () => {
+    if (!current() || !pollEnabled) return;
     setRefreshing(true);
     try {
       await refetch();
     } finally {
-      setRefreshing(false);
+      if (access.current.mounted) setRefreshing(false);
     }
-  }, [refetch]);
+  }, [refetch, pollEnabled, current]);
 
-  const calls: Call[] = data?.calls ?? [];
-  const summary: CallsSummary | undefined = data?.summary;
-
-  const filteredCalls = useMemo(() => {
-    switch (activeTab) {
-      case 'incoming':
-        return calls.filter((c) => c.direction === 'incoming' && c.status === 'answered');
-      case 'outgoing':
-        return calls.filter((c) => c.direction === 'outgoing');
-      case 'missed':
-        return calls.filter((c) => c.direction === 'incoming' && (c.status === 'missed' || c.duration === 0));
-      default:
-        return calls;
-    }
-  }, [calls, activeTab]);
+  const available =
+    current() && !isPending && !isError && !isPlaceholderData && fetchStatus !== 'paused' && data?.kind === 'connected';
+  const calls = available && data?.kind === 'connected' ? data.calls : [];
+  const summary = available && data?.kind === 'connected' ? data.summary : null;
+  const filteredCalls = useMemo(() => filterCalls(calls, activeTab), [calls, activeTab]);
 
   const goToPrevDay = () => {
     haptic('select');
     const d = new Date(selectedDate);
     d.setDate(d.getDate() - 1);
+    setPlayingId(null);
     setSelectedDate(d);
   };
   const goToNextDay = () => {
     haptic('select');
     const d = new Date(selectedDate);
     d.setDate(d.getDate() + 1);
-    if (d <= new Date()) setSelectedDate(d);
+    if (d <= new Date()) {
+      setPlayingId(null);
+      setSelectedDate(d);
+    }
   };
   const openDatePicker = () => {
     haptic('tap');
@@ -177,10 +250,15 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
   // 60-second background refetch when focused).
   const summaryItems = useMemo(
     () => [
-      { label: 'Вх.', value: summary?.incoming ?? 0, color: colors.green[600], bg: colors.green[50] },
+      {
+        label: 'Принято',
+        value: summary ? summary.incoming - summary.missed : undefined,
+        color: colors.green[600],
+        bg: colors.green[50],
+      },
       { label: 'Исх.', value: summary?.outgoing ?? 0, color: colors.blue[600], bg: colors.blue[50] },
       { label: 'Пропущ.', value: summary?.missed ?? 0, color: colors.red[500], bg: colors.red[50] },
-      { label: 'Без отв.', value: summary?.notCalledBack ?? 0, color: colors.orange[500], bg: colors.orange[50] },
+      { label: 'Без перезвона', value: summary?.notCalledBack, color: colors.orange[500], bg: colors.orange[50] },
     ],
     [summary?.incoming, summary?.outgoing, summary?.missed, summary?.notCalledBack],
   );
@@ -226,7 +304,7 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
         }
       />
 
-      {/* One-line digest — "Сегодня: 12 звонков · 3 пропущенных · 5 → клиенты" */}
+      <Text style={[styles.digest, { color: palette.text.secondary }]}>По всей компании</Text>
       {summary && (
         <Text style={[styles.digest, { color: palette.text.secondary }]} numberOfLines={1}>
           {dateLabel}: {summary.total ?? 0} звонков
@@ -236,20 +314,22 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
       )}
 
       {/* Summary strip */}
-      <View style={styles.summaryRow}>
-        {summaryItems.map((s) => (
-          <View
-            key={s.label}
-            style={[
-              styles.summaryCard,
-              { backgroundColor: palette.mode === 'dark' ? softTint(s.color, 'dark') : s.bg },
-            ]}
-          >
-            <Text style={[styles.summaryValue, { color: s.color }]}>{isLoading ? '-' : s.value}</Text>
-            <Text style={[styles.summaryLabel, { color: palette.text.secondary }]}>{s.label}</Text>
-          </View>
-        ))}
-      </View>
+      {summary && (
+        <View style={styles.summaryRow}>
+          {summaryItems.map((s) => (
+            <View
+              key={s.label}
+              style={[
+                styles.summaryCard,
+                { backgroundColor: palette.mode === 'dark' ? softTint(s.color, 'dark') : s.bg },
+              ]}
+            >
+              <Text style={[styles.summaryValue, { color: s.color }]}>{s.value}</Text>
+              <Text style={[styles.summaryLabel, { color: palette.text.secondary }]}>{s.label}</Text>
+            </View>
+          ))}
+        </View>
+      )}
 
       {/* Warning */}
       {summary && summary.notCalledBack > 0 && (
@@ -274,20 +354,31 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
       )}
 
       {/* Filter tabs */}
-      <View style={styles.tabs}>
-        {TABS.map((tab) => {
-          const count =
-            tab.key === 'all'
-              ? summary?.total
-              : tab.key === 'incoming'
-                ? summary?.incoming
-                : tab.key === 'outgoing'
-                  ? summary?.outgoing
-                  : summary?.missed;
+      <ScrollView
+        ref={tabsRef}
+        horizontal
+        reserveBottomNavigation={false}
+        showsHorizontalScrollIndicator={false}
+        style={styles.tabsScroller}
+        contentContainerStyle={styles.tabs}
+      >
+        {CALLS_TABS.map((tab) => {
+          const count = summary ? callsFilterCount(summary, tab.key) : undefined;
           const active = activeTab === tab.key;
           return (
             <TouchableOpacity
               key={tab.key}
+              onLayout={(event) => {
+                if (active)
+                  tabsRef.current?.scrollTo({
+                    x: Math.max(0, event.nativeEvent.layout.x - spacing[4]),
+                    animated: false,
+                  });
+              }}
+              accessibilityRole="button"
+              accessibilityLabel={`${tab.label}${count !== undefined ? `: ${count}` : ''}`}
+              accessibilityState={{ selected: active, disabled: !canView }}
+              disabled={!canView}
               style={[
                 styles.tab,
                 { backgroundColor: palette.bg.muted },
@@ -300,7 +391,11 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
                       }
                     : styles.tabActive),
               ]}
-              onPress={() => setActiveTab(tab.key)}
+              onPress={() => {
+                if (!current()) return;
+                setPlayingId(null);
+                setActiveTab(tab.key);
+              }}
             >
               <Text
                 style={[
@@ -314,7 +409,7 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
             </TouchableOpacity>
           );
         })}
-      </View>
+      </ScrollView>
 
       {/* Call list */}
       <ScrollView
@@ -325,13 +420,52 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
         }
       >
-        {isLoading ? (
+        {!canView || !scope.isCurrent() ? (
+          <View style={styles.empty} accessibilityRole="alert">
+            <Text style={[styles.emptyText, { color: palette.text.secondary }]}>Журнал звонков недоступен</Text>
+          </View>
+        ) : fetchStatus === 'paused' ? (
+          <View style={styles.empty} accessibilityRole="alert">
+            <Text style={[styles.emptyText, { color: palette.text.secondary }]}>Нет связи</Text>
+            <Text style={[styles.stateHint, { color: palette.text.secondary }]}>Обновим после подключения</Text>
+          </View>
+        ) : isPending ? (
           <ActivityIndicator size="small" color={colors.primary[500]} style={{ marginTop: spacing[10] }} />
+        ) : isError || isPlaceholderData || !data ? (
+          <View style={styles.empty} accessibilityRole="alert">
+            <Text style={[styles.emptyText, { color: palette.text.secondary }]}>Звонки не обновились</Text>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Повторить загрузку звонков"
+              disabled={isFetching || !pollEnabled}
+              style={styles.retry}
+              onPress={() => {
+                if (current() && pollEnabled) void refetch();
+              }}
+            >
+              <Text style={{ color: palette.accent.primaryText }}>Повторить</Text>
+            </TouchableOpacity>
+          </View>
+        ) : data.kind === 'disconnected' ? (
+          <View style={styles.empty}>
+            <Text style={[styles.emptyText, { color: palette.text.secondary }]}>Телефония не подключена</Text>
+            <Text style={[styles.stateHint, { color: palette.text.secondary }]}>
+              Подключение — в настройках интеграций
+            </Text>
+          </View>
         ) : filteredCalls.length === 0 ? (
           <View style={styles.empty}>
             <Ionicons name="call-outline" size={32} color={palette.text.tertiary} />
             <Text style={[styles.emptyText, { color: palette.text.tertiary }]}>
-              {activeTab === 'missed' ? 'Пропущенных нет' : 'Нет звонков'}
+              {activeTab === 'pending'
+                ? 'Без перезвона звонков нет'
+                : activeTab === 'missed'
+                  ? 'Пропущенных нет'
+                  : activeTab === 'incoming'
+                    ? 'Принятых звонков нет'
+                    : activeTab === 'outgoing'
+                      ? 'Исходящих звонков нет'
+                      : 'Нет звонков за этот день'}
             </Text>
           </View>
         ) : (
@@ -358,7 +492,10 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
           haptic('select');
           setDatePickerOpen(false);
           // Forbid future dates — server returns nothing for them anyway.
-          if (d <= new Date()) setSelectedDate(d);
+          if (d <= new Date()) {
+            setPlayingId(null);
+            setSelectedDate(d);
+          }
         }}
         onCancel={() => setDatePickerOpen(false)}
       />
@@ -434,16 +571,19 @@ const styles = StyleSheet.create({
   },
   warningText: { fontSize: fontSize.xs, color: colors.orange[600], fontWeight: fontWeight.medium },
 
-  tabs: { flexDirection: 'row', marginHorizontal: spacing[4], marginBottom: spacing[3], gap: spacing[2] },
+  tabsScroller: { flexGrow: 0, marginBottom: spacing[3] },
+  tabs: { paddingHorizontal: spacing[4], gap: spacing[2] },
   tab: {
-    flex: 1,
+    minHeight: 44,
+    paddingHorizontal: spacing[3],
     paddingVertical: spacing[2],
     alignItems: 'center',
+    justifyContent: 'center',
     borderRadius: borderRadius.lg,
     backgroundColor: colors.gray[50],
   },
   tabActive: { backgroundColor: colors.primary[50], borderWidth: 1, borderColor: colors.primary[200] },
-  tabText: { fontSize: 11, fontWeight: fontWeight.semibold, color: colors.gray[400] },
+  tabText: { fontSize: 13, fontWeight: fontWeight.semibold, color: colors.gray[400] },
   tabTextActive: { color: colors.primary[600] },
 
   list: {
@@ -457,4 +597,6 @@ const styles = StyleSheet.create({
 
   empty: { alignItems: 'center', paddingVertical: spacing[12] },
   emptyText: { fontSize: fontSize.sm, color: colors.gray[400], marginTop: spacing[2] },
+  stateHint: { fontSize: fontSize.sm, marginTop: spacing[2], textAlign: 'center' },
+  retry: { minHeight: 44, minWidth: 80, justifyContent: 'center', alignItems: 'center', marginTop: spacing[2] },
 });

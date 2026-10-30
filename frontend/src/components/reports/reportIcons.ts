@@ -16,6 +16,9 @@ import type { ReportId } from '../../types';
 
 /** Иконка отчёта в хабе и в шапке экрана отчёта — по id из shared/reports/catalog.ts. */
 export const REPORT_ICONS: Record<ReportId, LucideIcon> = {
+  sales: CreditCard,
+  'gross-profit': Coins,
+  abc: BarChart3,
   summary: BarChart3,
   masters: HardHat,
   salary: Coins,
