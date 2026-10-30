@@ -62,7 +62,10 @@ jest.mock('@tanstack/react-query', () => ({ useQuery: (options: unknown) => mock
 jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 jest.mock('../../../../contexts/AuthContext', () => ({ useAuth: () => mockAuth }));
 jest.mock('../../../../contexts/ThemeContext', () => ({
-  useColors: () => ({ mode: mockDark ? 'dark' : 'light', text: { primary: mockDark ? '#eee' : '#111' } }),
+  useColors: () => ({
+    mode: mockDark ? 'dark' : 'light',
+    text: { primary: mockDark ? '#eee' : '#111', secondary: mockDark ? '#aaa' : '#555' },
+  }),
 }));
 jest.mock('../../../../contexts/TenantTimezoneContext', () => ({ useTenantTimezone: () => mockTimezone }));
 jest.mock('../../../../api/services', () => ({
@@ -529,7 +532,10 @@ test('failed data cannot be manually retried while backgrounded or after its sco
   expect(mockDispatch).not.toHaveBeenCalled();
 });
 
-test('larger text uses vertical metrics and dark mode retains both useful actions', () => {
+test('larger text reflows live, keeps full earnings and retains dark-mode journal actions', () => {
+  mockSchedule.data = ownerShiftRoster([person('large', { isWorking: true, fullName: 'Александр Александрович' })]);
+  mockEarnings.data = earnings([earned('large', 1_234_567.89)]);
+  render();
   mockFontScale = 1.5;
   mockDark = true;
   const tree = render();
@@ -538,6 +544,9 @@ test('larger text uses vertical metrics and dark mode retains both useful action
       (node) => Array.isArray(node.props.style) && node.props.style.some((style) => style?.flexDirection === 'column'),
     ),
   ).toBe(true);
+  expect(textContent(byId(tree, 'owner-home-team-salary-large'))).toBe(ownerMoney(1_234_567.89));
+  expect(textContent(byId(tree, 'owner-home-team-total'))).toBe(ownerMoney(1_234_567.89));
+  expect(textContent(byId(tree, 'owner-home-team-schedule-large'))).toContain('Александр Александрович');
   expect(button(tree, 'Пропущено: 5. Открыть журнал звонков')).toBeDefined();
   expect(button(tree, 'Не перезвонили: 3. Открыть журнал звонков')).toBeDefined();
 });

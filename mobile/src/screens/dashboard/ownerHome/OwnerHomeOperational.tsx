@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 import { CommonActions, type NavigationProp, useNavigation } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,6 +14,7 @@ import type { AttentionBucketId } from '../../../../../shared/types';
 import { openAttention } from '../attentionNavigation';
 import { ownerHomeSurfaces } from './ownerHomeSurfaces';
 import { loadOwnerHome, type OwnerHomeScope } from './ownerHomeState';
+import { ownerWidgetLayout, ownerWidgetText } from './ownerHomeWidgetDesign';
 
 const attentionIcons: Record<AttentionBucketId, keyof typeof Ionicons.glyphMap> = {
   bookings: 'calendar-outline',
@@ -61,6 +62,7 @@ export default function OwnerHomeOperational({
   todayDate?: string;
 }) {
   const p = useColors();
+  const { fontScale } = useWindowDimensions();
   const tones = ownerHomeSurfaces(p.mode === 'dark');
   const { user, hasPermission } = useAuth();
   const { shiftModeEnabled, isCashier } = usePosSettings();
@@ -92,13 +94,17 @@ export default function OwnerHomeOperational({
     : [];
   return (
     <>
-      <View style={[styles.section, styles.group, { backgroundColor: tones.attention.background }]}>
+      <View
+        key={`attention-type-${fontScale}`}
+        testID="owner-home-attention"
+        style={[styles.section, styles.group, { backgroundColor: tones.attention.background }]}
+      >
         <View style={styles.panelHeading}>
           <Ionicons name="alert-circle-outline" size={19} color={tones.attention.ink} />
-          <Text accessibilityRole="header" style={[styles.title, styles.headingLabel, { color: tones.attention.ink }]}>
+          <Text accessibilityRole="header" style={[styles.title, styles.headingLabel, { color: p.text.primary }]}>
             Требует внимания
           </Text>
-          <Text style={[styles.note, { color: tones.attention.ink }]}>Сейчас</Text>
+          <Text style={[styles.note, { color: p.text.secondary }]}>Сейчас</Text>
         </View>
         {attention.isPending ? (
           <View style={styles.padding}>
@@ -153,20 +159,32 @@ export default function OwnerHomeOperational({
         ) : (
           <View style={styles.quietRow}>
             <Ionicons name="checkmark-done-outline" size={22} color={tones.attention.ink} />
-            <Text style={[styles.name, { color: tones.attention.ink }]}>Срочных задач нет</Text>
+            <Text style={[styles.name, { color: p.text.secondary }]}>Срочных задач нет</Text>
           </View>
         )}
       </View>
       {(canOpenBoard || canOpenNfc || canOpenCashShift) && (
-        <View style={styles.section}>
-          <Text accessibilityRole="header" style={[styles.title, styles.singleHeading, { color: p.text.primary }]}>
-            Сервис сейчас
-          </Text>
-          <View style={[styles.group, { backgroundColor: tones.service.background }]}>
+        <View
+          key={`service-type-${fontScale}`}
+          testID="owner-home-service"
+          style={[styles.section, styles.group, { backgroundColor: tones.service.background }]}
+        >
+          <View style={styles.panelHeading}>
+            <Text accessibilityRole="header" style={[styles.title, { color: p.text.primary }]}>
+              Сервис сейчас
+            </Text>
+          </View>
+          <View>
             {canOpenBoard && (
               <TouchableOpacity
                 accessibilityRole="button"
-                style={[styles.operationRow, { borderBottomColor: tones.service.divider }]}
+                style={[
+                  styles.operationRow,
+                  {
+                    borderBottomColor: tones.service.divider,
+                    borderBottomWidth: canOpenNfc || canOpenCashShift ? StyleSheet.hairlineWidth : 0,
+                  },
+                ]}
                 onPress={() =>
                   navigation.dispatch(
                     CommonActions.navigate({ name: 'Checks', params: { screen: 'WorkBoard', initial: false } }),
@@ -186,7 +204,13 @@ export default function OwnerHomeOperational({
               <TouchableOpacity
                 accessibilityRole="button"
                 accessibilityLabel="Открыть отметку NFC"
-                style={[styles.operationRow, { borderBottomColor: tones.service.divider }]}
+                style={[
+                  styles.operationRow,
+                  {
+                    borderBottomColor: tones.service.divider,
+                    borderBottomWidth: canOpenCashShift ? StyleSheet.hairlineWidth : 0,
+                  },
+                ]}
                 onPress={() => navigation.dispatch(CommonActions.navigate({ name: 'NfcAttendance' }))}
               >
                 <View style={[styles.operationIcon, { backgroundColor: tones.service.inset }]}>
@@ -202,7 +226,7 @@ export default function OwnerHomeOperational({
               <TouchableOpacity
                 accessibilityRole="button"
                 accessibilityLabel="Открыть кассовую смену"
-                style={[styles.operationRow, { borderBottomColor: tones.service.divider }]}
+                style={styles.operationRow}
                 onPress={() =>
                   navigation.dispatch(
                     CommonActions.navigate({ name: 'MoreTab', params: { screen: 'CashShift', initial: false } }),
@@ -226,50 +250,50 @@ export default function OwnerHomeOperational({
 }
 
 const styles = StyleSheet.create({
-  section: { marginTop: 14 },
+  section: { marginTop: ownerWidgetLayout.gap },
   panelHeading: {
-    minHeight: 48,
-    paddingHorizontal: 14,
-    paddingTop: 4,
+    minHeight: ownerWidgetLayout.headerMinHeight,
+    paddingHorizontal: ownerWidgetLayout.inset,
+    paddingTop: 12,
+    paddingBottom: 10,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 9,
   },
   headingLabel: { flex: 1, minWidth: 0 },
   taskRow: {
-    minHeight: 48,
-    marginHorizontal: 14,
-    paddingVertical: 8,
+    minHeight: 52,
+    marginHorizontal: ownerWidgetLayout.inset,
+    paddingVertical: 10,
     gap: 10,
     flexDirection: 'row',
     alignItems: 'center',
   },
-  taskLabel: { flex: 1, minWidth: 0, fontSize: 13, lineHeight: 19 },
+  taskLabel: { ...ownerWidgetText.body, flex: 1, minWidth: 0 },
   taskBadge: {
-    minWidth: 29,
-    minHeight: 27,
+    minWidth: 30,
+    minHeight: 28,
     borderRadius: 8,
     paddingHorizontal: 7,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  taskCount: { fontSize: 15, lineHeight: 21, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  taskCount: ownerWidgetText.smallValue,
   quietRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    paddingHorizontal: 14,
+    paddingHorizontal: ownerWidgetLayout.inset,
     paddingBottom: 16,
-    paddingTop: 4,
+    paddingTop: 8,
   },
   operationIcon: { width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  title: { fontSize: 16, lineHeight: 22, fontWeight: '600', letterSpacing: -0.15 },
-  singleHeading: { marginBottom: 7, paddingHorizontal: 2 },
-  group: { borderRadius: 18, overflow: 'hidden' },
-  name: { fontSize: 14, lineHeight: 20, flex: 1, flexShrink: 1 },
-  note: { fontSize: 12, lineHeight: 18 },
+  title: ownerWidgetText.title,
+  group: { borderRadius: ownerWidgetLayout.radius, overflow: 'hidden' },
+  name: { ...ownerWidgetText.body, flex: 1, flexShrink: 1 },
+  note: ownerWidgetText.label,
   retryRow: {
-    paddingHorizontal: 14,
+    paddingHorizontal: ownerWidgetLayout.inset,
     paddingVertical: 8,
     gap: 10,
     flexDirection: 'row',
@@ -279,8 +303,7 @@ const styles = StyleSheet.create({
   action: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 2 },
   padding: { padding: 16 },
   operationRow: {
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: 13,
+    marginHorizontal: ownerWidgetLayout.inset,
     paddingVertical: 9,
     minHeight: 53,
     flexDirection: 'row',

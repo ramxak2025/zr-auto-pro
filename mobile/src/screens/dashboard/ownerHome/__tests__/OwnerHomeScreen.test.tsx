@@ -11,6 +11,7 @@ const mockTimelineApi = jest.fn();
 const mockVisitsApi = jest.fn();
 const mockInvalidate = jest.fn(() => Promise.resolve());
 const mockFocusEffect = jest.fn();
+const mockCloudEntrance = jest.fn((_options: unknown) => ({ opacity: 1 }));
 let mockFocused = true;
 let mockScopeCurrent = true;
 const mockConstants = { expoConfig: { extra: { ownerHomePilot: true as unknown } } };
@@ -66,6 +67,7 @@ jest.mock('react-native-reanimated', () => ({
   default: { View: 'AnimatedView', Text: 'AnimatedText' },
   useSharedValue: (value: unknown) => ({ value }),
   useAnimatedStyle: (style: () => unknown) => style(),
+  useReducedMotion: () => false,
   withTiming: (value: unknown) => value,
   cancelAnimation: jest.fn(),
   ReduceMotion: { System: 'system' },
@@ -134,6 +136,9 @@ jest.mock('../OwnerHomeWidgetSync', () => 'OwnerHomeWidgetSync');
 jest.mock('../OwnerHomeLiveWidgets', () => 'OwnerHomeLiveWidgets');
 jest.mock('../OwnerHomeCash', () => 'OwnerHomeCash');
 jest.mock('../OwnerHomeWidgetActions', () => 'OwnerHomeWidgetActions');
+jest.mock('../useOwnerHomeCloudEntrance', () => ({
+  useOwnerHomeCloudEntrance: (options: unknown) => mockCloudEntrance(options),
+}));
 import OwnerHomeScreen, { OwnerHomeContent } from '../OwnerHomeScreen';
 import { timelineFixture } from '../__fixtures__/timeline';
 
@@ -218,6 +223,30 @@ test.each(['ready', 'loading', 'error'])(
     expect(toolbar.props.onSettings).toBeUndefined();
   },
 );
+
+test('only an actual background return advances the shared cloud activation; date/data changes do not', () => {
+  render();
+  const cleanup = (React.useEffect as jest.Mock).mock.calls.at(-1)![0]();
+  const native = jest.requireMock('react-native').AppState;
+  const listener = native.addEventListener.mock.calls.at(-1)[1];
+  const change = (state: string) => {
+    native.currentState = state;
+    listener(state);
+    render();
+    return mockCloudEntrance.mock.calls.at(-1)![0];
+  };
+  expect(mockCloudEntrance.mock.calls.at(-1)![0]).toMatchObject({ activation: 0, enabled: true });
+  expect(change('inactive')).toMatchObject({ activation: 0, enabled: false });
+  expect(change('active')).toMatchObject({ activation: 0, enabled: true });
+  change('background');
+  change('inactive');
+  expect(change('active')).toMatchObject({ activation: 1, enabled: true });
+  selectPeriod('month');
+  timelineState.data = timelineFixture('month');
+  render();
+  expect(mockCloudEntrance.mock.calls.at(-1)![0]).toMatchObject({ activation: 1, enabled: true });
+  cleanup();
+});
 
 test('first timeline request keeps scope and asks the server for today without a device date', async () => {
   render();

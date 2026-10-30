@@ -13,6 +13,7 @@ import type { TabParamList } from '../../../navigation/AppNavigator';
 import type { PointsListResponse } from '../../../../../shared/types';
 import { loadOwnerHome, ownerMoney, type OwnerHomeScope } from './ownerHomeState';
 import { ownerCashIsToday, ownerCashPayments, ownerCashPoint, ownerCashShift } from './ownerHomeCashState';
+import { ownerWidgetLayout, ownerWidgetText } from './ownerHomeWidgetDesign';
 
 /** Today's check payments and the current shift have deliberately separate accounting bases. */
 export default function OwnerHomeCash({
@@ -107,18 +108,18 @@ export default function OwnerHomeCash({
     p.mode === 'dark'
       ? {
           background: '#252e25',
-          ink: '#ccddc3',
-          quiet: '#b5c7ac',
+          accent: '#bad0ab',
+          quiet: '#b6c1b0',
           divider: '#40503c',
-          inset: '#303d2d',
+          inset: '#2c352b',
           warning: '#f1bb9b',
         }
       : {
           background: '#eff4e9',
-          ink: '#405a35',
-          quiet: '#53694a',
+          accent: '#536d46',
+          quiet: '#5b6656',
           divider: '#d3dfc9',
-          inset: '#e2ecd9',
+          inset: '#e8efdf',
           warning: '#963f24',
         };
   const snapshot =
@@ -138,6 +139,8 @@ export default function OwnerHomeCash({
     balance.fetchStatus !== 'paused'
       ? ownerCashShift(balance.data, point, user?.tenantId ?? null)
       : null;
+  const stackTenders =
+    stacked || (snapshot !== null && Math.max(ownerMoney(snapshot.cash).length, ownerMoney(snapshot.card).length) > 14);
   const open = (screen: 'CashFlow' | 'CashShift' | 'Points') => {
     if (!featureCurrent(screen === 'CashFlow' ? 'flowAllowed' : 'financialAllowed', screen === 'CashShift')) return;
     if (screen === 'Points' && access.current.pointKey !== pointKey) return;
@@ -147,8 +150,8 @@ export default function OwnerHomeCash({
     const query = source === 'payments' ? payments : balance;
     const paused = query.fetchStatus === 'paused';
     return (
-      <View style={styles.notice} accessibilityRole="alert">
-        <Text style={[styles.note, styles.flex, { color: tone.ink }]}>
+      <View style={[styles.notice, stacked && styles.stacked]} accessibilityRole="alert">
+        <Text style={[styles.note, styles.flex, { color: p.text.primary }]}>
           {paused ? 'Нет связи · обновим после подключения' : message}
         </Text>
         {!paused && (
@@ -162,25 +165,30 @@ export default function OwnerHomeCash({
             }}
             style={styles.action}
           >
-            <Text style={[styles.link, { color: tone.ink }]}>Повторить</Text>
+            <Text style={[styles.link, { color: tone.accent }]}>Повторить</Text>
           </TouchableOpacity>
         )}
       </View>
     );
   };
-  const amount = (value: number | null, testID: string, large = false) => (
+  const amount = (value: number | null, testID: string, size: 'metric' | 'value' | 'smallValue' = 'value') => (
     <Text
       testID={testID}
       style={[
-        large ? styles.balanceAmount : styles.amount,
-        { color: value !== null && value < 0 ? tone.warning : tone.ink },
+        styles.amount,
+        ownerWidgetText[size],
+        { color: value !== null && value < 0 ? tone.warning : p.text.primary },
       ]}
     >
       {value === null ? '—' : ownerMoney(value)}
     </Text>
   );
   return (
-    <View testID="owner-home-cash" style={[styles.panel, { backgroundColor: tone.background }]}>
+    <View
+      key={`cash-type-${fontScale}`}
+      testID="owner-home-cash"
+      style={[styles.panel, { backgroundColor: tone.background }]}
+    >
       <TouchableOpacity
         testID="owner-home-cash-flow"
         accessibilityRole="button"
@@ -191,52 +199,59 @@ export default function OwnerHomeCash({
         activeOpacity={0.65}
         style={styles.heading}
       >
-        <Ionicons name="wallet-outline" size={20} color={tone.ink} />
-        <Text accessibilityRole="header" style={[styles.title, styles.flex, { color: tone.ink }]}>
+        <Ionicons name="wallet-outline" size={19} color={tone.accent} />
+        <Text accessibilityRole="header" style={[styles.title, styles.flex, { color: p.text.primary }]}>
           Деньги сегодня
         </Text>
-        {flowAllowed && <Ionicons name="chevron-forward" size={16} color={tone.ink} />}
+        {flowAllowed && <Ionicons name="chevron-forward" size={16} color={tone.accent} />}
       </TouchableOpacity>
 
       {snapshot ? (
         <View style={styles.body}>
-          <View style={[styles.totalRow, stacked && styles.stacked]}>
-            <View style={styles.flex}>
-              <Text style={[styles.label, { color: tone.ink }]}>Оплаты чеков</Text>
-              {point.kind === 'choose' && <Text style={[styles.caption, { color: tone.quiet }]}>Все филиалы</Text>}
-            </View>
-            {amount(snapshot.total, 'owner-home-cash-total')}
+          <View style={styles.total}>
+            <Text style={[styles.caption, { color: tone.quiet }]}>
+              Оплаты чеков{point.kind === 'choose' ? ' · Все филиалы' : ''}
+            </Text>
+            {amount(snapshot.total, 'owner-home-cash-total', 'metric')}
+            <Text style={[styles.caption, { color: tone.quiet }]}>По дате чеков · с учётом возвратов</Text>
           </View>
-          <View style={[styles.tenders, stacked && styles.stacked]}>
+          <View style={[styles.tenders, stackTenders && styles.stacked]}>
             <View style={styles.tender}>
               <View style={styles.tenderLabel}>
-                <Ionicons name="cash-outline" size={15} color={tone.quiet} />
-                <Text style={[styles.note, { color: tone.quiet }]}>Наличные</Text>
+                <Ionicons name="cash-outline" size={15} color={tone.accent} />
+                <Text style={[styles.caption, { color: tone.quiet }]}>Наличные</Text>
               </View>
               {amount(snapshot.cash, 'owner-home-cash-cash')}
             </View>
-            <View style={styles.tender}>
+            <View
+              style={[
+                styles.tender,
+                styles.tenderSecond,
+                stackTenders && styles.tenderSecondStacked,
+                { borderColor: tone.divider },
+              ]}
+            >
               <View style={styles.tenderLabel}>
-                <Ionicons name="card-outline" size={15} color={tone.quiet} />
-                <Text style={[styles.note, { color: tone.quiet }]}>Карта</Text>
+                <Ionicons name="card-outline" size={15} color={tone.accent} />
+                <Text style={[styles.caption, { color: tone.quiet }]}>Карта</Text>
               </View>
               {amount(snapshot.card, 'owner-home-cash-card')}
             </View>
           </View>
-          <Text style={[styles.caption, { color: tone.quiet }]}>По дате чеков · с учётом возвратов</Text>
           {snapshot.installmentPaid !== null && snapshot.installmentPaid > 0 && (
             <View style={[styles.separated, { borderTopColor: tone.divider }]}>
               <View style={[styles.totalRow, stacked && styles.stacked]}>
-                <Text style={[styles.note, styles.flex, { color: tone.ink }]}>Погашения рассрочки</Text>
-                {amount(snapshot.installmentPaid, 'owner-home-cash-installments')}
+                <Text style={[styles.note, styles.flex, { color: p.text.primary }]}>Погашения рассрочки</Text>
+                {amount(snapshot.installmentPaid, 'owner-home-cash-installments', 'smallValue')}
               </View>
+              <Text style={[styles.caption, { color: tone.quiet }]}>Отдельно от оплат чеков</Text>
               {snapshot.installmentPaidCash !== null && snapshot.installmentPaidCard !== null && (
                 <View style={styles.repaymentParts}>
                   <Text style={[styles.caption, { color: tone.quiet }]}>
-                    Наличные {ownerMoney(snapshot.installmentPaidCash)}
+                    Наличные <Text style={{ color: p.text.primary }}>{ownerMoney(snapshot.installmentPaidCash)}</Text>
                   </Text>
                   <Text style={[styles.caption, { color: tone.quiet }]}>
-                    Карта {ownerMoney(snapshot.installmentPaidCard)}
+                    Карта <Text style={{ color: p.text.primary }}>{ownerMoney(snapshot.installmentPaidCard)}</Text>
                   </Text>
                 </View>
               )}
@@ -246,7 +261,7 @@ export default function OwnerHomeCash({
       ) : payments.fetchStatus !== 'paused' &&
         (payments.isPending || (!payments.isFetchedAfterMount && !payments.isError)) ? (
         <View style={styles.loading} accessibilityLabel="Загружаем оплаты за сегодня">
-          <Skeleton height={154} radius={10} />
+          <Skeleton height={132} radius={10} />
         </View>
       ) : (
         notice('Оплаты не обновились', 'payments')
@@ -263,15 +278,15 @@ export default function OwnerHomeCash({
             style={styles.balanceLink}
           >
             <View style={styles.flex}>
-              <Text style={[styles.label, { color: tone.ink }]}>Остаток в кассовой смене</Text>
-              <Text style={[styles.note, { color: tone.quiet }]}>Выберите филиал</Text>
+              <Text style={[styles.note, { color: p.text.primary }]}>Кассовая смена</Text>
+              <Text style={[styles.caption, { color: tone.quiet }]}>Выберите филиал для остатка</Text>
             </View>
-            <Ionicons name="chevron-forward" size={17} color={tone.ink} />
+            <Ionicons name="chevron-forward" size={16} color={tone.accent} />
           </TouchableOpacity>
         ) : point.kind === 'unknown' || point.kind === 'mismatch' ? (
           <View style={styles.balanceContent} accessibilityRole="alert">
-            <Text style={[styles.label, { color: tone.ink }]}>Остаток в кассовой смене</Text>
-            <Text style={[styles.note, { color: tone.quiet }]}>
+            <Text style={[styles.note, { color: p.text.primary }]}>Кассовая смена</Text>
+            <Text style={[styles.caption, { color: tone.quiet }]}>
               {points.isPending && !points.isError ? 'Уточняем филиал…' : 'Не удалось определить кассу'}
             </Text>
             {(!points.isPending || points.isError) && (
@@ -282,7 +297,7 @@ export default function OwnerHomeCash({
                 onPress={() => open('Points')}
                 style={styles.action}
               >
-                <Text style={[styles.link, { color: tone.ink }]}>Проверить филиал</Text>
+                <Text style={[styles.link, { color: tone.accent }]}>Проверить филиал</Text>
               </TouchableOpacity>
             )}
           </View>
@@ -301,22 +316,26 @@ export default function OwnerHomeCash({
             activeOpacity={0.65}
             style={styles.balanceLink}
           >
-            <View style={styles.flex}>
-              <Text style={[styles.label, { color: tone.ink }]}>
-                {shift.kind === 'open' ? 'Наличные в смене' : 'Нет открытой кассовой смены'}
-              </Text>
-              {shift.kind === 'open' ? amount(shift.expectedAmount, 'owner-home-cash-balance', true) : null}
-              <Text style={[styles.caption, { color: tone.quiet }]}>
-                {shift.kind === 'open' ? 'Остаток по учёту' : 'Остаток появится в открытой смене'}
-                {point.name ? ` · ${point.name}` : ''}
-              </Text>
+            <View style={[styles.flex, styles.balanceSummary]}>
+              <View style={[styles.totalRow, stacked && styles.stacked]}>
+                <Text style={[styles.note, styles.flex, { color: p.text.primary }]}>
+                  {shift.kind === 'open' ? 'Наличные в смене' : 'Нет открытой кассовой смены'}
+                </Text>
+                {shift.kind === 'open' ? amount(shift.expectedAmount, 'owner-home-cash-balance') : null}
+              </View>
+              {(shift.kind === 'open' || point.name) && (
+                <Text style={[styles.caption, { color: tone.quiet }]}>
+                  {shift.kind === 'open' ? 'Остаток по учёту' : point.name}
+                  {shift.kind === 'open' && point.name ? ` · ${point.name}` : ''}
+                </Text>
+              )}
             </View>
-            <Ionicons name="chevron-forward" size={17} color={tone.ink} />
+            <Ionicons name="chevron-forward" size={16} color={tone.accent} />
           </TouchableOpacity>
         ) : balance.fetchStatus !== 'paused' &&
           (balance.isPending || (!balance.isFetchedAfterMount && !balance.isError)) ? (
           <View style={styles.loading} accessibilityLabel="Загружаем остаток кассовой смены">
-            <Skeleton height={70} radius={10} />
+            <Skeleton height={42} radius={10} />
           </View>
         ) : (
           notice('Остаток не обновился', 'balance')
@@ -327,56 +346,51 @@ export default function OwnerHomeCash({
 }
 
 const styles = StyleSheet.create({
-  panel: { borderRadius: 22, overflow: 'hidden', marginTop: 14 },
+  panel: { borderRadius: ownerWidgetLayout.radius, overflow: 'hidden', marginTop: ownerWidgetLayout.gap },
   heading: {
-    minHeight: 56,
-    paddingHorizontal: 18,
-    paddingVertical: 14,
+    minHeight: ownerWidgetLayout.headerMinHeight,
+    paddingHorizontal: ownerWidgetLayout.inset,
+    paddingVertical: 12,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
   },
-  title: { fontSize: 17, lineHeight: 23, fontWeight: '700' },
-  body: { paddingHorizontal: 18, paddingBottom: 15 },
+  title: ownerWidgetText.title,
+  body: { paddingHorizontal: ownerWidgetLayout.inset, paddingTop: 2, paddingBottom: ownerWidgetLayout.inset },
+  total: { gap: 3 },
   totalRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  label: { fontSize: 15, lineHeight: 21, fontWeight: '600' },
-  amount: { fontSize: 17, lineHeight: 24, fontWeight: '600', fontVariant: ['tabular-nums'], flexShrink: 1 },
-  balanceAmount: {
-    fontSize: 26,
-    lineHeight: 34,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
-    letterSpacing: -0.5,
-    marginVertical: 2,
-  },
-  note: { fontSize: 13, lineHeight: 19 },
-  caption: { fontSize: 12, lineHeight: 18 },
+  amount: { flexShrink: 1 },
+  note: ownerWidgetText.body,
+  caption: ownerWidgetText.label,
   flex: { flex: 1, minWidth: 0 },
-  tenders: { flexDirection: 'row', gap: 16, paddingTop: 13, paddingBottom: 7 },
-  tender: { flex: 1, minWidth: 0, gap: 2 },
+  tenders: { flexDirection: 'row', gap: 14, marginTop: 14 },
+  tender: { flex: 1, minWidth: 0, gap: 3 },
+  tenderSecond: { borderLeftWidth: StyleSheet.hairlineWidth, paddingLeft: 14 },
+  tenderSecondStacked: { borderLeftWidth: 0, borderTopWidth: StyleSheet.hairlineWidth, paddingLeft: 0, paddingTop: 10 },
   tenderLabel: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  separated: { marginTop: 12, paddingTop: 11, borderTopWidth: StyleSheet.hairlineWidth },
-  repaymentParts: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 14, rowGap: 2, marginTop: 3 },
-  stacked: { flexDirection: 'column', alignItems: 'stretch', gap: 8 },
-  balance: { minHeight: 88 },
+  separated: { marginTop: 14, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, gap: 2 },
+  repaymentParts: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 14, rowGap: 3, marginTop: 4 },
+  stacked: { flexDirection: 'column', alignItems: 'stretch', gap: 10 },
+  balance: { minHeight: 64 },
+  balanceSummary: { gap: 2 },
   balanceLink: {
-    minHeight: 88,
-    paddingHorizontal: 18,
-    paddingVertical: 14,
+    minHeight: 64,
+    paddingHorizontal: ownerWidgetLayout.inset,
+    paddingVertical: 12,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
   },
-  balanceContent: { paddingHorizontal: 18, paddingVertical: 15, gap: 4 },
+  balanceContent: { paddingHorizontal: ownerWidgetLayout.inset, paddingVertical: 12, gap: 3 },
   notice: {
     minHeight: 70,
-    paddingHorizontal: 18,
+    paddingHorizontal: ownerWidgetLayout.inset,
     paddingVertical: 8,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
   },
-  action: { minHeight: 48, justifyContent: 'center' },
-  link: { fontSize: 13, lineHeight: 19, fontWeight: '600' },
-  loading: { paddingHorizontal: 18, paddingTop: 6, paddingBottom: 16 },
+  action: { minHeight: ownerWidgetLayout.target, justifyContent: 'center' },
+  link: { ...ownerWidgetText.body, fontWeight: '600' },
+  loading: { paddingHorizontal: ownerWidgetLayout.inset, paddingTop: 6, paddingBottom: ownerWidgetLayout.inset },
 });

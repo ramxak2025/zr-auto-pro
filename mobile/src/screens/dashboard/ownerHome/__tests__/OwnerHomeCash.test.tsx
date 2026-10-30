@@ -46,7 +46,9 @@ jest.mock('@react-navigation/native', () => ({
 jest.mock('@tanstack/react-query', () => ({ useQuery: (options: unknown) => mockQuery(options) }));
 jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 jest.mock('../../../../contexts/AuthContext', () => ({ useAuth: () => mockAuth }));
-jest.mock('../../../../contexts/ThemeContext', () => ({ useColors: () => ({ mode: mockDark ? 'dark' : 'light' }) }));
+jest.mock('../../../../contexts/ThemeContext', () => ({
+  useColors: () => ({ mode: mockDark ? 'dark' : 'light', text: { primary: mockDark ? '#e6e8ee' : '#111827' } }),
+}));
 jest.mock('../../../../contexts/TenantTimezoneContext', () => ({ useTenantTimezone: () => mockTimezone }));
 jest.mock('../../../../hooks/usePoints', () => ({ POINTS_QUERY_KEY: ['points'] }));
 jest.mock('../../../../components/Skeleton', () => ({ Skeleton: 'Skeleton' }));

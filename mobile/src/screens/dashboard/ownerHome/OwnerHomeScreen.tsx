@@ -10,7 +10,9 @@ import {
   Text,
   TouchableOpacity,
   View,
+  useWindowDimensions,
 } from 'react-native';
+import { useReducedMotion } from 'react-native-reanimated';
 import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
@@ -39,6 +41,8 @@ import OwnerHomeOperational, { OwnerHomeRetry } from './OwnerHomeOperational';
 import OwnerHomeLiveWidgets from './OwnerHomeLiveWidgets';
 import OwnerHomeCash from './OwnerHomeCash';
 import OwnerHomeWidgetActions from './OwnerHomeWidgetActions';
+import { useOwnerHomeCloudEntrance } from './useOwnerHomeCloudEntrance';
+import { ownerWidgetLayout, ownerWidgetText } from './ownerHomeWidgetDesign';
 import OwnerHomeDetails, { type OwnerHomeDetail } from './OwnerHomeDetails';
 import OwnerHomeWidgetSync from './OwnerHomeWidgetSync';
 import {
@@ -54,7 +58,8 @@ import {
 export default function OwnerHomeScreen() {
   const { user, activeAccountId, sessionGeneration } = useAuth();
   const timezone = useTenantTimezone();
-  const reducedMotion = useReduceMotionPreference();
+  const nativeReducedMotion = useReducedMotion();
+  const reducedMotion = useReduceMotionPreference(nativeReducedMotion);
   const lease = captureDataSession();
   const key = [
     activeAccountId,
@@ -73,12 +78,17 @@ export default function OwnerHomeScreen() {
 
 export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: OwnerHomeScope; reducedMotion?: boolean }) {
   const p = useColors();
+  const { width, fontScale } = useWindowDimensions();
+  const stackedClients = width < 360 || fontScale > 1.2;
   const clientTone = ownerHomeSurfaces(p.mode === 'dark').clients;
   const { user, refreshUser, hasPermission } = useAuth();
   const insets = useSafeAreaInsets();
   const isFocused = useIsFocused();
   const queryClient = useQueryClient();
   const [active, setActive] = useState(AppState.currentState === 'active');
+  const [cloudActivation, setCloudActivation] = useState(0);
+  const cloudActivationRef = useRef(0);
+  const wasBackground = useRef(AppState.currentState === 'background');
   const [asOf, setAsOf] = useState<string | undefined>();
   const [period, setPeriod] = useState<OwnerHomeTimelinePeriod>('day');
   const [calendarVisible, setCalendarVisible] = useState(false);
@@ -88,6 +98,7 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
   const showEarnings = usePreference(prefKey('owner-home-pilot-earnings', user?.id), true);
   const allowed = ownerHomeEnabled(Constants.expoConfig?.extra?.ownerHomePilot, user?.role);
   const enabled = allowed && isFocused && active;
+  const cloudStyle = useOwnerHomeCloudEntrance({ enabled, reducedMotion, activation: cloudActivation });
   const scopeKey = JSON.stringify(scope.key);
   const refresh = useCallback(() => {
     if (allowed && scope.isCurrent() && AppState.currentState === 'active') {
@@ -107,6 +118,11 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
   );
   useEffect(() => {
     const listener = AppState.addEventListener('change', (state) => {
+      if (state === 'background') wasBackground.current = true;
+      if (state === 'active' && wasBackground.current) {
+        wasBackground.current = false;
+        setCloudActivation(++cloudActivationRef.current);
+      }
       setActive(state === 'active');
       if (state === 'active') void refresh();
     });
@@ -270,6 +286,7 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
         />
         {data && model ? (
           <OwnerHomeSummary
+            cloudStyle={cloudStyle}
             widgetActions={widgetActions}
             key={`${period}:${asOf ?? 'today'}`}
             data={data}
@@ -282,6 +299,7 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
           />
         ) : (
           <OwnerHomeSummaryPlaceholder
+            cloudStyle={cloudStyle}
             widgetActions={widgetActions}
             errorMessage={
               timeline.isError || invalidTimeline
@@ -296,13 +314,17 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
         )}
 
         <OwnerHomeCash scope={scope} enabled={enabled} />
-        <View style={[styles.clients, { backgroundColor: clientTone.background }]}>
+        <View
+          key={`clients-type-${fontScale}`}
+          testID="owner-home-clients"
+          style={[styles.clients, { backgroundColor: clientTone.background }]}
+        >
           <View style={styles.clientHeading}>
             <Ionicons name="people-outline" size={19} color={clientTone.ink} />
-            <Text accessibilityRole="header" style={[styles.clientTitle, { color: clientTone.ink }]}>
+            <Text accessibilityRole="header" style={[styles.clientTitle, { color: p.text.primary }]}>
               Клиенты
               {visitReady ? (
-                <Text style={[styles.clientTotal, { color: clientTone.ink }]}> · {visits.data.servedClients}</Text>
+                <Text style={[styles.clientTotal, { color: p.text.secondary }]}> · {visits.data.servedClients}</Text>
               ) : null}
             </Text>
             <Text style={[styles.caption, { color: p.text.secondary, flexShrink: 1, textAlign: 'right' }]}>
@@ -327,7 +349,7 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
               <OwnerHomeRetry text="Визиты не загрузились" busy={visits.isFetching} onRetry={visits.refetch} />
             ) : visitReady && range ? (
               <>
-                <View style={styles.cohorts}>
+                <View style={[styles.cohorts, stackedClients && styles.cohortsStacked]}>
                   {(['new', 'returning'] as const).map((cohort, index) => (
                     <TouchableOpacity
                       key={cohort}
@@ -337,12 +359,28 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
                       activeOpacity={0.65}
                       onPress={() => setDetail({ kind: 'clients', cohort, range, timezone: data.timezone })}
                     >
-                      {index === 1 && <View style={[styles.cohortDivider, { backgroundColor: clientTone.divider }]} />}
-                      <Text style={[styles.cohortLabel, { color: clientTone.ink }]}>
-                        {cohort === 'new' ? 'Впервые' : 'Повторно'}
-                      </Text>
+                      {index === 1 && (
+                        <View
+                          style={[
+                            styles.cohortDivider,
+                            stackedClients && styles.cohortDividerStacked,
+                            { backgroundColor: clientTone.divider },
+                          ]}
+                        />
+                      )}
+                      <View style={styles.cohortLabelRow}>
+                        <View
+                          style={[
+                            styles.cohortDot,
+                            { backgroundColor: cohort === 'new' ? clientTone.strong : clientTone.soft },
+                          ]}
+                        />
+                        <Text style={[styles.cohortLabel, { color: p.text.secondary }]}>
+                          {cohort === 'new' ? 'Впервые' : 'Повторно'}
+                        </Text>
+                      </View>
                       <View style={styles.cohortValueRow}>
-                        <Text style={[styles.cohortValue, { color: clientTone.ink }]}>
+                        <Text style={[styles.cohortValue, { color: p.text.primary }]}>
                           {cohort === 'new' ? visits.data.newClients : visits.data.returningClients}
                         </Text>
                         <Ionicons name="chevron-forward" size={13} color={p.text.secondary} />
@@ -370,8 +408,8 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
                   onPress={() => setDetail({ kind: 'returns', range, timezone: data.timezone })}
                 >
                   <Ionicons name="repeat-outline" size={18} color={clientTone.ink} />
-                  <Text style={[styles.rapidTitle, { color: clientTone.ink }]}>Повтор до 30 дней</Text>
-                  <Text style={[styles.rapidCount, { color: clientTone.ink }]}>
+                  <Text style={[styles.rapidTitle, { color: p.text.primary }]}>Вернулись в течение 30 дней</Text>
+                  <Text style={[styles.rapidCount, { color: p.text.primary }]}>
                     {visits.data.rapidReturnVehicleCount} авто
                   </Text>
                   <Ionicons name="chevron-forward" size={13} color={p.text.secondary} />
@@ -442,36 +480,48 @@ const styles = StyleSheet.create({
   statusBarScrim: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 21 },
   bottomSafe: { position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 20 },
   content: { paddingHorizontal: 17, paddingBottom: 24 },
-  clients: { marginTop: 14, borderRadius: 18, overflow: 'hidden' },
+  clients: { marginTop: ownerWidgetLayout.gap, borderRadius: ownerWidgetLayout.radius, overflow: 'hidden' },
   clientHeading: {
-    minHeight: 44,
-    paddingHorizontal: 14,
-    paddingTop: 3,
+    minHeight: ownerWidgetLayout.headerMinHeight,
+    paddingHorizontal: ownerWidgetLayout.inset,
+    paddingTop: 10,
+    paddingBottom: 8,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 8,
     marginBottom: 0,
   },
-  clientTitle: { flex: 1, fontSize: 15, lineHeight: 21, fontWeight: '600' },
-  clientTotal: { fontSize: 12, fontWeight: '400' },
+  clientTitle: { ...ownerWidgetText.title, flex: 1 },
+  clientTotal: ownerWidgetText.label,
   clientGroup: { overflow: 'hidden' },
   cohorts: { flexDirection: 'row' },
+  cohortsStacked: { flexDirection: 'column' },
   cohort: {
     flex: 1,
     minHeight: 80,
-    paddingHorizontal: 15,
-    paddingVertical: 8,
+    paddingHorizontal: ownerWidgetLayout.inset,
+    paddingVertical: 10,
     justifyContent: 'center',
     gap: 3,
   },
   cohortDivider: { position: 'absolute', left: 0, top: 13, bottom: 13, width: StyleSheet.hairlineWidth },
-  cohortLabel: { fontSize: 13, lineHeight: 18, flexShrink: 1 },
+  cohortDividerStacked: {
+    left: 16,
+    right: 16,
+    top: 0,
+    bottom: undefined,
+    width: undefined,
+    height: StyleSheet.hairlineWidth,
+  },
+  cohortLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  cohortDot: { width: 6, height: 6, borderRadius: 3 },
+  cohortLabel: { ...ownerWidgetText.label, flexShrink: 1 },
   cohortValueRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 4 },
-  cohortValue: { fontSize: 28, lineHeight: 34, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  cohortValue: ownerWidgetText.metric,
   cohortTrack: {
     height: 4,
-    marginHorizontal: 15,
+    marginHorizontal: ownerWidgetLayout.inset,
     marginTop: 2,
     marginBottom: 14,
     borderRadius: 2,
@@ -481,19 +531,19 @@ const styles = StyleSheet.create({
   },
   rapid: {
     minHeight: Platform.OS === 'android' ? 48 : 44,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+    paddingHorizontal: ownerWidgetLayout.inset,
+    paddingVertical: 12,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
   },
-  rapidTitle: { fontSize: 13, lineHeight: 18, flex: 1 },
-  rapidCount: { fontSize: 13, lineHeight: 18, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  rapidTitle: { ...ownerWidgetText.body, flex: 1 },
+  rapidCount: ownerWidgetText.smallValue,
   clientLoading: { height: 94, padding: 16, gap: 12 },
   clientPlaceholder: { height: 22, borderRadius: 5 },
   clientUnavailable: { minHeight: 70, padding: 16, fontSize: 13, lineHeight: 19 },
-  historyNote: { fontSize: 12, lineHeight: 18, marginTop: 10, paddingHorizontal: 2 },
-  caption: { fontSize: 12, lineHeight: 18 },
+  historyNote: { ...ownerWidgetText.label, marginTop: 10, paddingHorizontal: 2 },
+  caption: ownerWidgetText.label,
   setting: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14 },
   settingLabel: { flex: 1, fontSize: 15, lineHeight: 22 },
 });
