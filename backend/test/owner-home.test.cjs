@@ -40,7 +40,7 @@ test('owner-home rejects malformed, impossible, future dates and unbounded visit
   for (const pair of [
     ['2026-10-30', '2026-10-30'],
     ['2026-10-10', '2026-10-09'],
-    ['2026-09-01', '2026-10-01'],
+    ['2025-09-30', '2026-10-01'],
   ])
     assert.throws(
       () => visitRange(...pair, 'Europe/Moscow', now),

@@ -2,12 +2,13 @@ import { BadRequestException, Inject, Injectable, Logger, NotFoundException } fr
 import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../../database.module';
 import { normalizeTimezone } from '../../common/timezone';
-import { profitWindows, publicPeriod, visitRange } from './owner-home-dates';
-import { profitSnapshots } from './owner-home-finance';
-import { delta } from './owner-home-math';
+import { profitWindows, visitRange } from './owner-home-dates';
+import { profitSnapshots, profitResponse } from './owner-home-finance';
+import { timelineSnapshot } from './owner-home-timeline';
 import { VisitContext, pagination, rapidDetails, visitQuery } from './owner-home-visits';
 import type {
   OwnerHomeProfit,
+  OwnerHomeTimeline,
   OwnerHomeVisits,
   OwnerHomeClientPage,
   OwnerHomeRapidReturnPage,
@@ -58,28 +59,12 @@ export class OwnerHomeService {
     return this.snapshot(tenant, async ({ client, tz, now }) => {
       const w = profitWindows(asOf, tz, now);
       const values = await profitSnapshots(client, tenant, point, tz, w.current, w.previous);
-      return {
-        canonicalDate: w.canonicalDate,
-        todayDate: w.todayDate,
-        timezone: tz,
-        generatedAt: now.toISOString(),
-        pointId: point,
-        basis: 'current_plan',
-        basisLabel: 'Пересчёт по текущему плану',
-        historicalSnapshot: false,
-        basisDetail:
-          'Чеки, расходы и начисления взяты в текущем сохранённом состоянии. Месячный план, оклады и состав команды — текущие; прежние настройки не сохранялись. Расходы на автомобиль — по ставкам, действовавшим в день визита. Оба периода рассчитаны по одним правилам, это не архивный снимок.',
-        current: { period: publicPeriod(w.current), ...values.current },
-        comparison: {
-          period: publicPeriod(w.previous),
-          clamped: w.clamped,
-          basis: 'current_plan',
-          ...values.previous,
-          dayDelta: delta(values.current.day.netProfit, values.previous.day.netProfit),
-          mtdDelta: delta(values.current.mtd.netProfit, values.previous.mtd.netProfit),
-        },
-      };
+      return profitResponse(point, tz, now, w, values);
     });
+  }
+
+  timeline(tenant: string, point: string | null, query: Record<string, unknown>): Promise<OwnerHomeTimeline> {
+    return this.snapshot(tenant, ({ client, tz, now }) => timelineSnapshot(client, tenant, point, tz, now, query));
   }
 
   private visitContext(tenant: string, point: string | null, query: Record<string, unknown>, c: Context): VisitContext {

@@ -107,6 +107,7 @@ jobs:
           test/vehicle-day-finance-live.test.cjs
           test/check-derived-profit-live.test.cjs
           test/owner-home-live.test.cjs
+          test/owner-home-timeline-live.test.cjs
 
   frontend:
     name: Frontend (typecheck + lint + build)

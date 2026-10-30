@@ -128,3 +128,54 @@ export interface OwnerHomePageQuery extends OwnerHomeVisitsQuery {
 export interface OwnerHomeClientQuery extends OwnerHomePageQuery {
   cohort: OwnerHomeClientCohort;
 }
+
+export type OwnerHomeTimelinePeriod = 'day' | 'week' | 'month' | 'year';
+export interface OwnerHomeTimelineQuery {
+  period: OwnerHomeTimelinePeriod;
+  asOf?: string;
+}
+export interface OwnerHomeTimelineRange {
+  period: OwnerHomeTimelinePeriod;
+  /** Local civil dates, inclusive. */
+  from: string;
+  through: string;
+  /** UTC bounds for recorded facts. Plan allocations follow the declared policy. */
+  start: string;
+  untilExclusive: string;
+  partialDay: boolean;
+  granularity: 'hour' | 'day' | 'month';
+}
+export interface OwnerHomeTimelineBucket {
+  from: string;
+  untilExclusive: string;
+  /** Civil date used for the bucket label, not the following exclusive boundary. */
+  localDate: string;
+  /** Interval change derived from adjacent rounded cumulative amounts. */
+  revenue: number;
+  netProfit: number;
+  cumulativeRevenue: number;
+  cumulativeNetProfit: number;
+}
+export interface OwnerHomeTimeline {
+  canonicalDate: string;
+  todayDate: string;
+  timezone: string;
+  generatedAt: string;
+  pointId: string | null;
+  basis: 'current_plan';
+  basisLabel: string;
+  basisDetail: string;
+  historicalSnapshot: false;
+  range: OwnerHomeTimelineRange;
+  /** Existing day semantics differ from monthwise accrual endpoint differences. */
+  rangePolicy: 'day_legacy' | 'month_accrual_delta';
+  intradayPolicy: 'daily_costs_at_opening' | null;
+  allocationDetail: string | null;
+  /** Day opening can be negative; never replace it with an invented zero. */
+  opening: { at: string; revenue: number; netProfit: number };
+  buckets: OwnerHomeTimelineBucket[];
+  totals: OwnerHomeAccrual;
+  /** Canonical day/MTD comparison, explicitly labeled as month context in the UI. */
+  footer: OwnerHomeProfit;
+  visitsRange: OwnerHomeVisitsQuery;
+}

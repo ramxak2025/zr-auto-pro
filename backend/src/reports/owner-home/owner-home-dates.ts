@@ -31,7 +31,7 @@ export interface ProfitWindow extends OwnerHomeProfitPeriod {
   dayStart: string;
 }
 
-function window(day: string, tz: string, until: Date, partialDay: boolean): ProfitWindow {
+export function profitWindow(day: string, tz: string, until: Date, partialDay: boolean): ProfitWindow {
   const [y, m, d] = day.split('-').map(Number);
   return {
     from: `${day.slice(0, 7)}-01`,
@@ -68,16 +68,17 @@ export function profitWindows(raw: unknown, tz: string, now: Date) {
     canonicalDate: selected,
     todayDate,
     clamped: priorDay !== d,
-    current: window(selected, tz, partial ? now : nextDay(selected, tz), partial),
-    previous: window(priorKey, tz, priorUntil, partial),
+    current: profitWindow(selected, tz, partial ? now : nextDay(selected, tz), partial),
+    previous: profitWindow(priorKey, tz, priorUntil, partial),
   };
 }
 
 export function visitRange(rawFrom: unknown, rawTo: unknown, tz: string, now: Date) {
   const from = strictDay(rawFrom),
     to = strictDay(rawTo);
-  if (from > to || from.slice(0, 7) !== to.slice(0, 7))
-    throw new BadRequestException('Выберите день или диапазон внутри одного месяца');
+  // Compare civil dates, not elapsed UTC hours (leap years and DST included).
+  const days = (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000 + 1;
+  if (from > to || days > 366) throw new BadRequestException('Выберите диапазон не более 366 календарных дней');
   if (to > zonedDateKey(now, tz)) throw new BadRequestException('Будущая дата недоступна');
   const end = nextDay(to, tz);
   return {

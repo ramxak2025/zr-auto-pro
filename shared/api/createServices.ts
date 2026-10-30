@@ -1,6 +1,8 @@
 import type { TodayEarnings, DashboardAttention } from '../types';
 import type {
   OwnerHomeProfit,
+  OwnerHomeTimeline,
+  OwnerHomeTimelineQuery,
   OwnerHomeVisits,
   OwnerHomeVisitsQuery,
   OwnerHomeClientQuery,
@@ -1601,6 +1603,8 @@ export function createReportsApi(api: HttpClient) {
     dashboardV2: (params?: { period?: 'today' | 'week' | 'month' | 'year' }) =>
       api.get<DashboardV2>('/reports/dashboard-v2', { params }),
     ownerHomeProfit: (params?: { asOf?: string }) => api.get<OwnerHomeProfit>('/reports/owner-home/profit', { params }),
+    ownerHomeTimeline: (params: OwnerHomeTimelineQuery) =>
+      api.get<OwnerHomeTimeline>('/reports/owner-home/timeline', { params }),
     ownerHomeVisits: (params: OwnerHomeVisitsQuery) =>
       api.get<OwnerHomeVisits>('/reports/owner-home/visits', { params }),
     ownerHomeClients: (params: OwnerHomeClientQuery) =>
