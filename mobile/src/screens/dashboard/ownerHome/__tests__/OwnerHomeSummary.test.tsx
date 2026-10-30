@@ -1,4 +1,5 @@
 import React from 'react';
+import { TouchableOpacity } from 'react-native';
 import type { OwnerHomeTimeline } from '../../../../../../shared/types/ownerHome';
 
 const mockRefs: { current: unknown }[] = [];
@@ -20,13 +21,20 @@ jest.mock('react-native', () => ({
   Text: 'Text',
   TouchableOpacity: 'TouchableOpacity',
   ActivityIndicator: 'ActivityIndicator',
-  Image: 'Image',
   AppState: { currentState: 'active' },
   Platform: { OS: 'ios' },
+  useWindowDimensions: () => ({ width: 402, fontScale: 1 }),
   StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 0.5 },
 }));
 jest.mock('expo-linear-gradient', () => ({ LinearGradient: 'LinearGradient' }));
-jest.mock('../../../../../assets/logo.png', () => 'autexa-existing-logo');
+jest.mock('react-native-svg', () => ({
+  __esModule: true,
+  default: 'Svg',
+  Path: 'Path',
+  Defs: 'Defs',
+  LinearGradient: 'SvgGradient',
+  Stop: 'Stop',
+}));
 jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 jest.mock('react-native-reanimated', () => ({
   __esModule: true,
@@ -45,6 +53,7 @@ jest.mock('../../../../contexts/ThemeContext', () => ({
   useColors: () => jest.requireActual('../../../../theme/palette').getPalette(mockMode),
 }));
 import OwnerHomeSummary, { OwnerHomeSummaryPlaceholder } from '../OwnerHomeSummary';
+import OwnerHomeCloud from '../OwnerHomeCloud';
 import { accrualFixture, timelineFixture } from '../__fixtures__/timeline';
 import { ownerMoney } from '../ownerHomeState';
 
@@ -60,7 +69,15 @@ function text(node: React.ReactNode): string {
     .map(text)
     .join('');
 }
-function render(data: OwnerHomeTimeline, { active = true, scopeKey = ['account-A'], reducedMotion = true } = {}) {
+function render(
+  data: OwnerHomeTimeline,
+  {
+    active = true,
+    scopeKey = ['account-A'],
+    reducedMotion = true,
+    widgetActions,
+  }: { active?: boolean; scopeKey?: string[]; reducedMotion?: boolean; widgetActions?: React.ReactNode } = {},
+) {
   mockRefIndex = 0;
   mockSharedIndex = 0;
   return OwnerHomeSummary({
@@ -68,6 +85,7 @@ function render(data: OwnerHomeTimeline, { active = true, scopeKey = ['account-A
     scope: { key: scopeKey, isCurrent: () => mockScopeCurrent },
     active,
     reducedMotion,
+    widgetActions,
     ...actions,
   });
 }
@@ -109,9 +127,9 @@ test.each(['day', 'week', 'month', 'year'] as const)(
         (node) => node.props.accessibilityRole === 'adjustable' || node.props.accessibilityRole === 'progressbar',
       ),
     ).toBe(false);
-    expect(
-      nodes(tree).some((node) => ['Svg', 'GestureDetector', 'OwnerHomeTimelineChart'].includes(String(node.type))),
-    ).toBe(false);
+    expect(nodes(tree).some((node) => ['GestureDetector', 'OwnerHomeTimelineChart'].includes(String(node.type)))).toBe(
+      false,
+    );
     expect(text(tree)).not.toMatch(/график|по текущему плану|операционная прибыль/i);
   },
 );
@@ -238,20 +256,52 @@ test('loading and retry states display no financial amount or chart, and expose 
   expect(buttons(busy)[0].props.disabled).toBe(true);
 });
 
-test('the existing brand asset stays decorative and cannot intercept summary actions or screen-reader navigation', () => {
+test('widget actions stay available with financial data, while loading, and after a load failure', () => {
+  const theme = jest.fn();
+  const settings = jest.fn();
+  const widgetActions = (
+    <>
+      <TouchableOpacity accessibilityRole="button" accessibilityLabel="Сменить тему" onPress={theme} />
+      <TouchableOpacity accessibilityRole="button" accessibilityLabel="Настроить главную" onPress={settings} />
+    </>
+  );
+  const trees = [
+    render(timelineFixture(), { widgetActions }),
+    OwnerHomeSummaryPlaceholder({ retrying: true, onRetry: jest.fn(), widgetActions }),
+    OwnerHomeSummaryPlaceholder({
+      errorMessage: 'Сводка не загрузилась',
+      retrying: false,
+      onRetry: jest.fn(),
+      widgetActions,
+    }),
+  ];
+  for (const tree of trees) {
+    const controls = buttons(tree).filter((button) =>
+      ['Сменить тему', 'Настроить главную'].includes(String(button.props.accessibilityLabel)),
+    );
+    expect(controls).toHaveLength(2);
+    for (const control of controls) (control.props.onPress as () => void)();
+  }
+  expect(theme).toHaveBeenCalledTimes(3);
+  expect(settings).toHaveBeenCalledTimes(3);
+  for (const action of Object.values(actions)) expect(action).not.toHaveBeenCalled();
+});
+
+test('one gradient logo cloud stays decorative and cannot intercept summary actions or screen-reader navigation', () => {
   const tree = render(timelineFixture());
-  const pattern = nodes(tree).find((node) => typeof node.type === 'function' && node.type.name === 'BrandClouds')!;
+  const patterns = nodes(tree).filter((node) => node.type === OwnerHomeCloud);
+  expect(patterns).toHaveLength(1);
+  const pattern = patterns[0];
   const content = (pattern.type as (props: Record<string, unknown>) => React.ReactElement<Record<string, unknown>>)(
     pattern.props,
   );
   expect(content.props.pointerEvents).toBe('none');
   expect(content.props.accessibilityElementsHidden).toBe(true);
   expect(content.props.importantForAccessibility).toBe('no-hide-descendants');
-  const marks = nodes(content).filter((node) => node.type === 'Image');
-  expect(marks).toHaveLength(2);
-  for (const mark of marks) {
-    expect(mark.props.source).toBe('autexa-existing-logo');
-    expect(mark.props.accessible).toBe(false);
-  }
+  const marks = nodes(content).filter((node) => node.type === 'Path');
+  expect(marks).toHaveLength(1);
+  expect(marks[0].props.fill).toBe('url(#owner-home-cloud-fill)');
+  expect(marks[0].props.stroke).toBeUndefined();
+  expect(nodes(content).find((node) => node.type === 'Svg')!.props.accessible).toBe(false);
   expect(buttons(content)).toHaveLength(0);
 });

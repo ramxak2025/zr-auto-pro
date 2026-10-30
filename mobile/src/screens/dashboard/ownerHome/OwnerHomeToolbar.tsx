@@ -19,7 +19,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { CommonActions, type NavigationProp, useNavigation } from '@react-navigation/native';
 import Ionicons from '../../../components/icons/IoniconsShim';
-import { useColors, useThemeMode } from '../../../contexts/ThemeContext';
+import { useColors } from '../../../contexts/ThemeContext';
 import { useAuth } from '../../../contexts/AuthContext';
 import { usePointAccess } from '../../../hooks/usePoints';
 import type { TabParamList } from '../../../navigation/AppNavigator';
@@ -29,36 +29,15 @@ const target = Platform.OS === 'android' ? 48 : 44;
 export function OwnerHomeToolbar({
   calendarEnabled,
   onCalendar,
-  onSettings,
-  reducedMotion,
 }: {
   calendarEnabled: boolean;
   onCalendar: () => void;
-  onSettings: () => void;
-  reducedMotion: boolean;
 }) {
-  const p = useColors(),
-    { mode, toggle } = useThemeMode();
+  const p = useColors();
   const { user, hasPermission } = useAuth();
   const { currentPoint, currentPointId, multiPoint } = usePointAccess();
   const navigation = useNavigation<NavigationProp<TabParamList>>();
   const name = currentPoint?.name || (!currentPointId ? user?.tenant?.name : undefined) || 'Автосервис';
-  const themeProgress = useSharedValue(1);
-  useEffect(() => {
-    cancelAnimation(themeProgress);
-    themeProgress.value = reducedMotion ? 1 : 0;
-    if (!reducedMotion)
-      themeProgress.value = withTiming(1, {
-        duration: 180,
-        easing: Easing.out(Easing.cubic),
-        reduceMotion: ReduceMotion.System,
-      });
-    return () => cancelAnimation(themeProgress);
-  }, [mode, reducedMotion, themeProgress]);
-  const themeStyle = useAnimatedStyle(() => ({
-    opacity: themeProgress.value,
-    transform: [{ rotate: `${(1 - themeProgress.value) * -35}deg` }],
-  }));
   const choices = [
     ...(multiPoint ? [{ text: 'Филиалы', screen: 'Points' }] : []),
     ...(hasPermission('company_manage') ? [{ text: 'Настройки компании', screen: 'CompanySettings' }] : []),
@@ -77,7 +56,7 @@ export function OwnerHomeToolbar({
           title: name,
           options: [...choices.map((choice) => choice.text), 'Отмена'],
           cancelButtonIndex: choices.length,
-          userInterfaceStyle: mode,
+          userInterfaceStyle: p.mode,
         },
         open,
       );
@@ -109,24 +88,6 @@ export function OwnerHomeToolbar({
         onPress={onCalendar}
       >
         <Ionicons name="calendar-outline" size={22} color={p.text.primary} />
-      </TouchableOpacity>
-      <TouchableOpacity
-        accessibilityRole="button"
-        accessibilityLabel={mode === 'dark' ? 'Включить светлую тему' : 'Включить тёмную тему'}
-        style={[styles.tool, { backgroundColor: p.bg.card }]}
-        onPress={toggle}
-      >
-        <Animated.View style={themeStyle}>
-          <Ionicons name={mode === 'dark' ? 'sun-outline' : 'moon-outline'} size={23} color={p.text.primary} />
-        </Animated.View>
-      </TouchableOpacity>
-      <TouchableOpacity
-        accessibilityRole="button"
-        accessibilityLabel="Настроить главную"
-        style={[styles.tool, { backgroundColor: p.bg.card }]}
-        onPress={onSettings}
-      >
-        <Ionicons name="options-outline" size={22} color={p.text.primary} />
       </TouchableOpacity>
     </View>
   );

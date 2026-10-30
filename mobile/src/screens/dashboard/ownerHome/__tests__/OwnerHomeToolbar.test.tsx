@@ -1,8 +1,6 @@
 import React from 'react';
-const mockToggle = jest.fn(),
-  mockDispatch = jest.fn(),
+const mockDispatch = jest.fn(),
   mockSheet = jest.fn();
-const mockTheme = { mode: 'light', toggle: mockToggle };
 const mockAccess = { currentPoint: { name: 'Учебный сервис' }, currentPointId: 'point', multiPoint: true };
 const mockPermission = jest.fn(() => true);
 jest.mock('react', () => ({
@@ -35,7 +33,6 @@ jest.mock('@react-navigation/native', () => ({
   CommonActions: { navigate: (payload: unknown) => ({ type: 'NAVIGATE', payload }) },
 }));
 jest.mock('../../../../contexts/ThemeContext', () => ({
-  useThemeMode: () => mockTheme,
   useColors: () => ({ bg: { card: '#fff', muted: '#eee' }, text: { primary: '#111', secondary: '#555' } }),
 }));
 jest.mock('../../../../contexts/AuthContext', () => ({
@@ -51,7 +48,6 @@ jest.mock('lucide-react-native', () => ({
   Circle: 'FallbackCircle',
 }));
 import { OwnerHomeToolbar, OwnerHomePeriodControl } from '../OwnerHomeToolbar';
-import Ionicons from '../../../../components/icons/IoniconsShim';
 
 function nodes(node: React.ReactNode): React.ReactElement<Record<string, unknown>>[] {
   if (!React.isValidElement<Record<string, unknown>>(node)) return [];
@@ -59,38 +55,27 @@ function nodes(node: React.ReactNode): React.ReactElement<Record<string, unknown
 }
 beforeEach(() => {
   jest.clearAllMocks();
-  mockTheme.mode = 'light';
   mockAccess.multiPoint = true;
   mockPermission.mockReturnValue(true);
 });
 
-test('theme action uses working shim sun/moon glyphs and the real provider toggle', () => {
-  for (const [mode, label, glyph] of [
-    ['light', 'Включить тёмную тему', 'moon-outline'],
-    ['dark', 'Включить светлую тему', 'sun-outline'],
-  ]) {
-    mockTheme.mode = mode;
-    const tree = OwnerHomeToolbar({
-      calendarEnabled: true,
-      onCalendar: jest.fn(),
-      onSettings: jest.fn(),
-      reducedMotion: true,
-    });
-    const button = nodes(tree).find((node) => node.props.accessibilityLabel === label)!;
-    expect(nodes(button).some((node) => node.props.name === glyph)).toBe(true);
-    (button.props.onPress as () => void)();
-  }
-  expect(mockToggle).toHaveBeenCalledTimes(2);
-  expect(Ionicons({ name: 'sun-outline' }).type).toBe('RealSun');
-  expect(Ionicons({ name: 'moon-outline' }).type).toBe('RealMoon');
+test('top toolbar keeps company and calendar actions without duplicate appearance controls', () => {
+  const calendar = jest.fn();
+  const tree = OwnerHomeToolbar({ calendarEnabled: true, onCalendar: calendar });
+  const labels = nodes(tree)
+    .map((node) => node.props.accessibilityLabel)
+    .filter(Boolean);
+  expect(labels).toEqual(['Автосервис: Учебный сервис. Действия с компанией', 'Выбрать дату и период']);
+  (
+    nodes(tree).find((node) => node.props.accessibilityLabel === 'Выбрать дату и период')!.props.onPress as () => void
+  )();
+  expect(calendar).toHaveBeenCalledTimes(1);
 });
 
 test('company action goes through existing Points/CompanySettings routes, not an inline session switch', () => {
   const tree = OwnerHomeToolbar({
     calendarEnabled: true,
     onCalendar: jest.fn(),
-    onSettings: jest.fn(),
-    reducedMotion: true,
   });
   const company = nodes(tree).find((node) => String(node.props.accessibilityLabel ?? '').startsWith('Автосервис:'))!;
   (company.props.onPress as () => void)();

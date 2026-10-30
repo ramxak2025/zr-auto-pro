@@ -38,6 +38,7 @@ import type { OwnerHomeTimeline, OwnerHomeTimelinePeriod } from '../../../../../
 import OwnerHomeOperational, { OwnerHomeRetry } from './OwnerHomeOperational';
 import OwnerHomeLiveWidgets from './OwnerHomeLiveWidgets';
 import OwnerHomeCash from './OwnerHomeCash';
+import OwnerHomeWidgetActions from './OwnerHomeWidgetActions';
 import OwnerHomeDetails, { type OwnerHomeDetail } from './OwnerHomeDetails';
 import OwnerHomeWidgetSync from './OwnerHomeWidgetSync';
 import {
@@ -220,6 +221,14 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
     }
   };
   const historical = !!data && data.canonicalDate !== data.todayDate;
+  const widgetActions = (
+    <OwnerHomeWidgetActions
+      enabled={enabled}
+      isCurrent={() => !!currentNavigation()}
+      onSettings={() => setSettingsVisible(true)}
+      reducedMotion={reducedMotion}
+    />
+  );
   const visitReady = financialReady && visits.data && !visits.isPending && !visits.isError;
   const currentRange =
     range && data
@@ -237,8 +246,6 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
         <OwnerHomeToolbar
           calendarEnabled={enabled && scope.isCurrent() && !!selectedDate && !!calendarMeta}
           onCalendar={openDateMenu}
-          onSettings={() => setSettingsVisible(true)}
-          reducedMotion={reducedMotion}
         />
         <OwnerHomePeriodControl
           value={period}
@@ -263,6 +270,7 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
         />
         {data && model ? (
           <OwnerHomeSummary
+            widgetActions={widgetActions}
             key={`${period}:${asOf ?? 'today'}`}
             data={data}
             scope={scope}
@@ -274,6 +282,7 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
           />
         ) : (
           <OwnerHomeSummaryPlaceholder
+            widgetActions={widgetActions}
             errorMessage={
               timeline.isError || invalidTimeline
                 ? invalidTimeline
