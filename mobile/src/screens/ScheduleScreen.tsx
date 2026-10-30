@@ -24,13 +24,15 @@ import Reanimated, {
   useAnimatedScrollHandler,
   useSharedValue,
   scrollTo,
+  runOnJS,
+  runOnUI,
 } from 'react-native-reanimated';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 // SafeAreaView no longer used — IosScreenHeader handles top inset
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useNavigation } from '@react-navigation/native';
+import { useIsFocused, useNavigation, useRoute } from '@react-navigation/native';
 import { openEmployee } from '../navigation/entityLinks';
 import { scheduleApi, scheduleSettingsApi, usersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
@@ -68,6 +70,14 @@ import WorkModeEditor from './WorkModeEditor';
 import ScheduleDayHoursForm from './ScheduleDayHoursForm';
 import { getCellDot, getTodayStatusInfo, gridAttendanceCounts } from './scheduleAttendance';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+import {
+  completeScheduleViewportFocus,
+  createScheduleViewportFocus,
+  planScheduleViewportFocus,
+  readScheduleFocusParams,
+  type ScheduleFocusLayout,
+  type ScheduleViewportFocus,
+} from './scheduleViewportFocus';
 
 type TabType = 'grid' | 'today' | 'shifts' | 'rating' | 'settings';
 
@@ -83,6 +93,10 @@ type TabType = 'grid' | 'today' | 'shifts' | 'rating' | 'settings';
 const ScheduleMonthCtx = React.createContext<{
   currentMonth: Date;
   setCurrentMonth: (d: Date) => void;
+  scopeKey: string;
+  viewportFocus: ScheduleViewportFocus | null;
+  completeViewportFocus: (requestId: string, horizontalDone: boolean, employeeDone: boolean) => void;
+  cancelViewportFocus: () => void;
 } | null>(null);
 
 function useScheduleMonth() {
@@ -345,6 +359,7 @@ const GridDayHeaderRow = memo(function GridDayHeaderRow({
         return (
           <View
             key={ds}
+            testID={isToday ? 'schedule-today-column' : undefined}
             style={[
               styles.gridHeaderCell,
               {
@@ -445,6 +460,7 @@ const GridDayRow = memo(function GridDayRow({
 
   return (
     <Pressable
+      testID={`schedule-row-${userId}`}
       onPress={handleRowPress}
       style={[{ flexDirection: 'row', height: ROW_H }, rowIdx % 2 === 1 && { backgroundColor: rowStripBg }]}
       // 44pt min hit target — each cell column is CELL_W=44 wide and the
@@ -524,6 +540,7 @@ function GridTab() {
   const tabBarHeight = useTabBarHeight();
   const reduceMotion = useReduceMotion();
   const navigation = useNavigation<any>();
+  const isFocused = useIsFocused();
   const { user, hasPermission } = useAuth();
   const palette = useColors();
   // «Сегодня» в графике — по календарю АВТОСЕРВИСА: тем же поясом сервер решает,
@@ -536,7 +553,8 @@ function GridTab() {
   const canEdit = hasPermission('schedule_manage');
   // Lifted month state — same Date instance across the screen, driven
   // from the IosScreenHeader month picker.
-  const { currentMonth, setCurrentMonth } = useScheduleMonth();
+  const { currentMonth, setCurrentMonth, scopeKey, viewportFocus, completeViewportFocus, cancelViewportFocus } =
+    useScheduleMonth();
   const [quickPopup, setQuickPopup] = useState<{
     userId: string;
     date: string;
@@ -589,8 +607,35 @@ function GridTab() {
   //     other into an infinite loop.
   const leftAnimatedRef = useAnimatedRef<Reanimated.ScrollView>();
   const rightAnimatedRef = useAnimatedRef<Reanimated.ScrollView>();
+  const daysScrollRef = useRef<ScrollView>(null);
   const scrollY = useSharedValue(0);
   const scrollSource = useSharedValue<'idle' | 'left' | 'right'>('idle');
+  const activeFocusRequest = useSharedValue('');
+  const [focusLayout, setFocusLayout] = useState<ScheduleFocusLayout>({
+    monthKey: '',
+    headerWidth: 0,
+    viewportWidth: 0,
+    contentWidth: 0,
+    namesViewportHeight: 0,
+    cellsViewportHeight: 0,
+    namesContentHeight: 0,
+    cellsContentHeight: 0,
+    employee: null,
+  });
+  const updateFocusLayout = useCallback((patch: Partial<ScheduleFocusLayout>) => {
+    setFocusLayout((previous) => {
+      if (Object.entries(patch).every(([key, value]) => previous[key as keyof ScheduleFocusLayout] === value)) {
+        return previous;
+      }
+      return { ...previous, ...patch };
+    });
+  }, []);
+  React.useLayoutEffect(() => {
+    activeFocusRequest.value = isFocused && viewportFocus?.scopeKey === scopeKey ? viewportFocus.requestId : '';
+    return () => {
+      activeFocusRequest.value = '';
+    };
+  }, [activeFocusRequest, isFocused, scopeKey, viewportFocus?.requestId, viewportFocus?.scopeKey]);
 
   // Defensive: currentMonth defaults to today, but in case state ever
   // gets out of shape we fall back to "now" so year/month never become
@@ -631,6 +676,7 @@ function GridTab() {
     isLoading: usersLoading,
     isError: usersError,
     isSuccess: usersSuccess,
+    isPlaceholderData: usersPlaceholder,
     refetch: refetchUsers,
   } = usePointUsers();
 
@@ -990,6 +1036,65 @@ function GridTab() {
   const CELL_W = 44;
   const NAME_W = 140;
   const ROW_H = 52;
+  const DIRECTION_H = 30;
+  const monthKey = dateFrom.slice(0, 7);
+  const rowsKey = JSON.stringify(scheduleDisplayRows.map((row) => row.key));
+
+  useEffect(() => {
+    if (!daysScrollRef.current) return;
+    const plan = planScheduleViewportFocus({
+      focus: viewportFocus,
+      scopeKey,
+      monthKey,
+      isFocused,
+      layout: focusLayout,
+      calendarWidth: days.length * CELL_W,
+      cellWidth: CELL_W,
+      rowHeight: ROW_H,
+      directionHeight: DIRECTION_H,
+      bottomPadding: tabBarHeight,
+      rows: scheduleDisplayRows,
+      rowsKey,
+      pointUsers: usersData,
+      usersReady: usersSuccess && !usersPlaceholder,
+      usersError,
+    });
+    if (!viewportFocus || (!plan.horizontalDone && !plan.employeeDone)) return;
+    if (plan.x !== null) daysScrollRef.current.scrollTo({ x: plan.x, y: 0, animated: false });
+    if (plan.y !== null) {
+      // Both halves receive the same measured/clamped offset on the UI thread.
+      // A newer request, a scope change or a user's drag invalidates queued work.
+      runOnUI((y: number, requestId: string) => {
+        'worklet';
+        if (activeFocusRequest.value !== requestId) return;
+        scrollSource.value = 'idle';
+        scrollY.value = y;
+        scrollTo(leftAnimatedRef, 0, y, false);
+        scrollTo(rightAnimatedRef, 0, y, false);
+      })(plan.y, viewportFocus.requestId);
+    }
+    completeViewportFocus(viewportFocus.requestId, plan.horizontalDone, plan.employeeDone);
+  }, [
+    viewportFocus,
+    scopeKey,
+    monthKey,
+    isFocused,
+    focusLayout,
+    days.length,
+    tabBarHeight,
+    scheduleDisplayRows,
+    rowsKey,
+    usersData,
+    usersSuccess,
+    usersPlaceholder,
+    usersError,
+    activeFocusRequest,
+    scrollSource,
+    scrollY,
+    leftAnimatedRef,
+    rightAnimatedRef,
+    completeViewportFocus,
+  ]);
 
   // UI-thread scroll handlers — keep names column and grid cells locked
   // to the same vertical offset on every frame, on the UI thread, with
@@ -998,6 +1103,12 @@ function GridTab() {
   // this resolves it.
   const handleLeftScrollWorklet = useAnimatedScrollHandler(
     {
+      onBeginDrag: () => {
+        'worklet';
+        scrollSource.value = 'left';
+        activeFocusRequest.value = '';
+        runOnJS(cancelViewportFocus)();
+      },
       onScroll: (e) => {
         'worklet';
         // Ignore echoes — only the touched side drives the sync.
@@ -1015,11 +1126,17 @@ function GridTab() {
         scrollSource.value = 'idle';
       },
     },
-    [],
+    [cancelViewportFocus],
   );
 
   const handleRightScrollWorklet = useAnimatedScrollHandler(
     {
+      onBeginDrag: () => {
+        'worklet';
+        scrollSource.value = 'right';
+        activeFocusRequest.value = '';
+        runOnJS(cancelViewportFocus)();
+      },
       onScroll: (e) => {
         'worklet';
         if (scrollSource.value === 'left') return;
@@ -1036,7 +1153,7 @@ function GridTab() {
         scrollSource.value = 'idle';
       },
     },
-    [],
+    [cancelViewportFocus],
   );
 
   const handleCellPress = useCallback(
@@ -1277,6 +1394,9 @@ function GridTab() {
                 directly via scrollTo without a JS bridge round-trip. */}
             <Reanimated.ScrollView
               ref={leftAnimatedRef}
+              testID="schedule-names-scroll"
+              onLayout={(event) => updateFocusLayout({ namesViewportHeight: event.nativeEvent.layout.height })}
+              onContentSizeChange={(_width, height) => updateFocusLayout({ namesContentHeight: height })}
               style={{ flex: 1 }}
               showsVerticalScrollIndicator={false}
               onScroll={handleLeftScrollWorklet}
@@ -1294,7 +1414,7 @@ function GridTab() {
                       key={row.key}
                       style={{
                         width: NAME_W,
-                        height: 30,
+                        height: DIRECTION_H,
                         justifyContent: 'center',
                         paddingHorizontal: spacing[3],
                         backgroundColor: palette.bg.muted,
@@ -1325,7 +1445,25 @@ function GridTab() {
                 const avatarColors = getAvatarColors(u.fullName);
                 return (
                   <TouchableOpacity
-                    key={row.key}
+                    key={
+                      u.id === viewportFocus?.employeeId ? `${row.key}:${viewportFocus.requestId}:${rowsKey}` : row.key
+                    }
+                    testID={`schedule-name-${u.id}`}
+                    onLayout={
+                      u.id === viewportFocus?.employeeId
+                        ? (event) => {
+                            updateFocusLayout({
+                              employee: {
+                                requestId: viewportFocus.requestId,
+                                rowsKey,
+                                employeeId: u.id,
+                                y: event.nativeEvent.layout.y,
+                                height: event.nativeEvent.layout.height,
+                              },
+                            });
+                          }
+                        : undefined
+                    }
                     onPress={() => openEmployee(navigation, u.id)}
                     onLongPress={() => {
                       if (canEdit) setReorderUser({ userId: u.id, name: u.fullName, index: groupIndex });
@@ -1386,35 +1524,52 @@ function GridTab() {
 
           {/* Scrollable right section -- day columns */}
           <ScrollView
+            ref={daysScrollRef}
+            testID="schedule-days-scroll"
             horizontal
+            onLayout={(event) => updateFocusLayout({ viewportWidth: event.nativeEvent.layout.width })}
+            onContentSizeChange={(width) => updateFocusLayout({ contentWidth: width })}
+            onScrollBeginDrag={() => {
+              activeFocusRequest.value = '';
+              cancelViewportFocus();
+            }}
             showsHorizontalScrollIndicator={false}
             bounces={false}
             style={{ flex: 1 }}
             contentContainerStyle={{ flexGrow: 1 }}
           >
-            <View style={{ flex: 1 }}>
+            <View style={{ width: days.length * CELL_W }}>
               {/* Day headers — memoised so the 28-31 day cells don't rebuild
                   on every QuickPopup open/close, pending-change toggle, or
                   background SWR refetch. */}
-              <GridDayHeaderRow
-                days={days}
-                today={today}
-                CELL_W={CELL_W}
-                ROW_H={ROW_H}
-                reduceMotion={reduceMotion}
-                borderColor={palette.border.subtle}
-                weekendBg={palette.mode === 'dark' ? 'rgba(239, 68, 68, 0.08)' : colors.red[50] + '60'}
-                weekendText={palette.mode === 'dark' ? colors.red[400] : colors.red[400]}
-                dayText={palette.text.primary}
-                dowText={palette.text.tertiary}
-                todayColumnBg={palette.mode === 'dark' ? 'rgba(59, 130, 246, 0.15)' : colors.primary[50]}
-              />
+              <View
+                key={monthKey}
+                testID="schedule-day-headers"
+                onLayout={(event) => updateFocusLayout({ monthKey, headerWidth: event.nativeEvent.layout.width })}
+              >
+                <GridDayHeaderRow
+                  days={days}
+                  today={today}
+                  CELL_W={CELL_W}
+                  ROW_H={ROW_H}
+                  reduceMotion={reduceMotion}
+                  borderColor={palette.border.subtle}
+                  weekendBg={palette.mode === 'dark' ? 'rgba(239, 68, 68, 0.08)' : colors.red[50] + '60'}
+                  weekendText={palette.mode === 'dark' ? colors.red[400] : colors.red[400]}
+                  dayText={palette.text.primary}
+                  dowText={palette.text.tertiary}
+                  todayColumnBg={palette.mode === 'dark' ? 'rgba(59, 130, 246, 0.15)' : colors.primary[50]}
+                />
+              </View>
 
               {/* Day cells — Reanimated.ScrollView so the UI-thread
                   worklet handler can mirror its offset to the names
                   column without any JS bridge work. */}
               <Reanimated.ScrollView
                 ref={rightAnimatedRef}
+                testID="schedule-cells-scroll"
+                onLayout={(event) => updateFocusLayout({ cellsViewportHeight: event.nativeEvent.layout.height })}
+                onContentSizeChange={(_width, height) => updateFocusLayout({ cellsContentHeight: height })}
                 style={{ flex: 1 }}
                 showsVerticalScrollIndicator={false}
                 onScroll={handleRightScrollWorklet}
@@ -1431,7 +1586,7 @@ function GridTab() {
                       key={row.key}
                       style={{
                         width: days.length * CELL_W,
-                        height: 30,
+                        height: DIRECTION_H,
                         backgroundColor: palette.bg.muted,
                         borderBottomWidth: StyleSheet.hairlineWidth,
                         borderBottomColor: palette.border.subtle,
@@ -3107,7 +3262,8 @@ const isPlaceholderId = (id: string | undefined | null): boolean =>
 export default function ScheduleScreen() {
   useAttendanceRefresh();
   const navigation = useNavigation<any>();
-  const { hasPermission } = useAuth();
+  const route = useRoute();
+  const { user, hasPermission } = useAuth();
   const palette = useColors();
   const tenantTz = useTenantTimezone();
   // Таб «Настройки» — только держателю schedule_manage (те же мутации, что
@@ -3116,10 +3272,57 @@ export default function ScheduleScreen() {
   const [tab, setTab] = useState<TabType>('grid');
   // Single source of truth for the schedule month — provided to GridTab
   // and ShiftsTab via context, manipulated from the header trailing slot.
-  const [currentMonth, setCurrentMonth] = useState<Date>(() =>
+  const [currentMonth, updateCurrentMonth] = useState<Date>(() =>
     attendanceCalendarDate(formatDayKey(new Date(), tenantTz)),
   );
-  const monthCtxValue = useMemo(() => ({ currentMonth, setCurrentMonth }), [currentMonth]);
+  const routeFocus = readScheduleFocusParams(route.params);
+  const scopeKey = JSON.stringify([user?.id, user?.tenantId, user?.currentPointId, tenantTz]);
+  const [viewportFocus, setViewportFocus] = useState<ScheduleViewportFocus | null>(() =>
+    createScheduleViewportFocus('initial', scopeKey, formatDayKey(new Date(), tenantTz), routeFocus?.focusEmployeeId),
+  );
+  const focusSequence = useRef(0);
+  const lastRouteRequest = useRef(routeFocus?.focusRequestId);
+  const lastScope = useRef(scopeKey);
+  const cancelViewportFocus = useCallback(() => setViewportFocus(null), []);
+  const completeViewportFocus = useCallback((requestId: string, horizontalDone: boolean, employeeDone: boolean) => {
+    setViewportFocus((focus) => completeScheduleViewportFocus(focus, requestId, horizontalDone, employeeDone));
+  }, []);
+  // Manual month paging cancels pending entry focus, even if the user pages back
+  // before slow data/layout arrives. Background query changes never create focus.
+  const setCurrentMonth = useCallback((month: Date) => {
+    setViewportFocus(null);
+    updateCurrentMonth(month);
+  }, []);
+  const focusToday = useCallback(
+    (employeeId?: string, showGrid = false) => {
+      const today = formatDayKey(new Date(), tenantTz);
+      updateCurrentMonth(attendanceCalendarDate(today));
+      setViewportFocus(createScheduleViewportFocus(`focus:${++focusSequence.current}`, scopeKey, today, employeeId));
+      if (showGrid) setTab('grid');
+    },
+    [scopeKey, tenantTz],
+  );
+  React.useLayoutEffect(() => {
+    if (lastScope.current !== scopeKey) {
+      lastScope.current = scopeKey;
+      lastRouteRequest.current = routeFocus?.focusRequestId;
+      focusToday();
+    } else if (routeFocus && lastRouteRequest.current !== routeFocus.focusRequestId) {
+      lastRouteRequest.current = routeFocus.focusRequestId;
+      focusToday(routeFocus.focusEmployeeId, true);
+    }
+  }, [scopeKey, routeFocus?.focusRequestId, routeFocus?.focusEmployeeId, focusToday]);
+  const monthCtxValue = useMemo(
+    () => ({
+      currentMonth,
+      setCurrentMonth,
+      scopeKey,
+      viewportFocus,
+      completeViewportFocus,
+      cancelViewportFocus,
+    }),
+    [currentMonth, setCurrentMonth, scopeKey, viewportFocus, completeViewportFocus, cancelViewportFocus],
+  );
   // Defensive: never let an out-of-shape Date make getMonth() return NaN —
   // MONTH_NAMES[NaN] is undefined and `.slice` on it would crash the
   // whole screen header before any tab even mounts.
@@ -3162,6 +3365,7 @@ export default function ScheduleScreen() {
   const trailingMonthStepper = showMonthStepper ? (
     <View style={[styles.headerMonthStepper, { backgroundColor: palette.bg.muted }]}>
       <TouchableOpacity
+        testID="schedule-previous-month"
         onPress={() => {
           haptic('select');
           setCurrentMonth(new Date(monthYear, monthIndex - 1, 1));
@@ -3172,9 +3376,10 @@ export default function ScheduleScreen() {
         <Ionicons name="chevron-back" size={16} color={palette.text.secondary} />
       </TouchableOpacity>
       <TouchableOpacity
+        testID="schedule-reset-today"
         onPress={() => {
           haptic('tap');
-          setCurrentMonth(attendanceCalendarDate(formatDayKey(new Date(), tenantTz)));
+          focusToday();
         }}
         activeOpacity={0.7}
       >
@@ -3183,6 +3388,7 @@ export default function ScheduleScreen() {
         </Text>
       </TouchableOpacity>
       <TouchableOpacity
+        testID="schedule-next-month"
         onPress={() => {
           haptic('select');
           setCurrentMonth(new Date(monthYear, monthIndex + 1, 1));
@@ -3219,8 +3425,12 @@ export default function ScheduleScreen() {
               return (
                 <TouchableOpacity
                   key={t.key}
+                  testID={`schedule-tab-${t.key}`}
                   style={[styles.tabItem, isActive && styles.tabItemActive]}
-                  onPress={() => setTab(t.key)}
+                  onPress={() => {
+                    if (t.key !== 'grid') cancelViewportFocus();
+                    setTab(t.key);
+                  }}
                   activeOpacity={0.7}
                 >
                   {isActive ? (

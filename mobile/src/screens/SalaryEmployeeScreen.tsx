@@ -27,6 +27,7 @@ interface SalaryEmployeeRouteParams {
   employeeId: string;
   employeeName?: string;
   month?: string;
+  entryRequestId?: string;
 }
 
 export default function SalaryEmployeeScreen() {
@@ -60,6 +61,7 @@ export default function SalaryEmployeeScreen() {
 
   return (
     <SalaryEmployeeCard
+      key={JSON.stringify([employeeId, params.entryRequestId || params.month || 'current'])}
       employeeId={employeeId}
       employeeName={employeeName}
       title={employeeName}

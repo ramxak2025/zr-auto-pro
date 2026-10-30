@@ -261,8 +261,8 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
             onInfo={() => setDetail({ kind: 'timeline-info', timeline: data })}
           />
         ) : (
-          <View style={[styles.financePlaceholder, { backgroundColor: p.mode === 'dark' ? '#203f86' : '#1d50c7' }]}>
-            <Text style={styles.inverseCaption}>
+          <View style={[styles.financePlaceholder, { backgroundColor: p.bg.card }]}>
+            <Text style={[styles.placeholderCaption, { color: p.text.secondary }]}>
               {selectedDate
                 ? ownerDateLabel(selectedDate, selectedDate.slice(0, 4) !== calendarMeta?.todayDate.slice(0, 4))
                 : 'Период сервиса'}
@@ -272,7 +272,6 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
                 text={invalidTimeline ? 'Данные графика не совпали с периодом' : 'Сводка не загрузилась'}
                 busy={timeline.isFetching}
                 onRetry={timeline.refetch}
-                inverse
               />
             ) : (
               <View
@@ -280,12 +279,13 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
                 accessibilityLabel="Загружается выбранный период"
                 style={styles.financeLoading}
               >
-                <View style={[styles.financeSkeleton, { height: 42, width: '80%' }]} />
-                <View style={[styles.financeSkeleton, { height: 145 }]} />
-                <View style={[styles.financeSkeleton, { height: 35, width: '65%' }]} />
+                <View style={[styles.financeSkeleton, { height: 180, backgroundColor: p.bg.muted }]} />
+                <View style={{ flexDirection: 'row', gap: 14 }}>
+                  <View style={[styles.financeSkeleton, { height: 44, flex: 1, backgroundColor: p.bg.muted }]} />
+                  <View style={[styles.financeSkeleton, { height: 44, flex: 1, backgroundColor: p.bg.muted }]} />
+                </View>
               </View>
             )}
-            <Text style={styles.inverseCaption}>Пересчёт · текущий план</Text>
           </View>
         )}
 
@@ -378,13 +378,8 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
             Ниже — смены, звонки, задачи и заработок за сегодня, {ownerDateLabel(data.todayDate)}.
           </Text>
         )}
-        <OwnerHomeLiveWidgets scope={scope} enabled={enabled} />
-        <OwnerHomeOperational
-          scope={scope}
-          enabled={enabled}
-          showEarnings={showEarnings.value}
-          todayDate={calendarMeta?.todayDate}
-        />
+        <OwnerHomeLiveWidgets scope={scope} enabled={enabled} showEarnings={showEarnings.value} />
+        <OwnerHomeOperational scope={scope} enabled={enabled} todayDate={calendarMeta?.todayDate} />
       </TabBarScrollView>
       <View
         testID="owner-home-status-bar-scrim"
@@ -416,16 +411,16 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
       <Modal visible={settingsVisible} onClose={() => setSettingsVisible(false)} title="Главная">
         {hasPermission('salary_view_all') && (
           <View style={styles.setting}>
-            <Text style={[styles.settingLabel, { color: p.text.primary }]}>Мастера сегодня</Text>
+            <Text style={[styles.settingLabel, { color: p.text.primary }]}>Заработок сотрудников</Text>
             <Switch
-              accessibilityLabel="Показывать мастеров сегодня"
+              accessibilityLabel="Показывать заработок сотрудников"
               value={showEarnings.value}
               onValueChange={showEarnings.setValue}
             />
           </View>
         )}
         <Text style={[styles.caption, { color: p.text.secondary }]}>
-          Период меняет финансы и клиентов. Задачи и заработок относятся к сегодняшнему дню.
+          Период меняет финансы и клиентов. Смены, звонки и заработок показаны за сегодня.
         </Text>
       </Modal>
       {detail && (
@@ -440,10 +435,10 @@ const styles = StyleSheet.create({
   statusBarScrim: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 21 },
   bottomSafe: { position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 20 },
   content: { paddingHorizontal: 17, paddingBottom: 24 },
-  financePlaceholder: { minHeight: 330, borderRadius: 21, padding: 14, justifyContent: 'space-between' },
-  inverseCaption: { color: '#d8e6ff', fontSize: 12, lineHeight: 17 },
+  financePlaceholder: { minHeight: 360, borderRadius: 18, padding: 14, justifyContent: 'space-between' },
+  placeholderCaption: { fontSize: 12, lineHeight: 17 },
   financeLoading: { gap: 12, paddingVertical: 14 },
-  financeSkeleton: { borderRadius: 7, backgroundColor: 'rgba(255,255,255,.15)' },
+  financeSkeleton: { borderRadius: 7 },
   clients: { marginTop: 14, borderRadius: 18, overflow: 'hidden' },
   clientHeading: {
     minHeight: 44,
