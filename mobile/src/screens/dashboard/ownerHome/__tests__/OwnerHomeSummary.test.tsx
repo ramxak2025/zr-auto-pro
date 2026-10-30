@@ -23,10 +23,18 @@ jest.mock('react-native', () => ({
   ActivityIndicator: 'ActivityIndicator',
   AppState: { currentState: 'active' },
   Platform: { OS: 'ios' },
+  useWindowDimensions: () => ({ width: 402, fontScale: 1 }),
   StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 0.5 },
 }));
 jest.mock('expo-linear-gradient', () => ({ LinearGradient: 'LinearGradient' }));
-jest.mock('react-native-svg', () => ({ __esModule: true, default: 'Svg', Path: 'Path' }));
+jest.mock('react-native-svg', () => ({
+  __esModule: true,
+  default: 'Svg',
+  Path: 'Path',
+  Defs: 'Defs',
+  LinearGradient: 'SvgGradient',
+  Stop: 'Stop',
+}));
 jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 jest.mock('react-native-reanimated', () => ({
   __esModule: true,
@@ -279,7 +287,7 @@ test('widget actions stay available with financial data, while loading, and afte
   for (const action of Object.values(actions)) expect(action).not.toHaveBeenCalled();
 });
 
-test('one logo contour stays decorative and cannot intercept summary actions or screen-reader navigation', () => {
+test('one gradient logo cloud stays decorative and cannot intercept summary actions or screen-reader navigation', () => {
   const tree = render(timelineFixture());
   const patterns = nodes(tree).filter((node) => node.type === OwnerHomeCloud);
   expect(patterns).toHaveLength(1);
@@ -292,7 +300,8 @@ test('one logo contour stays decorative and cannot intercept summary actions or 
   expect(content.props.importantForAccessibility).toBe('no-hide-descendants');
   const marks = nodes(content).filter((node) => node.type === 'Path');
   expect(marks).toHaveLength(1);
-  expect(marks[0].props.fill).toBe('none');
+  expect(marks[0].props.fill).toBe('url(#owner-home-cloud-fill)');
+  expect(marks[0].props.stroke).toBeUndefined();
   expect(nodes(content).find((node) => node.type === 'Svg')!.props.accessible).toBe(false);
   expect(buttons(content)).toHaveLength(0);
 });

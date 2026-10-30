@@ -1,5 +1,14 @@
 import React, { useEffect, useRef } from 'react';
-import { ActivityIndicator, AppState, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import {
+  ActivityIndicator,
+  AppState,
+  Platform,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+  useWindowDimensions,
+} from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, {
@@ -45,6 +54,7 @@ export default function OwnerHomeSummary({
   widgetActions,
 }: SummaryProps) {
   const p = useColors();
+  const { fontScale } = useWindowDimensions();
   const ink = p.mode === 'dark' ? p.text.primary : p.text.inverse;
   const scopeKey = JSON.stringify(scope.key);
   const live = useRef({ active, data, scope, scopeKey });
@@ -102,12 +112,13 @@ export default function OwnerHomeSummary({
   return (
     <Animated.View style={[styles.card, entrance]} testID="owner-home-summary">
       <LinearGradient
+        key={`summary-type-${fontScale}`}
         colors={summaryGradient[p.mode]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={styles.surface}
       >
-        <OwnerHomeCloud ink={ink} />
+        <OwnerHomeCloud />
         <View style={styles.heading}>
           <Text style={[styles.label, { color: ink }]}>Чистая прибыль</Text>
           <View style={styles.headingActions}>
@@ -194,16 +205,18 @@ export function OwnerHomeSummaryPlaceholder({
   widgetActions?: React.ReactNode;
 }) {
   const p = useColors();
+  const { fontScale } = useWindowDimensions();
   const ink = p.mode === 'dark' ? p.text.primary : p.text.inverse;
   return (
     <View style={styles.card} testID="owner-home-summary-placeholder">
       <LinearGradient
+        key={`summary-placeholder-type-${fontScale}`}
         colors={summaryGradient[p.mode]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={styles.surface}
       >
-        <OwnerHomeCloud ink={ink} />
+        <OwnerHomeCloud />
         <View style={styles.heading}>
           <Text style={[styles.label, { color: ink }]}>Чистая прибыль</Text>
           {widgetActions && <View style={styles.headingActions}>{widgetActions}</View>}
