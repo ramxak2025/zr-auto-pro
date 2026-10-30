@@ -1,6 +1,8 @@
 import React from 'react';
 const mockDispatch = jest.fn();
+const mockNavigate = jest.fn();
 const mockQuery = jest.fn();
+let mockExpanded = false;
 const mockPos = { shiftModeEnabled: false, isCashier: true };
 const mockAuth = {
   user: {
@@ -10,7 +12,15 @@ const mockAuth = {
   },
   hasPermission: jest.fn(() => false),
 };
-jest.mock('react', () => ({ ...jest.requireActual('react'), useState: (value: unknown) => [value, jest.fn()] }));
+jest.mock('react', () => ({
+  ...jest.requireActual('react'),
+  useState: () => [
+    mockExpanded,
+    (value: boolean) => {
+      mockExpanded = value;
+    },
+  ],
+}));
 jest.mock('react-native', () => ({
   View: 'View',
   Text: 'Text',
@@ -19,11 +29,17 @@ jest.mock('react-native', () => ({
   StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 0.5 },
 }));
 jest.mock('@react-navigation/native', () => ({
-  useNavigation: () => ({ dispatch: mockDispatch }),
+  useNavigation: () => ({ dispatch: mockDispatch, navigate: mockNavigate }),
   CommonActions: { navigate: (payload: unknown) => ({ type: 'NAVIGATE', payload }) },
 }));
 jest.mock('@tanstack/react-query', () => ({ useQuery: (options: unknown) => mockQuery(options) }));
 jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
+jest.mock('react-native-reanimated', () => ({
+  __esModule: true,
+  default: { View: 'AnimatedView' },
+  LinearTransition: { duration: () => ({ reduceMotion: () => ({}) }) },
+  ReduceMotion: { System: 'system' },
+}));
 jest.mock('../../../../contexts/AuthContext', () => ({ useAuth: () => mockAuth }));
 jest.mock('../../../../hooks/usePosSettings', () => ({ usePosSettings: () => mockPos }));
 jest.mock('../../../../contexts/ThemeContext', () => ({
@@ -41,12 +57,13 @@ jest.mock('../../../../api/services', () => ({
 jest.mock('../../../../components/EmployeeAvatar', () => 'EmployeeAvatar');
 jest.mock('../../../../components/Skeleton', () => ({ Skeleton: 'Skeleton' }));
 import OwnerHomeOperational from '../OwnerHomeOperational';
+import { ownerMoney } from '../ownerHomeState';
 
-function render() {
+function render(showEarnings = false) {
   return OwnerHomeOperational({
     scope: { key: ['account', 'point'], isCurrent: () => true },
     enabled: true,
-    showEarnings: false,
+    showEarnings,
     todayDate: '2026-10-29',
   });
 }
@@ -56,6 +73,7 @@ function nodes(node: React.ReactNode): React.ReactElement<Record<string, unknown
 }
 beforeEach(() => {
   jest.clearAllMocks();
+  mockExpanded = false;
   mockAuth.user.role = 'director';
   mockAuth.user.tenant.attendanceMode = undefined;
   mockAuth.hasPermission.mockReturnValue(false);
@@ -112,4 +130,79 @@ test('operational shortcuts remain director-only even with enabled NFC and cash-
   mockAuth.user.role = 'master';
   expect(render()).toBeNull();
   expect(mockQuery.mock.calls.every(([options]) => options.enabled === false)).toBe(true);
+});
+
+test('all five real positive attention categories retain their actual filtered destinations', () => {
+  mockQuery.mockReturnValue({
+    data: {
+      buckets: ['bookings', 'deferred', 'purchase-orders', 'low-stock', 'installments'].map((id, i) => ({
+        id,
+        count: i + 1,
+      })),
+    },
+    isPending: false,
+    isError: false,
+  });
+  const buttons = nodes(render()).filter((node) => node.props.accessibilityRole === 'button');
+  expect(buttons).toHaveLength(5);
+  buttons.forEach((button) => (button.props.onPress as () => void)());
+  expect(mockNavigate.mock.calls).toEqual([
+    ['MoreTab', { screen: 'PublicBookingRequests', params: { pendingOnly: true }, initial: false }],
+    ['Checks', { screen: 'ChecksHome', params: { deferredOnly: true, deferredMasterId: 'owner' }, initial: false }],
+    ['MoreTab', { screen: 'PurchaseOrders', params: { status: 'ordered' }, initial: false }],
+    ['Products', { screen: 'ProductsHome', params: { lowStock: true }, initial: false }],
+    ['MoreTab', { screen: 'Installments', params: { status: 'overdue' }, initial: false }],
+  ]);
+});
+
+test('valid zero tasks stay quiet; failed or unknown counts remain retry actions, never zero claims', () => {
+  const refetch = jest.fn();
+  mockQuery.mockReturnValue({
+    data: {
+      buckets: [
+        { id: 'bookings', count: 0 },
+        { id: 'low-stock', count: 0, error: true },
+        { id: 'deferred', count: null },
+      ],
+    },
+    isPending: false,
+    isError: false,
+    refetch,
+  });
+  const tree = render();
+  const buttons = nodes(tree).filter((node) => node.props.accessibilityRole === 'button');
+  expect(buttons).toHaveLength(2);
+  expect(buttons.every((button) => String(button.props.accessibilityLabel).includes('не загрузилось'))).toBe(true);
+  buttons.forEach((button) => (button.props.onPress as () => void)());
+  expect(refetch).toHaveBeenCalledTimes(2);
+  expect(mockNavigate).not.toHaveBeenCalled();
+  expect(JSON.stringify(tree)).not.toContain('Срочных задач нет');
+  mockQuery.mockReturnValue({ data: { buckets: [{ id: 'bookings', count: 0 }] }, isPending: false, isError: false });
+  expect(JSON.stringify(render())).toContain('Срочных задач нет');
+});
+
+test('today earnings keep real zero and negative amounts and expand every actual employee', () => {
+  mockAuth.hasPermission.mockImplementation((permission?: string) => permission === 'salary_view_all');
+  const employees = Array.from({ length: 7 }, (_, i) => ({
+    id: `e${i}`,
+    name: `Мастер ${i}`,
+    earnedAmount: i === 0 ? 0 : -i * 100.25,
+  }));
+  mockQuery.mockImplementation((options) => ({
+    data: options.queryKey.includes('earnings') ? { employees, total: -2105.25, date: '2026-10-29' } : { buckets: [] },
+    isPending: false,
+    isError: false,
+  }));
+  const compact = render(true);
+  expect(nodes(compact).filter((node) => String(node.props.testID).startsWith('owner-home-earnings-'))).toHaveLength(5);
+  expect(JSON.stringify(compact)).toContain(ownerMoney(0));
+  expect(JSON.stringify(compact)).toContain(ownerMoney(-100.25));
+  expect(JSON.stringify(compact)).toContain(ownerMoney(-2105.25));
+  const expand = nodes(compact).find(
+    (node) => node.props.accessibilityState && 'expanded' in (node.props.accessibilityState as object),
+  )!;
+  (expand.props.onPress as () => void)();
+  expect(
+    nodes(render(true)).filter((node) => String(node.props.testID).startsWith('owner-home-earnings-')),
+  ).toHaveLength(7);
 });
