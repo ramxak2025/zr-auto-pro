@@ -199,11 +199,11 @@ test('mixed check payments, later installments and warranty keep distinct server
   const tree = render();
   expect(textContent(byId(tree, 'owner-home-cash-total'))).toBe(ownerMoney(3_500.42));
   expect(textContent(byId(tree, 'owner-home-cash-installments'))).toBe(ownerMoney(600.3));
-  expect(textContent(byId(tree, 'owner-home-cash-warranty'))).toBe(ownerMoney(800));
-  expect(textContent(byId(tree, 'owner-home-cash-warranty-cost'))).toBe(ownerMoney(310.55));
+  expect(byId(tree, 'owner-home-cash-warranty')).toBeUndefined();
+  expect(byId(tree, 'owner-home-cash-warranty-cost')).toBeUndefined();
   expect(textContent(tree)).toContain('Оплаты чеков');
   expect(textContent(tree)).toContain('По дате чеков · с учётом возвратов');
-  expect(textContent(tree)).toContain('Гарантия · справочно');
+  expect(textContent(tree)).not.toContain('Гарантия');
   expect(textContent(tree)).not.toContain(ownerMoney(4_100.72));
   expect(textContent(tree)).not.toContain(ownerMoney(5_000));
 });
@@ -253,7 +253,7 @@ test('missing optional legacy amounts stay unknown while real zero payments rema
   });
   const tree = render();
   expect(textContent(byId(tree, 'owner-home-cash-total'))).toBe(ownerMoney(0));
-  expect(textContent(byId(tree, 'owner-home-cash-warranty-cost'))).toBe('—');
+  expect(byId(tree, 'owner-home-cash-warranty-cost')).toBeUndefined();
   expect(byId(tree, 'owner-home-cash-installments')).toBeUndefined();
   expect(ownerCashPayments({ ...dashboard(), period: 'month' })).toBeNull();
 });

@@ -242,22 +242,6 @@ export default function OwnerHomeCash({
               )}
             </View>
           )}
-          <View style={[styles.separated, { borderTopColor: tone.divider }]}>
-            <View style={styles.tenderLabel}>
-              <Ionicons name="shield-checkmark-outline" size={15} color={tone.quiet} />
-              <Text style={[styles.note, { color: tone.ink }]}>Гарантия · справочно</Text>
-            </View>
-            <View style={[styles.warranty, stacked && styles.stacked]}>
-              <View style={styles.tender}>
-                <Text style={[styles.caption, { color: tone.quiet }]}>По чекам</Text>
-                {amount(snapshot.warranty, 'owner-home-cash-warranty')}
-              </View>
-              <View style={styles.tender}>
-                <Text style={[styles.caption, { color: tone.quiet }]}>Затраты</Text>
-                {amount(snapshot.warrantyLoss, 'owner-home-cash-warranty-cost')}
-              </View>
-            </View>
-          </View>
         </View>
       ) : payments.fetchStatus !== 'paused' &&
         (payments.isPending || (!payments.isFetchedAfterMount && !payments.isError)) ? (
@@ -373,7 +357,6 @@ const styles = StyleSheet.create({
   tenderLabel: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   separated: { marginTop: 12, paddingTop: 11, borderTopWidth: StyleSheet.hairlineWidth },
   repaymentParts: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 14, rowGap: 2, marginTop: 3 },
-  warranty: { flexDirection: 'row', gap: 16, paddingTop: 7 },
   stacked: { flexDirection: 'column', alignItems: 'stretch', gap: 8 },
   balance: { minHeight: 88 },
   balanceLink: {

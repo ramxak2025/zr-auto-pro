@@ -31,5 +31,5 @@ export default function OwnerHomeCloud() {
 }
 
 const styles = StyleSheet.create({
-  cloud: { position: 'absolute', top: 55, right: -15, width: 176, height: 106.48 },
+  cloud: { position: 'absolute', bottom: 24, right: -15, width: 176, height: 106.48 },
 });
