@@ -2,7 +2,6 @@ import React from 'react';
 const mockDispatch = jest.fn();
 const mockNavigate = jest.fn();
 const mockQuery = jest.fn();
-let mockExpanded = false;
 const mockPos = { shiftModeEnabled: false, isCashier: true };
 const mockAuth = {
   user: {
@@ -12,15 +11,6 @@ const mockAuth = {
   },
   hasPermission: jest.fn(() => false),
 };
-jest.mock('react', () => ({
-  ...jest.requireActual('react'),
-  useState: () => [
-    mockExpanded,
-    (value: boolean) => {
-      mockExpanded = value;
-    },
-  ],
-}));
 jest.mock('react-native', () => ({
   View: 'View',
   Text: 'Text',
@@ -57,13 +47,11 @@ jest.mock('../../../../api/services', () => ({
 jest.mock('../../../../components/EmployeeAvatar', () => 'EmployeeAvatar');
 jest.mock('../../../../components/Skeleton', () => ({ Skeleton: 'Skeleton' }));
 import OwnerHomeOperational from '../OwnerHomeOperational';
-import { ownerMoney } from '../ownerHomeState';
 
-function render(showEarnings = false) {
+function render() {
   return OwnerHomeOperational({
     scope: { key: ['account', 'point'], isCurrent: () => true },
     enabled: true,
-    showEarnings,
     todayDate: '2026-10-29',
   });
 }
@@ -73,7 +61,6 @@ function nodes(node: React.ReactNode): React.ReactElement<Record<string, unknown
 }
 beforeEach(() => {
   jest.clearAllMocks();
-  mockExpanded = false;
   mockAuth.user.role = 'director';
   mockAuth.user.tenant.attendanceMode = undefined;
   mockAuth.hasPermission.mockReturnValue(false);
@@ -97,7 +84,7 @@ test('NFC and cash-shift entry rows retain actual destinations without financial
     [{ type: 'NAVIGATE', payload: { name: 'NfcAttendance' } }],
     [{ type: 'NAVIGATE', payload: { name: 'MoreTab', params: { screen: 'CashShift', initial: false } } }],
   ]);
-  expect(mockQuery.mock.calls.map(([options]) => options.queryKey.at(-2))).toEqual(['attention', 'earnings']);
+  expect(mockQuery.mock.calls.map(([options]) => options.queryKey.at(-2))).toEqual(['attention']);
   const text = JSON.stringify(tree);
   expect(text).toContain('Сервис сейчас');
   expect(text).not.toContain('Смена открыта');
@@ -181,28 +168,11 @@ test('valid zero tasks stay quiet; failed or unknown counts remain retry actions
   expect(JSON.stringify(render())).toContain('Срочных задач нет');
 });
 
-test('today earnings keep real zero and negative amounts and expand every actual employee', () => {
+test('operational sections no longer query or render earnings', () => {
   mockAuth.hasPermission.mockImplementation((permission?: string) => permission === 'salary_view_all');
-  const employees = Array.from({ length: 7 }, (_, i) => ({
-    id: `e${i}`,
-    name: `Мастер ${i}`,
-    earnedAmount: i === 0 ? 0 : -i * 100.25,
-  }));
-  mockQuery.mockImplementation((options) => ({
-    data: options.queryKey.includes('earnings') ? { employees, total: -2105.25, date: '2026-10-29' } : { buckets: [] },
-    isPending: false,
-    isError: false,
-  }));
-  const compact = render(true);
-  expect(nodes(compact).filter((node) => String(node.props.testID).startsWith('owner-home-earnings-'))).toHaveLength(5);
-  expect(JSON.stringify(compact)).toContain(ownerMoney(0));
-  expect(JSON.stringify(compact)).toContain(ownerMoney(-100.25));
-  expect(JSON.stringify(compact)).toContain(ownerMoney(-2105.25));
-  const expand = nodes(compact).find(
-    (node) => node.props.accessibilityState && 'expanded' in (node.props.accessibilityState as object),
-  )!;
-  (expand.props.onPress as () => void)();
-  expect(
-    nodes(render(true)).filter((node) => String(node.props.testID).startsWith('owner-home-earnings-')),
-  ).toHaveLength(7);
+  const tree = render();
+  expect(mockQuery.mock.calls).toHaveLength(1);
+  expect(mockQuery.mock.calls[0][0].queryKey).toContain('attention');
+  expect(JSON.stringify(tree)).not.toContain('Мастера сегодня');
+  expect(JSON.stringify(tree)).not.toContain('Заработок команды');
 });

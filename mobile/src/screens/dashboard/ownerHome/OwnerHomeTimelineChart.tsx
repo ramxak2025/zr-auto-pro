@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Circle, Defs, G, Line, LinearGradient as SvgGradient, Path, Stop } from 'react-native-svg';
 import Animated, {
   cancelAnimation,
@@ -26,6 +25,8 @@ import {
   type OwnerTimelineModel,
 } from './ownerHomeTimelineModel';
 import { startOwnerHomeSequence } from './ownerHomeSequence';
+import { useOwnerTimelineClients } from './ownerHomeTimelineClients';
+import { ownerTimelineReadoutLabel } from './ownerHomeTimelineReadout';
 
 const AnimatedPath = Animated.createAnimatedComponent(Path);
 const AnimatedLine = Animated.createAnimatedComponent(Line);
@@ -53,6 +54,8 @@ export default function OwnerHomeTimelineChart({
 }) {
   const p = useColors(),
     { width: windowWidth, fontScale } = useWindowDimensions();
+  const revenueColor = p.accent.primary,
+    profitColor = p.mode === 'dark' ? '#64d5ad' : '#0d9472';
   const [cardWidth, setCardWidth] = useState(Math.max(260, windowWidth - 34));
   const [inspection, setInspection] = useState<{ identity: string; index: number } | null>(null);
   const content = useSharedValue(reducedMotion ? 1 : 0),
@@ -64,8 +67,8 @@ export default function OwnerHomeTimelineChart({
   const revealed = useRef(false);
   const signature = useMemo(
     () =>
-      `${data.generatedAt}:${JSON.stringify(model.points.map((point) => [point.id, point.revenue, point.netProfit]))}`,
-    [data.generatedAt, model.points],
+      `${JSON.stringify(scope.key)}:${model.identity}:${data.generatedAt}:${JSON.stringify(model.points.map((point) => [point.id, point.revenue, point.netProfit]))}`,
+    [scope.key, model.identity, data.generatedAt, model.points],
   );
   const live = useRef({ active, signature, scope });
   live.current = { active, signature, scope };
@@ -74,21 +77,45 @@ export default function OwnerHomeTimelineChart({
   const plotWidth = Math.max(60, innerWidth - axisWidth - 8);
   const axisLayout = useMemo(() => ownerTimelineAxisLayout(model, plotWidth, fontScale), [model, plotWidth, fontScale]);
   const axisHeight = axisLayout.height;
-  const chartHeight = Math.max(155, Math.max(120, 80 * fontScale) + axisHeight + 8);
-  const plotHeight = chartHeight - axisHeight - 8;
+  const plotHeight = Math.max(180, 80 * fontScale);
+  const chartHeight = plotHeight + axisHeight + 8;
   const geometry = useMemo(() => ownerPlotGeometry(model, plotWidth, plotHeight), [model, plotWidth, plotHeight]);
   const axisUnit = ownerAxisUnit(geometry.min, geometry.max);
   const selected =
-    inspection?.identity === signature && inspection.index >= 0 && inspection.index < model.points.length
+    active &&
+    scope.isCurrent() &&
+    inspection?.identity === signature &&
+    inspection.index >= 0 &&
+    inspection.index < model.points.length
       ? model.points[inspection.index]
       : null;
-  const stackMetrics =
-    fontScale > 1.2 ||
-    Math.max(ownerMoney(data.totals.revenue).length, ownerMoney(data.totals.netProfit).length) > 13 ||
-    windowWidth < 370;
+  const clients = useOwnerTimelineClients(data, selected, scope, active);
+  const revenue = selected?.revenue ?? data.totals.revenue,
+    netProfit = selected?.netProfit ?? data.totals.netProfit;
+  // Use the whole series when choosing the layout so scrubbing never moves the readout.
+  const longestMoney = Math.max(
+    ...[data.totals, ...model.points].flatMap((point) => [
+      ownerMoney(point.revenue).length,
+      ownerMoney(point.netProfit).length,
+    ]),
+  );
+  const stackMetrics = fontScale > 1.2 || longestMoney > 14 || innerWidth < 310;
   const footer = data.footer,
     percentage = ownerPercentLabel(footer.comparison.mtdDelta, footer.comparison.mtd.netProfit);
-  const changeColor = footer.comparison.mtdDelta.amount < 0 ? '#ffd0d2' : '#a5f0cc';
+  const changeColor = footer.comparison.mtdDelta.amount < 0 ? (p.mode === 'dark' ? '#f1a8ae' : '#b83d49') : profitColor;
+  const changeLabel =
+    percentage ?? `${footer.comparison.mtdDelta.amount > 0 ? '+' : ''}${ownerMoney(footer.comparison.mtdDelta.amount)}`;
+  const comparisonLabel = ownerRangeLabel(
+    footer.comparison.period.from,
+    footer.comparison.period.through,
+    footer.todayDate.slice(0, 4),
+  );
+
+  useEffect(() => {
+    setInspection(null);
+    selectedIndex.value = -1;
+    selectedIdentity.value = '';
+  }, [active, signature, selectedIndex, selectedIdentity]);
 
   useEffect(() => {
     cancelAnimation(content);
@@ -235,78 +262,74 @@ export default function OwnerHomeTimelineChart({
     selectedIndex.value = index;
     inspect(index, signature);
   };
+  const clearInspection = () => {
+    if (!live.current.active || !live.current.scope.isCurrent() || live.current.signature !== signature) return;
+    selectedIndex.value = -1;
+    selectedIdentity.value = signature;
+    setInspection(null);
+  };
   const lastRevenue = geometry.revenue[geometry.revenue.length - 1],
     lastProfit = geometry.profit[geometry.profit.length - 1];
-  const area =
+  const revenueArea =
     model.end > model.start && model.points.length > 1
       ? `${geometry.revenuePath.d} L${lastRevenue.x},${geometry.zeroY} L${geometry.revenue[0].x},${geometry.zeroY} Z`
       : '';
+  const profitArea =
+    model.end > model.start && model.points.length > 1
+      ? `${geometry.profitPath.d} L${lastProfit.x},${geometry.zeroY} L${geometry.profit[0].x},${geometry.zeroY} Z`
+      : '';
+  // Both signed areas fade toward the true zero line, including below-zero intervals.
+  const fillStops = [
+    ...(geometry.zeroY > 0 ? [{ offset: 0, opacity: 0.3 }] : []),
+    { offset: geometry.zeroY / plotHeight, opacity: 0.015 },
+    ...(geometry.zeroY < plotHeight ? [{ offset: 1, opacity: 0.27 }] : []),
+  ];
+  const periodLabel = ownerRangeLabel(data.range.from, data.range.through, data.todayDate.slice(0, 4));
+  const readoutLabel = selected ? ownerTimelineReadoutLabel(data, model, selected) : periodLabel;
 
   return (
-    <LinearGradient
-      colors={p.mode === 'dark' ? ['#203f86', '#172e68'] : ['#1d50c7', '#173ca0']}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
-      style={styles.panel}
+    <View
+      style={[styles.panel, { backgroundColor: p.bg.card, borderColor: p.border.subtle }]}
       onLayout={(event) => setCardWidth(event.nativeEvent.layout.width)}
     >
-      <View style={styles.dateRow}>
-        <Text style={[styles.caption, { flexShrink: 1 }]}>
-          {ownerRangeLabel(data.range.from, data.range.through, data.todayDate.slice(0, 4))}
-        </Text>
-        <Text style={styles.caption}>
-          {model.intervalLabel} · {axisUnit.label}
-        </Text>
+      <View style={styles.chartHeading}>
+        <Text style={[styles.caption, { color: p.text.secondary }]}>{model.intervalLabel}</Text>
+        <Text style={[styles.caption, { color: p.text.secondary }]}>{axisUnit.label}</Text>
       </View>
-      <Animated.View style={[styles.metrics, stackMetrics && styles.metricsStacked, contentStyle]}>
-        <TouchableOpacity
-          accessibilityRole="button"
-          accessibilityLabel={`Чистая прибыль за выбранный период ${ownerMoney(data.totals.netProfit)}. Расчёт`}
-          style={stackMetrics ? styles.metricStacked : styles.metric}
-          onPress={onRangeDetails}
-        >
-          <View style={styles.metricLabel}>
-            <View style={[styles.dot, { backgroundColor: '#a5f0cc' }]} />
-            <Text style={styles.caption}>Чистая прибыль</Text>
-          </View>
-          <Text style={styles.profitValue}>{ownerMoney(data.totals.netProfit)}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          accessibilityRole="button"
-          accessibilityLabel={`Оборот за выбранный период ${ownerMoney(data.totals.revenue)}. Расчёт`}
-          style={stackMetrics ? styles.metricStacked : styles.metric}
-          onPress={onRangeDetails}
-        >
-          <View style={styles.metricLabel}>
-            <View style={[styles.dot, { backgroundColor: '#e9f1ff' }]} />
-            <Text style={styles.caption}>Оборот</Text>
-          </View>
-          <Text style={styles.revenueValue}>{ownerMoney(data.totals.revenue)}</Text>
-        </TouchableOpacity>
-      </Animated.View>
       <GestureDetector gesture={gesture}>
         <View
           accessible
           accessibilityRole="adjustable"
           accessibilityLabel={`График оборота и чистой прибыли ${model.intervalLabel.toLowerCase()}`}
+          accessibilityHint="Выберите интервал. Значения появятся под графиком. Повторное нажатие сбрасывает выбор."
           accessibilityValue={{
             text: selected
-              ? `${selected.label}. Оборот ${ownerMoney(selected.revenue)}. Прибыль ${ownerMoney(selected.netProfit)}`
-              : `За период: оборот ${ownerMoney(data.totals.revenue)}, прибыль ${ownerMoney(data.totals.netProfit)}`,
+              ? `${selected.label}. Оборот ${ownerMoney(selected.revenue)}. Чистая прибыль ${ownerMoney(selected.netProfit)}`
+              : `За период: оборот ${ownerMoney(data.totals.revenue)}, чистая прибыль ${ownerMoney(data.totals.netProfit)}`,
           }}
           accessibilityActions={[
             { name: 'increment', label: 'Следующий интервал' },
             { name: 'decrement', label: 'Предыдущий интервал' },
+            { name: 'activate', label: 'Сбросить выбранный интервал' },
           ]}
-          onAccessibilityAction={(event) => accessibilityInspect(event.nativeEvent.actionName === 'increment' ? 1 : -1)}
-          style={{ height: chartHeight, marginTop: 13 }}
+          onAccessibilityAction={(event) => {
+            if (event.nativeEvent.actionName === 'activate') clearInspection();
+            else accessibilityInspect(event.nativeEvent.actionName === 'increment' ? 1 : -1);
+          }}
+          style={{ height: chartHeight, marginTop: 8 }}
         >
           <Svg width={innerWidth} height={chartHeight}>
             <Defs>
-              <SvgGradient id="owner-timeline-fill" x1="0" y1="0" x2="0" y2="1">
-                <Stop offset="0" stopColor="#e9f1ff" stopOpacity={0.12} />
-                <Stop offset="1" stopColor="#e9f1ff" stopOpacity={0} />
-              </SvgGradient>
+              {[
+                { id: 'owner-turnover-area', color: revenueColor },
+                { id: 'owner-profit-area', color: profitColor },
+              ].map(({ id, color }) => (
+                <SvgGradient id={id} key={id} gradientUnits="userSpaceOnUse" x1={0} y1={0} x2={0} y2={plotHeight}>
+                  {fillStops.map((stop) => (
+                    <Stop key={stop.offset} offset={stop.offset} stopColor={color} stopOpacity={stop.opacity} />
+                  ))}
+                </SvgGradient>
+              ))}
             </Defs>
             <G transform="translate(4,4)">
               {geometry.ticks.map((tick) => (
@@ -316,17 +339,22 @@ export default function OwnerHomeTimelineChart({
                   x2={plotWidth}
                   y1={tick.y}
                   y2={tick.y}
-                  stroke={tick.value === 0 ? 'rgba(255,255,255,.28)' : 'rgba(255,255,255,.14)'}
+                  stroke={tick.value === 0 ? p.border.strong : p.border.subtle}
                   strokeWidth={1}
-                  strokeDasharray="3 5"
+                  strokeDasharray={tick.value === 0 ? undefined : '3 5'}
                 />
               ))}
-              {area ? <AnimatedPath d={area} fill="url(#owner-timeline-fill)" animatedProps={areaProps} /> : null}
+              {revenueArea ? (
+                <AnimatedPath d={revenueArea} fill="url(#owner-turnover-area)" animatedProps={areaProps} />
+              ) : null}
+              {profitArea ? (
+                <AnimatedPath d={profitArea} fill="url(#owner-profit-area)" animatedProps={areaProps} />
+              ) : null}
               <AnimatedPath
                 d={geometry.revenuePath.d}
                 fill="none"
-                stroke="#e9f1ff"
-                strokeWidth={2.6}
+                stroke={revenueColor}
+                strokeWidth={2.5}
                 strokeLinecap="round"
                 strokeDasharray={[geometry.revenuePath.length || 1, geometry.revenuePath.length || 1]}
                 animatedProps={revenueStroke}
@@ -334,42 +362,39 @@ export default function OwnerHomeTimelineChart({
               <AnimatedPath
                 d={geometry.profitPath.d}
                 fill="none"
-                stroke="#a5f0cc"
-                strokeWidth={2.8}
+                stroke={profitColor}
+                strokeWidth={2.5}
                 strokeLinecap="round"
                 strokeDasharray={[geometry.profitPath.length || 1, geometry.profitPath.length || 1]}
                 animatedProps={profitStroke}
               />
-              <Line
-                x1={lastRevenue.x}
-                x2={lastRevenue.x}
-                y1={0}
-                y2={plotHeight}
-                stroke="rgba(255,255,255,.23)"
-                strokeWidth={1}
-                strokeDasharray="3 5"
-              />
               <AnimatedCircle
                 cx={lastRevenue.x}
                 cy={lastRevenue.y}
-                r={4}
-                fill={p.mode === 'dark' ? '#203f86' : '#2254d5'}
-                stroke="#e9f1ff"
-                strokeWidth={2.5}
+                r={3}
+                fill={p.bg.card}
+                stroke={revenueColor}
+                strokeWidth={2}
                 animatedProps={endpoint}
               />
-              <AnimatedCircle cx={lastProfit.x} cy={lastProfit.y} r={4} fill="#a5f0cc" animatedProps={endpoint} />
+              <AnimatedCircle cx={lastProfit.x} cy={lastProfit.y} r={3} fill={profitColor} animatedProps={endpoint} />
               <AnimatedLine
                 y1={0}
                 y2={plotHeight}
-                stroke="rgba(255,255,255,.65)"
+                stroke={p.text.secondary}
                 strokeWidth={1}
                 animatedProps={lineProps}
               />
-              <AnimatedCircle fill="#e9f1ff" animatedProps={revenueHalo} />
-              <AnimatedCircle fill="#a5f0cc" animatedProps={profitHalo} />
-              <AnimatedCircle r={4.5} fill="#1b44ad" stroke="#e9f1ff" strokeWidth={2} animatedProps={revenueDot} />
-              <AnimatedCircle r={4.5} fill="#a5f0cc" animatedProps={profitDot} />
+              <AnimatedCircle fill={revenueColor} animatedProps={revenueHalo} />
+              <AnimatedCircle fill={profitColor} animatedProps={profitHalo} />
+              <AnimatedCircle
+                r={4.5}
+                fill={p.bg.card}
+                stroke={revenueColor}
+                strokeWidth={2}
+                animatedProps={revenueDot}
+              />
+              <AnimatedCircle r={4.5} fill={profitColor} animatedProps={profitDot} />
             </G>
           </Svg>
           {geometry.ticks.map((tick) => (
@@ -377,7 +402,13 @@ export default function OwnerHomeTimelineChart({
               key={tick.value}
               style={[
                 styles.axis,
-                { right: 0, top: Math.max(0, tick.y + 4 - 8 * fontScale), width: axisWidth - 2, textAlign: 'right' },
+                {
+                  color: p.text.secondary,
+                  right: 0,
+                  top: Math.max(0, tick.y + 4 - 8 * fontScale),
+                  width: axisWidth - 2,
+                  textAlign: 'right',
+                },
               ]}
             >
               {ownerAxisLabel(tick.value, axisUnit.scale)}
@@ -389,6 +420,7 @@ export default function OwnerHomeTimelineChart({
               style={[
                 styles.axis,
                 {
+                  color: p.text.secondary,
                   fontSize: axisLayout.fontSize,
                   top: plotHeight + 12 + tick.top,
                   width: tick.width,
@@ -400,148 +432,158 @@ export default function OwnerHomeTimelineChart({
               {tick.label}
             </Text>
           ))}
-          {selected && (
-            <View pointerEvents="none" style={styles.tooltip}>
-              <Text style={styles.tooltipDate}>{selected.label}</Text>
-              <Text style={styles.tooltipMoney}>Оборот {ownerMoney(selected.revenue)}</Text>
-              <Text style={[styles.tooltipMoney, { color: '#a5f0cc' }]}>Прибыль {ownerMoney(selected.netProfit)}</Text>
-            </View>
-          )}
         </View>
       </GestureDetector>
-      <View style={styles.footer}>
+      <Animated.View testID="owner-timeline-readout" style={[styles.readout, contentStyle]}>
+        <View style={[styles.readoutHeading, { minHeight: Math.max(touchSize, 34 * fontScale) }]}>
+          <Text
+            accessibilityLabel={selected?.label ?? periodLabel}
+            style={[styles.readoutDate, { color: p.text.secondary }]}
+          >
+            {readoutLabel}
+          </Text>
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel={selected ? 'Сбросить выбранный интервал' : `Расчёт за период ${periodLabel}`}
+            disabled={!active || !scope.isCurrent()}
+            onPress={() => {
+              if (!live.current.active || !live.current.scope.isCurrent() || live.current.signature !== signature)
+                return;
+              if (selected) clearInspection();
+              else onRangeDetails();
+            }}
+            style={styles.readoutAction}
+          >
+            <Ionicons
+              name={selected ? 'close-circle-outline' : 'chevron-forward'}
+              size={selected ? 21 : 16}
+              color={p.accent.primaryText}
+            />
+          </TouchableOpacity>
+        </View>
+        <View style={[styles.metrics, stackMetrics && styles.metricsStacked]}>
+          {[
+            { label: 'Оборот', value: revenue, color: revenueColor },
+            { label: 'Чистая прибыль', value: netProfit, color: profitColor },
+          ].map((metric) => (
+            <View key={metric.label} style={stackMetrics ? styles.metricStacked : styles.metric}>
+              <View style={styles.metricLabel}>
+                <View style={[styles.dot, { backgroundColor: metric.color }]} />
+                <Text style={[styles.caption, { color: p.text.secondary }]}>{metric.label}</Text>
+              </View>
+              <Text style={[styles.money, { color: p.text.primary }]}>{ownerMoney(metric.value)}</Text>
+            </View>
+          ))}
+        </View>
+        <View style={[styles.clientsRow, { minHeight: Math.max(touchSize, 36 * fontScale) }]}>
+          <Text style={[styles.clientLabel, { color: p.text.secondary, flexShrink: 1 }]}>{clients.label}</Text>
+          {clients.status === 'error' ? (
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Клиенты не загрузились. Повторить"
+              onPress={clients.retry}
+              style={styles.retry}
+            >
+              <Text style={[styles.clientValue, { color: p.text.secondary }]}>—</Text>
+              <Ionicons name="refresh-outline" size={17} color={p.accent.primaryText} />
+            </TouchableOpacity>
+          ) : (
+            <Text
+              accessibilityRole={clients.status === 'loading' ? 'progressbar' : 'text'}
+              accessibilityLabel={
+                clients.count === null ? 'Число клиентов пока недоступно' : `${clients.label}: ${clients.count}`
+              }
+              style={[styles.clientValue, { color: p.text.primary }]}
+            >
+              {clients.count ?? (clients.status === 'loading' ? '…' : '—')}
+            </Text>
+          )}
+        </View>
+      </Animated.View>
+      <View style={[styles.footer, { borderTopColor: p.border.subtle }]}>
         <TouchableOpacity
           accessibilityRole="button"
-          accessibilityLabel={`Прибыль с начала месяца ${ownerMoney(footer.current.mtd.netProfit)}. ${ownerRangeLabel(footer.current.period.from, footer.current.period.through)}. Открыть месячный расчёт`}
-          onPress={onMonthDetails}
+          accessibilityLabel={`Прибыль с начала месяца ${ownerMoney(footer.current.mtd.netProfit)}. ${changeLabel} к ${comparisonLabel}. ${data.basisLabel}. Открыть месячный расчёт`}
+          onPress={() => {
+            if (live.current.active && live.current.scope.isCurrent() && live.current.signature === signature)
+              onMonthDetails();
+          }}
           style={[styles.footerContent, fontScale > 1.2 && styles.footerStacked]}
         >
-          <View style={fontScale > 1.2 ? { alignSelf: 'stretch', minWidth: 0 } : { flex: 1, minWidth: 0 }}>
-            <Text style={styles.caption}>Прибыль с начала месяца</Text>
-            <Text style={styles.footerValue}>{ownerMoney(footer.current.mtd.netProfit)}</Text>
-            <Text style={styles.caption}>Пересчёт · текущий план</Text>
-          </View>
-          <View style={[styles.footerComparison, fontScale > 1.2 && { maxWidth: '100%', alignItems: 'flex-start' }]}>
-            <View style={styles.change}>
-              <Ionicons
-                name={
-                  footer.comparison.mtdDelta.amount < 0
-                    ? 'trending-down-outline'
-                    : footer.comparison.mtdDelta.amount > 0
-                      ? 'trending-up-outline'
-                      : 'remove-outline'
-                }
-                size={13}
-                color={changeColor}
-              />
-              <Text style={[styles.changeText, { color: changeColor }]}>
-                {percentage ??
-                  `${footer.comparison.mtdDelta.amount > 0 ? '+' : ''}${ownerMoney(footer.comparison.mtdDelta.amount)}`}
+          <View style={styles.footerText}>
+            {model.period !== 'month' && (
+              <Text style={[styles.footerContext, { color: p.text.primary }]}>
+                <Text style={[styles.caption, { color: p.text.secondary }]}>Прибыль за месяц </Text>
+                {ownerMoney(footer.current.mtd.netProfit)}
               </Text>
-            </View>
-            <Text style={[styles.caption, { textAlign: 'right' }]}>
-              к{' '}
-              {ownerRangeLabel(
-                footer.comparison.period.from,
-                footer.comparison.period.through,
-                footer.todayDate.slice(0, 4),
-              )}
+            )}
+            <Text style={[styles.caption, { color: p.text.secondary }]}>
+              {model.period === 'month' ? 'Прибыль к ' : 'К '}
+              {comparisonLabel}
             </Text>
           </View>
+          <Text style={[styles.changeText, { color: changeColor }]}>{changeLabel}</Text>
         </TouchableOpacity>
         <TouchableOpacity
           accessibilityRole="button"
-          accessibilityLabel="Как построен график и рассчитана прибыль"
-          onPress={onInfo}
+          accessibilityLabel={`Как построен график и рассчитана прибыль. ${data.basisLabel}`}
+          onPress={() => {
+            if (live.current.active && live.current.scope.isCurrent() && live.current.signature === signature) onInfo();
+          }}
           style={styles.info}
         >
-          <Ionicons name="information-circle-outline" size={20} color="#d8e6ff" />
+          <Ionicons name="information-circle-outline" size={21} color={p.text.secondary} />
         </TouchableOpacity>
       </View>
-    </LinearGradient>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  panel: { borderRadius: 21, paddingHorizontal: 14, paddingTop: 12, paddingBottom: 2 },
-  dateRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 10,
-    marginBottom: 10,
-    flexWrap: 'wrap',
+  panel: {
+    borderRadius: 21,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    paddingBottom: 2,
   },
-  caption: { fontSize: 12, lineHeight: 16, color: '#d8e6ff' },
-  metrics: { flexDirection: 'row', gap: 12 },
-  metricsStacked: { flexDirection: 'column' },
-  metric: { flex: 1, minWidth: 0, minHeight: touchSize, paddingVertical: 2 },
-  metricStacked: { minWidth: 0, minHeight: touchSize, paddingVertical: 2 },
+  chartHeading: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12 },
+  caption: { fontSize: 12, lineHeight: 17 },
+  axis: { position: 'absolute', fontSize: 12, lineHeight: 16, fontVariant: ['tabular-nums'] },
+  readout: { marginTop: 4 },
+  readoutHeading: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  readoutDate: { flex: 1, minWidth: 0, fontSize: 12, lineHeight: 17 },
+  readoutAction: { width: touchSize, height: touchSize, alignItems: 'center', justifyContent: 'center' },
+  metrics: { flexDirection: 'row', gap: 14 },
+  metricsStacked: { flexDirection: 'column', gap: 10 },
+  metric: { flex: 1, minWidth: 0 },
+  metricStacked: { minWidth: 0 },
   metricLabel: { flexDirection: 'row', gap: 5, alignItems: 'center' },
   dot: { width: 6, height: 6, borderRadius: 3 },
-  profitValue: {
-    fontSize: 26,
-    lineHeight: 33,
-    fontWeight: '600',
-    color: '#fff',
-    letterSpacing: -0.4,
+  money: {
+    fontSize: 22,
+    lineHeight: 28,
+    fontWeight: '500',
+    letterSpacing: -0.35,
     fontVariant: ['tabular-nums'],
-    marginTop: 4,
+    marginTop: 3,
   },
-  revenueValue: {
-    fontSize: 24,
-    lineHeight: 33,
-    fontWeight: '600',
-    color: '#fff',
-    letterSpacing: -0.4,
-    fontVariant: ['tabular-nums'],
-    marginTop: 4,
-  },
-  axis: { position: 'absolute', fontSize: 12, lineHeight: 16, color: '#c9daff', fontVariant: ['tabular-nums'] },
-  tooltip: {
-    position: 'absolute',
-    left: 4,
-    right: 4,
-    top: 0,
-    zIndex: 3,
-    backgroundColor: '#102b6d',
-    borderRadius: 10,
-    padding: 10,
-  },
-  tooltipDate: { color: '#d8e6ff', fontSize: 12, lineHeight: 17, marginBottom: 3 },
-  tooltipMoney: { color: '#fff', fontSize: 13, lineHeight: 19, fontWeight: '500', fontVariant: ['tabular-nums'] },
+  clientsRow: { minHeight: touchSize, flexDirection: 'row', alignItems: 'center', columnGap: 7 },
+  clientLabel: { fontSize: 13, lineHeight: 18 },
+  clientValue: { fontSize: 14, lineHeight: 19, fontWeight: '500', fontVariant: ['tabular-nums'] },
+  retry: { minHeight: touchSize, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 4 },
   footer: {
-    minHeight: 78,
-    paddingTop: 9,
-    paddingBottom: 9,
-    marginTop: 2,
+    minHeight: 57,
+    paddingVertical: 6,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: 'rgba(255,255,255,.15)',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 3,
+    gap: 2,
   },
   footerContent: { flex: 1, minWidth: 0, minHeight: touchSize, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  footerStacked: { flexDirection: 'column', alignItems: 'stretch', gap: 7 },
-  footerValue: {
-    fontSize: 20,
-    lineHeight: 26,
-    fontWeight: '600',
-    color: '#fff',
-    fontVariant: ['tabular-nums'],
-    letterSpacing: -0.3,
-    marginVertical: 3,
-  },
-  footerComparison: { maxWidth: '45%', alignItems: 'flex-end', gap: 3 },
-  change: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    paddingHorizontal: 6,
-    paddingVertical: 3,
-    backgroundColor: 'rgba(0,0,0,.12)',
-    borderRadius: 7,
-  },
-  changeText: { fontSize: 12, lineHeight: 17, fontWeight: '600' },
+  footerStacked: { flexDirection: 'column', alignItems: 'stretch', gap: 4 },
+  footerText: { flex: 1, minWidth: 0, gap: 2 },
+  footerContext: { fontSize: 13, lineHeight: 18, fontWeight: '500', fontVariant: ['tabular-nums'] },
+  changeText: { flexShrink: 1, fontSize: 13, lineHeight: 18, fontWeight: '600', fontVariant: ['tabular-nums'] },
   info: { width: touchSize, height: touchSize, alignItems: 'center', justifyContent: 'center' },
 });

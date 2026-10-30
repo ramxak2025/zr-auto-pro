@@ -1,21 +1,19 @@
-import React, { useState } from 'react';
-import Animated, { LinearTransition, ReduceMotion } from 'react-native-reanimated';
-import { StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
+import React from 'react';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { CommonActions, type NavigationProp, useNavigation } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
-import { dashboardApi, salaryApi } from '../../../api/services';
+import { dashboardApi } from '../../../api/services';
 import { useAuth } from '../../../contexts/AuthContext';
 import { useColors } from '../../../contexts/ThemeContext';
 import { usePosSettings } from '../../../hooks/usePosSettings';
-import EmployeeAvatar from '../../../components/EmployeeAvatar';
 import { Skeleton } from '../../../components/Skeleton';
 import type { TabParamList } from '../../../navigation/AppNavigator';
-import { ATTENTION_LABELS, EARNINGS_EXPLANATION } from '../../../../../shared/utils/dashboardAttention';
+import { ATTENTION_LABELS } from '../../../../../shared/utils/dashboardAttention';
 import type { AttentionBucketId } from '../../../../../shared/types';
 import { openAttention } from '../attentionNavigation';
 import { ownerHomeSurfaces } from './ownerHomeSurfaces';
-import { loadOwnerHome, ownerDateLabel, ownerMoney, type OwnerHomeScope } from './ownerHomeState';
+import { loadOwnerHome, type OwnerHomeScope } from './ownerHomeState';
 
 const attentionIcons: Record<AttentionBucketId, keyof typeof Ionicons.glyphMap> = {
   bookings: 'calendar-outline',
@@ -56,22 +54,17 @@ export function OwnerHomeRetry({
 export default function OwnerHomeOperational({
   scope,
   enabled,
-  showEarnings,
   todayDate,
 }: {
   scope: OwnerHomeScope;
   enabled: boolean;
-  showEarnings: boolean;
   todayDate?: string;
 }) {
   const p = useColors();
-  const { fontScale } = useWindowDimensions();
   const tones = ownerHomeSurfaces(p.mode === 'dark');
-  const largeText = fontScale > 1.2;
   const { user, hasPermission } = useAuth();
   const { shiftModeEnabled, isCashier } = usePosSettings();
   const navigation = useNavigation<NavigationProp<TabParamList>>();
-  const [expanded, setExpanded] = useState(false);
   const owner = user?.role === 'director';
   const attention = useQuery({
     queryKey: ['owner-home', ...scope.key, 'attention', todayDate ?? 'today'],
@@ -80,16 +73,6 @@ export default function OwnerHomeOperational({
     staleTime: 30_000,
     refetchOnMount: 'always',
     refetchInterval: enabled ? 60_000 : false,
-    placeholderData: undefined,
-  });
-  const salaryAllowed = owner && hasPermission('salary_view_all');
-  const earnings = useQuery({
-    queryKey: ['owner-home', ...scope.key, 'earnings', todayDate ?? 'today'],
-    queryFn: () => loadOwnerHome(scope, () => salaryApi.getTodayEarnings()),
-    enabled: enabled && salaryAllowed && showEarnings,
-    staleTime: 30_000,
-    refetchOnMount: 'always',
-    refetchInterval: enabled && showEarnings ? 60_000 : false,
     placeholderData: undefined,
   });
   const canOpenBoard = hasPermission('checks_view');
@@ -107,7 +90,6 @@ export default function OwnerHomeOperational({
           bucket.count !== 0,
       )
     : [];
-  const employees = earnings.data?.employees ?? [];
   return (
     <>
       <View style={[styles.section, styles.group, { backgroundColor: tones.attention.background }]}>
@@ -239,112 +221,6 @@ export default function OwnerHomeOperational({
           </View>
         </View>
       )}
-      {salaryAllowed && showEarnings && (
-        <View style={[styles.section, styles.group, { backgroundColor: tones.earnings.background }]}>
-          <View style={styles.earningsHeading}>
-            <View style={styles.earningsHeadingText}>
-              <Text accessibilityRole="header" style={[styles.title, { color: tones.earnings.ink }]}>
-                Мастера сегодня
-              </Text>
-              <Text style={[styles.note, { color: p.text.secondary }]}>Заработок команды</Text>
-            </View>
-            {earnings.data && !earnings.isError && (
-              <Text style={[styles.earningsTotal, { color: tones.earnings.ink }]}>
-                {ownerMoney(earnings.data.total)}
-              </Text>
-            )}
-          </View>
-          <Animated.View layout={LinearTransition.duration(220).reduceMotion(ReduceMotion.System)}>
-            {earnings.isPending ? (
-              <View style={styles.padding}>
-                <Skeleton height={100} radius={8} />
-              </View>
-            ) : earnings.isError ? (
-              <OwnerHomeRetry text="Заработок не обновился" busy={earnings.isFetching} onRetry={earnings.refetch} />
-            ) : employees.length ? (
-              (expanded ? employees : employees.slice(0, 5)).map((employee) => (
-                <View
-                  key={employee.id}
-                  testID={`owner-home-earnings-${employee.id}`}
-                  style={[
-                    styles.row,
-                    largeText && styles.employeeRowStacked,
-                    { borderBottomColor: tones.earnings.divider },
-                  ]}
-                >
-                  <EmployeeAvatar
-                    avatar={employee.avatar}
-                    userId={employee.id}
-                    style={[
-                      styles.avatar,
-                      largeText && styles.employeeAvatarTop,
-                      { backgroundColor: tones.earnings.inset },
-                    ]}
-                    imageStyle={styles.avatar}
-                  >
-                    <Text style={{ color: p.text.secondary }}>{employee.name.trim().slice(0, 1)}</Text>
-                  </EmployeeAvatar>
-                  {largeText ? (
-                    <View style={styles.employeeTextStack}>
-                      <Text style={[styles.employeeStackedName, { color: p.text.primary }]}>{employee.name}</Text>
-                      <Text
-                        style={[
-                          styles.amount,
-                          styles.earnedChip,
-                          {
-                            color: employee.earnedAmount < 0 ? p.text.primary : tones.earnings.ink,
-                            backgroundColor: tones.earnings.inset,
-                          },
-                        ]}
-                      >
-                        {ownerMoney(employee.earnedAmount)}
-                      </Text>
-                    </View>
-                  ) : (
-                    <>
-                      <Text style={[styles.name, { color: p.text.primary }]}>{employee.name}</Text>
-                      <Text
-                        style={[
-                          styles.amount,
-                          styles.earnedChip,
-                          {
-                            color: employee.earnedAmount < 0 ? p.text.primary : tones.earnings.ink,
-                            backgroundColor: tones.earnings.inset,
-                          },
-                        ]}
-                      >
-                        {ownerMoney(employee.earnedAmount)}
-                      </Text>
-                    </>
-                  )}
-                </View>
-              ))
-            ) : (
-              <Text style={[styles.empty, { color: p.text.secondary }]}>В этом филиале пока нет сотрудников</Text>
-            )}
-            {!earnings.isError && employees.length > 5 && (
-              <TouchableOpacity
-                accessibilityRole="button"
-                accessibilityState={{ expanded }}
-                accessibilityLabel={expanded ? 'Свернуть' : `Показать всех (${employees.length})`}
-                style={[styles.more, { borderTopColor: tones.earnings.divider }]}
-                activeOpacity={0.65}
-                onPress={() => setExpanded(!expanded)}
-              >
-                <Text style={{ color: tones.earnings.ink, fontSize: 13, fontWeight: '500' }}>
-                  {expanded ? 'Свернуть' : `Показать всех (${employees.length})`}
-                </Text>
-                <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={16} color={tones.earnings.ink} />
-              </TouchableOpacity>
-            )}
-          </Animated.View>
-          {earnings.data && !earnings.isError && (
-            <Text style={[styles.caption, { color: p.text.secondary }]}>
-              {ownerDateLabel(earnings.data.date)} · {EARNINGS_EXPLANATION}
-            </Text>
-          )}
-        </View>
-      )}
     </>
   );
 }
@@ -386,43 +262,11 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
     paddingTop: 4,
   },
-  earningsHeading: {
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-    gap: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-  },
-  earningsHeadingText: { flex: 1, minWidth: 145, gap: 3 },
-  earningsTotal: { fontSize: 20, lineHeight: 27, fontWeight: '600', fontVariant: ['tabular-nums'], flexShrink: 1 },
-  earnedChip: {
-    borderRadius: 8,
-    overflow: 'hidden',
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    alignSelf: 'flex-start',
-  },
   operationIcon: { width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   title: { fontSize: 16, lineHeight: 22, fontWeight: '600', letterSpacing: -0.15 },
   singleHeading: { marginBottom: 7, paddingHorizontal: 2 },
   group: { borderRadius: 18, overflow: 'hidden' },
-  rowIcon: { width: 25, alignItems: 'center', justifyContent: 'center' },
-  row: {
-    minHeight: 53,
-    paddingHorizontal: 13,
-    paddingVertical: 9,
-    gap: 11,
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
   name: { fontSize: 14, lineHeight: 20, flex: 1, flexShrink: 1 },
-  employeeRowStacked: { alignItems: 'flex-start' },
-  employeeAvatarTop: { marginTop: 3 },
-  employeeTextStack: { flex: 1, minWidth: 0, gap: 4 },
-  employeeStackedName: { fontSize: 14, lineHeight: 20 },
-  amount: { fontSize: 15, lineHeight: 21, fontWeight: '600', fontVariant: ['tabular-nums'] },
   note: { fontSize: 12, lineHeight: 18 },
   retryRow: {
     paddingHorizontal: 14,
@@ -433,7 +277,6 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   action: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 2 },
-  empty: { fontSize: 14, lineHeight: 21, padding: 16 },
   padding: { padding: 16 },
   operationRow: {
     borderBottomWidth: StyleSheet.hairlineWidth,
@@ -444,7 +287,4 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 11,
   },
-  avatar: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
-  more: { minHeight: 46, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, padding: 10 },
-  caption: { fontSize: 11, lineHeight: 16, paddingBottom: 13, paddingHorizontal: 14, paddingTop: 6 },
 });

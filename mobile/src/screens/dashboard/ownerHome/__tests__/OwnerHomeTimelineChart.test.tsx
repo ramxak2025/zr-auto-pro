@@ -6,7 +6,10 @@ const mockStates: unknown[] = [],
 let mockStateIndex = 0,
   mockRefIndex = 0,
   mockSharedIndex = 0,
-  mockFontScale = 1;
+  mockFontScale = 1,
+  mockWidth = 402,
+  mockMode = 'light';
+const mockClients = jest.fn();
 const mockGesture = (kind: string) => {
   const handlers: Record<string, (...args: unknown[]) => void> = {};
   const chain: Record<string, unknown> = { kind, handlers };
@@ -43,10 +46,9 @@ jest.mock('react-native', () => ({
   Text: 'Text',
   TouchableOpacity: 'TouchableOpacity',
   Platform: { OS: 'ios' },
-  useWindowDimensions: () => ({ width: 402, fontScale: mockFontScale }),
+  useWindowDimensions: () => ({ width: mockWidth, fontScale: mockFontScale }),
   StyleSheet: { create: (s: unknown) => s, hairlineWidth: 0.5 },
 }));
-jest.mock('expo-linear-gradient', () => ({ LinearGradient: 'Gradient' }));
 jest.mock('react-native-svg', () => ({
   __esModule: true,
   default: 'Svg',
@@ -81,7 +83,18 @@ jest.mock('react-native-gesture-handler', () => ({
     Exclusive: (pan: unknown, tap: unknown) => ({ pan, tap }),
   },
 }));
-jest.mock('../../../../contexts/ThemeContext', () => ({ useColors: () => ({ mode: 'light' }) }));
+jest.mock('../../../../contexts/ThemeContext', () => ({
+  useColors: () => ({
+    mode: mockMode,
+    bg: { card: mockMode === 'dark' ? '#181b22' : '#fff' },
+    text: { primary: '#111', secondary: '#555' },
+    border: { subtle: '#ddd', strong: '#ccc' },
+    accent: { primary: '#2563eb', primaryText: '#1d4ed8' },
+  }),
+}));
+jest.mock('../ownerHomeTimelineClients', () => ({
+  useOwnerTimelineClients: (...args: unknown[]) => mockClients(...args),
+}));
 jest.mock('../../../../components/icons/IoniconsShim', () => 'Ionicons');
 jest.mock('../ownerHomeSequence', () => ({ startOwnerHomeSequence: jest.fn(() => jest.fn()) }));
 import OwnerHomeTimelineChart from '../OwnerHomeTimelineChart';
@@ -93,14 +106,21 @@ function nodes(node: React.ReactNode): React.ReactElement<Record<string, unknown
   if (!React.isValidElement<Record<string, unknown>>(node)) return [];
   return [node, ...React.Children.toArray(node.props.children as React.ReactNode).flatMap(nodes)];
 }
-function render(data: OwnerHomeTimeline, { active = true, current = true } = {}) {
+function render(
+  data: OwnerHomeTimeline,
+  {
+    active = true,
+    current = true,
+    scopeKey = ['a'],
+  }: { active?: boolean; current?: boolean; scopeKey?: string[] } = {},
+) {
   mockStateIndex = 0;
   mockRefIndex = 0;
   mockSharedIndex = 0;
   return OwnerHomeTimelineChart({
     data,
     model: ownerTimelineModel(data, data.range.period)!,
-    scope: { key: ['a'], isCurrent: () => current },
+    scope: { key: scopeKey, isCurrent: () => current },
     active,
     reducedMotion: true,
     onRangeDetails: jest.fn(),
@@ -127,48 +147,50 @@ beforeEach(() => {
   mockRefs.length = 0;
   mockShared.length = 0;
   mockFontScale = 1;
+  mockWidth = 402;
+  mockMode = 'light';
+  mockClients.mockReturnValue({ count: 17, status: 'ready', label: 'Клиенты', retry: jest.fn() });
 });
 
-test('tooltip selects exact interval values with opening allocated to the first hour', () => {
+test('bottom readout selects exact interval values with opening allocated to the first hour', () => {
   const data = timelineFixture(),
     model = ownerTimelineModel(data, 'day')!;
   let tree = render(data);
   tap(tree)({ x: 0 }, true);
   tree = render(data);
-  expect(nodes(tree).some((node) => node.props.children === model.points[0].label)).toBe(true);
+  expect(nodes(tree).some((node) => node.props.accessibilityLabel === model.points[0].label)).toBe(true);
   const first = model.points[0];
   expect(nodes(tree).find((node) => node.props.accessibilityRole === 'adjustable')!.props.accessibilityValue).toEqual({
-    text: `${first.label}. Оборот ${ownerMoney(first.revenue)}. Прибыль ${ownerMoney(first.netProfit)}`,
+    text: `${first.label}. Оборот ${ownerMoney(first.revenue)}. Чистая прибыль ${ownerMoney(first.netProfit)}`,
   });
   tap(tree)({ x: 10000 }, true);
   tree = render(data);
-  expect(nodes(tree).some((node) => node.props.children === model.points.at(-1)!.label)).toBe(true);
+  expect(nodes(tree).some((node) => node.props.accessibilityLabel === model.points.at(-1)!.label)).toBe(true);
   const adjustable = nodes(tree).find((node) => node.props.accessibilityRole === 'adjustable')!;
   const last = model.points.at(-1)!;
   expect(adjustable.props.accessibilityValue).toEqual({
-    text: `${last.label}. Оборот ${ownerMoney(last.revenue)}. Прибыль ${ownerMoney(last.netProfit)}`,
+    text: `${last.label}. Оборот ${ownerMoney(last.revenue)}. Чистая прибыль ${ownerMoney(last.netProfit)}`,
   });
   expect(last.netProfit).toBe(data.buckets.at(-1)!.netProfit);
   expect(last.netProfit).not.toBe(data.totals.netProfit);
 });
 
-test.each(['day', 'week', 'month', 'year'] as const)('%s retains period totals above an interval chart', (period) => {
+test.each(['day', 'week', 'month', 'year'] as const)('%s defaults to totals in the stable bottom readout', (period) => {
   const data = timelineFixture(period);
   const tree = render(data);
   const all = nodes(tree);
-  expect(
-    all.some(
-      (node) =>
-        node.props.accessibilityLabel === `Оборот за выбранный период ${ownerMoney(data.totals.revenue)}. Расчёт`,
-    ),
-  ).toBe(true);
-  expect(
-    all.some(
-      (node) =>
-        node.props.accessibilityLabel ===
-        `Чистая прибыль за выбранный период ${ownerMoney(data.totals.netProfit)}. Расчёт`,
-    ),
-  ).toBe(true);
+  const summary = all.find((node) => node.props.testID === 'owner-timeline-readout')!;
+  const summaryNodes = nodes(summary);
+  expect(summaryNodes.some((node) => node.props.children === ownerMoney(data.totals.revenue))).toBe(true);
+  expect(summaryNodes.some((node) => node.props.children === ownerMoney(data.totals.netProfit))).toBe(true);
+  expect(summaryNodes.some((node) => node.props.children === 'Оборот')).toBe(true);
+  expect(summaryNodes.some((node) => node.props.children === 'Чистая прибыль')).toBe(true);
+  const gesture = all.find((node) => node.type === 'GestureDetector')!;
+  expect(nodes(gesture).some((node) => node.props.testID === 'owner-timeline-readout')).toBe(false);
+  const directChildren = React.Children.toArray(tree.props.children) as React.ReactElement<Record<string, unknown>>[];
+  expect(directChildren.findIndex((node) => node.props.testID === 'owner-timeline-readout')).toBeGreaterThan(
+    directChildren.findIndex((node) => node.type === 'GestureDetector'),
+  );
   const intervalLabel = period === 'day' ? 'по часам' : period === 'year' ? 'по месяцам' : 'по дням';
   expect(all.find((node) => node.props.accessibilityRole === 'adjustable')!.props.accessibilityLabel).toBe(
     `График оборота и чистой прибыли ${intervalLabel}`,
@@ -209,26 +231,26 @@ test('accessibility actions inspect the actual daily intervals', () => {
     const point = ownerTimelineModel(data, 'week')!.points[index];
     expect(nodes(tree).find((node) => node.props.accessibilityRole === 'adjustable')!.props.accessibilityValue).toEqual(
       {
-        text: `${point.label}. Оборот ${ownerMoney(point.revenue)}. Прибыль ${ownerMoney(point.netProfit)}`,
+        text: `${point.label}. Оборот ${ownerMoney(point.revenue)}. Чистая прибыль ${ownerMoney(point.netProfit)}`,
       },
     );
   }
 });
 
-test('a refreshed dataset immediately hides the previous tooltip, and old gesture callbacks cannot restore it', () => {
+test('a refreshed dataset immediately clears the previous inspection, and old gesture callbacks cannot restore it', () => {
   const old = timelineFixture();
   let tree = render(old);
   const oldTap = tap(tree);
   oldTap({ x: 0 }, true);
   tree = render(old);
   const oldLabel = ownerTimelineModel(old, 'day')!.points[0].label;
-  expect(nodes(tree).some((node) => node.props.children === oldLabel)).toBe(true);
+  expect(nodes(tree).some((node) => node.props.accessibilityLabel === oldLabel)).toBe(true);
   const fresh = { ...old, generatedAt: '2026-10-29T11:21:00.000Z' };
   tree = render(fresh);
-  expect(nodes(tree).some((node) => node.props.children === oldLabel)).toBe(false);
+  expect(nodes(tree).some((node) => node.props.accessibilityLabel === oldLabel)).toBe(false);
   oldTap({ x: 10000 }, true);
   tree = render(fresh);
-  expect(nodes(tree).some((node) => node.props.children === oldLabel)).toBe(false);
+  expect(nodes(tree).some((node) => node.props.accessibilityLabel === oldLabel)).toBe(false);
   const adjustable = nodes(tree).find((node) => node.props.accessibilityRole === 'adjustable')!;
   expect(adjustable.props.accessibilityValue).toEqual({ text: expect.stringContaining('За период:') });
 });
@@ -243,7 +265,7 @@ test('a fast drag settles on the exact final server point even when no intermedi
   drag.onEnd({ x: 10000 });
   tree = render(data);
   expect(nodes(tree).find((node) => node.props.accessibilityRole === 'adjustable')!.props.accessibilityValue).toEqual({
-    text: `${last.label}. Оборот ${ownerMoney(last.revenue)}. Прибыль ${ownerMoney(last.netProfit)}`,
+    text: `${last.label}. Оборот ${ownerMoney(last.revenue)}. Чистая прибыль ${ownerMoney(last.netProfit)}`,
   });
 });
 
@@ -258,9 +280,9 @@ test('a late drag end from the previous range cannot reintroduce its inspected m
   expect(nodes(tree).find((node) => node.props.accessibilityRole === 'adjustable')!.props.accessibilityValue).toEqual({
     text: expect.stringContaining('За период:'),
   });
-  expect(nodes(tree).some((node) => node.props.children === ownerTimelineModel(old, 'day')!.points.at(-1)!.label)).toBe(
-    false,
-  );
+  expect(
+    nodes(tree).some((node) => node.props.accessibilityLabel === ownerTimelineModel(old, 'day')!.points.at(-1)!.label),
+  ).toBe(false);
 });
 
 test.each([
@@ -276,4 +298,151 @@ test.each([
   ).toEqual({
     text: expect.stringContaining('За период:'),
   });
+});
+
+test('inspection has no overlay in the plot and only reset is actionable in its summary', () => {
+  const data = timelineFixture();
+  let tree = render(data);
+  tap(tree)({ x: 0 }, true);
+  tree = render(data);
+  const chart = nodes(tree).find((node) => node.props.accessibilityRole === 'adjustable')!;
+  expect(nodes(chart).filter((node) => node.type === 'View')).toEqual([chart]);
+  const summary = nodes(tree).find((node) => node.props.testID === 'owner-timeline-readout')!;
+  const actions = nodes(summary).filter((node) => node.type === 'TouchableOpacity');
+  expect(actions).toHaveLength(1);
+  expect(actions[0].props.accessibilityLabel).toBe('Сбросить выбранный интервал');
+  const caption = nodes(summary).find(
+    (node) => node.props.accessibilityLabel === ownerTimelineModel(data, 'day')!.points[0].label,
+  )!;
+  expect(caption.props.children).toBe('29 октября · 00:00–01:00');
+  expect((actions[0].props.style as { width: number; height: number }).width).toBeGreaterThanOrEqual(44);
+  (actions[0].props.onPress as () => void)();
+  tree = render(data);
+  expect(nodes(tree).find((node) => node.props.accessibilityRole === 'adjustable')!.props.accessibilityValue).toEqual({
+    text: expect.stringContaining('За период:'),
+  });
+});
+
+test('tapping the same interval again restores period totals and the period client target', () => {
+  const data = timelineFixture('week');
+  let tree = render(data);
+  tap(tree)({ x: 0 }, true);
+  tree = render(data);
+  expect(mockClients.mock.calls.at(-1)![1]).toEqual(ownerTimelineModel(data, 'week')!.points[0]);
+  tap(tree)({ x: 0 }, true);
+  tree = render(data);
+  expect(mockClients.mock.calls.at(-1)![1]).toBeNull();
+  expect(nodes(tree).find((node) => node.props.accessibilityRole === 'adjustable')!.props.accessibilityValue).toEqual({
+    text: expect.stringContaining('За период:'),
+  });
+});
+
+test('changing scope clears selection even when the server numbers and timestamps are identical', () => {
+  const data = timelineFixture();
+  const staleTap = tap(render(data));
+  staleTap({ x: 0 }, true);
+  render(data, { scopeKey: ['b'] });
+  staleTap({ x: 10000 }, true);
+  const tree = render(data, { scopeKey: ['b'] });
+  expect(nodes(tree).find((node) => node.props.accessibilityRole === 'adjustable')!.props.accessibilityValue).toEqual({
+    text: expect.stringContaining('За период:'),
+  });
+});
+
+test.each(['light', 'dark'])('%s uses two visible vertical areas closing on the true zero baseline', (mode) => {
+  mockMode = mode;
+  const data = timelineFixture();
+  const tree = render(data);
+  const all = nodes(tree);
+  const gradients = all.filter((node) => node.type === 'SvgGradient');
+  expect(gradients).toHaveLength(2);
+  gradients.forEach((gradient) => {
+    expect(gradient.props.gradientUnits).toBe('userSpaceOnUse');
+    expect(gradient.props.y2).toBe(180);
+    const stops = nodes(gradient).filter((node) => node.type === 'Stop');
+    expect(stops.map((stop) => stop.props.stopOpacity)).toEqual([0.3, 0.015, 0.27]);
+    expect(Number(stops[1].props.offset)).toBeGreaterThan(0);
+    expect(Number(stops[1].props.offset)).toBeLessThan(1);
+  });
+  const areas = all.filter((node) => node.type === 'Path' && String(node.props.fill).startsWith('url('));
+  expect(areas).toHaveLength(2);
+  expect(areas.every((node) => String(node.props.d).endsWith(' Z'))).toBe(true);
+  expect((tree.props.style as Array<{ backgroundColor?: string }>)[1].backgroundColor).toBe(
+    mode === 'dark' ? '#181b22' : '#fff',
+  );
+});
+
+test('zero values stay zero and negative interval money is shown in full', () => {
+  const original = timelineFixture();
+  let tree = render(original);
+  tap(tree)({ x: 0 }, true);
+  tree = render(original);
+  expect(
+    nodes(tree).some(
+      (node) => node.props.children === ownerMoney(ownerTimelineModel(original, 'day')!.points[0].netProfit),
+    ),
+  ).toBe(true);
+  const zero = {
+    ...original,
+    generatedAt: '2026-10-29T11:21:00Z',
+    opening: { ...original.opening, revenue: 0, netProfit: 0 },
+    totals: { ...original.totals, revenue: 0, netProfit: 0 },
+    buckets: original.buckets.map((bucket) => ({ ...bucket, revenue: 0, netProfit: 0 })),
+  };
+  tree = render(zero);
+  tap(tree)({ x: 10000 }, true);
+  tree = render(zero);
+  const summary = nodes(tree).find((node) => node.props.testID === 'owner-timeline-readout')!;
+  expect(nodes(summary).filter((node) => node.props.children === ownerMoney(0))).toHaveLength(2);
+  expect(JSON.stringify(tree)).not.toMatch(/NaN|Infinity/);
+});
+
+test.each([1, 1.8, 3.1])('large values remain complete without truncation at text scale %s', (fontScale) => {
+  mockFontScale = fontScale;
+  const original = timelineFixture('week');
+  const extra = 123_456_789_000;
+  const data = {
+    ...original,
+    totals: { ...original.totals, revenue: original.totals.revenue + extra },
+    buckets: original.buckets.map((bucket, i) => ({ ...bucket, revenue: bucket.revenue + (i === 0 ? extra : 0) })),
+  };
+  const tree = render(data);
+  const amount = nodes(tree).find((node) => node.props.children === ownerMoney(data.totals.revenue))!;
+  expect(amount).toBeDefined();
+  expect(amount.props.numberOfLines).toBeUndefined();
+  expect(amount.props.adjustsFontSizeToFit).toBeUndefined();
+  expect(amount.props.maxFontSizeMultiplier).toBeUndefined();
+  expect((amount.props.style as Array<{ fontSize?: number }>)[0].fontSize).toBe(22);
+  const summary = nodes(tree).find((node) => node.props.testID === 'owner-timeline-readout')!;
+  expect(
+    nodes(summary).some(
+      (node) => Array.isArray(node.props.style) && node.props.style.some((style) => style?.flexDirection === 'column'),
+    ),
+  ).toBe(true);
+});
+
+test('month mode avoids a second monthly total while keeping comparison, detail and current-plan information', () => {
+  const data = timelineFixture('month');
+  const all = nodes(render(data));
+  expect(all.filter((node) => node.props.children === ownerMoney(data.footer.current.mtd.netProfit))).toHaveLength(1);
+  expect(all.some((node) => node.props.children === '+17%')).toBe(true);
+  expect(all.some((node) => String(node.props.accessibilityLabel).includes('Открыть месячный расчёт'))).toBe(true);
+  expect(
+    all.some((node) =>
+      String(node.props.accessibilityLabel).includes(`Как построен график и рассчитана прибыль. ${data.basisLabel}`),
+    ),
+  ).toBe(true);
+});
+
+test('unknown and failed clients never turn into zero, and retry stays in the bottom readout', () => {
+  mockClients.mockReturnValue({ count: null, status: 'loading', label: 'Клиенты за день', retry: jest.fn() });
+  let all = nodes(render(timelineFixture()));
+  expect(all.some((node) => node.props.children === '…')).toBe(true);
+  expect(all.some((node) => node.props.children === 0)).toBe(false);
+  const retry = jest.fn();
+  mockClients.mockReturnValue({ count: null, status: 'error', label: 'Клиенты за день', retry });
+  all = nodes(render(timelineFixture()));
+  const action = all.find((node) => node.props.accessibilityLabel === 'Клиенты не загрузились. Повторить')!;
+  (action.props.onPress as () => void)();
+  expect(retry).toHaveBeenCalledTimes(1);
 });
