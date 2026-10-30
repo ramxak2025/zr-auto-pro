@@ -19,6 +19,11 @@ export class OwnerHomeController {
     return this.service.profit(user.tenantID, actorPointId(user), query.asOf);
   }
 
+  @Get('timeline')
+  timeline(@CurrentUser() user: JwtPayload, @Query() query: Record<string, unknown>) {
+    return this.service.timeline(user.tenantID, actorPointId(user), query);
+  }
+
   @Get('visits')
   visits(@CurrentUser() user: JwtPayload, @Query() query: Record<string, unknown>) {
     return this.service.visits(user.tenantID, actorPointId(user), query);
