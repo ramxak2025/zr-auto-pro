@@ -1,12 +1,11 @@
 import React from 'react';
-import { TouchableOpacity } from 'react-native';
+import { TouchableOpacity, type StyleProp, type ViewStyle } from 'react-native';
 import type { OwnerHomeTimeline } from '../../../../../../shared/types/ownerHome';
 
 const mockRefs: { current: unknown }[] = [];
-const mockShared: { value: unknown }[] = [];
 let mockRefIndex = 0;
-let mockSharedIndex = 0;
 let mockMode: 'light' | 'dark' = 'light';
+let mockFontScale = 1;
 let mockScopeCurrent = true;
 jest.mock('react', () => ({
   ...jest.requireActual('react'),
@@ -23,7 +22,7 @@ jest.mock('react-native', () => ({
   ActivityIndicator: 'ActivityIndicator',
   AppState: { currentState: 'active' },
   Platform: { OS: 'ios' },
-  useWindowDimensions: () => ({ width: 402, fontScale: 1 }),
+  useWindowDimensions: () => ({ width: 402, fontScale: mockFontScale }),
   StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 0.5 },
 }));
 jest.mock('expo-linear-gradient', () => ({ LinearGradient: 'LinearGradient' }));
@@ -39,11 +38,7 @@ jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 jest.mock('react-native-reanimated', () => ({
   __esModule: true,
   default: { View: 'AnimatedView' },
-  useSharedValue: (initial: unknown) => {
-    const index = mockSharedIndex++;
-    return mockShared[index] ?? (mockShared[index] = { value: initial });
-  },
-  useAnimatedStyle: (factory: () => unknown) => factory(),
+  useSharedValue: jest.fn((value: unknown) => ({ value })),
   withTiming: jest.fn((value: unknown) => value),
   cancelAnimation: jest.fn(),
   ReduceMotion: { System: 'system' },
@@ -76,16 +71,23 @@ function render(
     scopeKey = ['account-A'],
     reducedMotion = true,
     widgetActions,
-  }: { active?: boolean; scopeKey?: string[]; reducedMotion?: boolean; widgetActions?: React.ReactNode } = {},
+    cloudStyle,
+  }: {
+    active?: boolean;
+    scopeKey?: string[];
+    reducedMotion?: boolean;
+    widgetActions?: React.ReactNode;
+    cloudStyle?: StyleProp<ViewStyle>;
+  } = {},
 ) {
   mockRefIndex = 0;
-  mockSharedIndex = 0;
   return OwnerHomeSummary({
     data,
     scope: { key: scopeKey, isCurrent: () => mockScopeCurrent },
     active,
     reducedMotion,
     widgetActions,
+    cloudStyle,
     ...actions,
   });
 }
@@ -98,8 +100,8 @@ function pressAll(tree: React.ReactNode) {
 beforeEach(() => {
   jest.clearAllMocks();
   mockRefs.length = 0;
-  mockShared.length = 0;
   mockMode = 'light';
+  mockFontScale = 1;
   mockScopeCurrent = true;
   jest.requireMock('react-native').AppState.currentState = 'active';
 });
@@ -223,23 +225,48 @@ test.each(['expired-scope', 'blur', 'background', 'new-response', 'new-scope', '
   },
 );
 
-test.each([true, false])(
-  'entrance is finite, cancelled on cleanup, and respects Reduce Motion (%s)',
-  (reducedMotion) => {
-    render(timelineFixture(), { reducedMotion });
-    const animation = jest.requireMock('react-native-reanimated');
-    const cleanup = (React.useEffect as jest.Mock).mock.calls.at(-1)![0]();
-    if (reducedMotion) expect(animation.withTiming).not.toHaveBeenCalled();
-    else {
-      expect(animation.withTiming).toHaveBeenCalledTimes(1);
-      expect(animation.withTiming.mock.calls[0][1].duration).toBeLessThanOrEqual(250);
-      expect(animation.withTiming.mock.calls[0][1].reduceMotion).toBe('system');
-    }
-    animation.cancelAnimation.mockClear();
-    cleanup();
-    expect(animation.cancelAnimation).toHaveBeenCalledTimes(1);
-  },
-);
+test('only the cloud receives the parent entrance; all money and actions are immediately available', () => {
+  const cloudStyle = { opacity: 0, transform: [{ translateX: 180 }] };
+  const tree = render(timelineFixture(), { reducedMotion: false, cloudStyle });
+  expect(tree.type).toBe('View');
+  expect(tree.props.style).not.toHaveProperty('opacity');
+  expect(nodes(tree).find((node) => node.type === OwnerHomeCloud)!.props.style).toBe(cloudStyle);
+  expect(text(tree)).toContain(ownerMoney(timelineFixture().totals.netProfit));
+  pressAll(tree);
+  for (const action of Object.values(actions)) expect(action).toHaveBeenCalledTimes(1);
+  const animation = jest.requireMock('react-native-reanimated');
+  expect(animation.withTiming).not.toHaveBeenCalled();
+  expect(animation.useSharedValue).not.toHaveBeenCalled();
+});
+
+test('loading, errors, data, theme and Dynamic Type keep the same parent-owned cloud style', () => {
+  const cloudStyle = { opacity: 0.4, transform: [{ translateX: 108 }] };
+  const loading = OwnerHomeSummaryPlaceholder({ retrying: true, onRetry: jest.fn(), cloudStyle });
+  const error = OwnerHomeSummaryPlaceholder({
+    errorMessage: 'Сводка не загрузилась',
+    retrying: false,
+    onRetry: jest.fn(),
+    cloudStyle,
+  });
+  const ready = render(timelineFixture(), { cloudStyle });
+  mockMode = 'dark';
+  const newData = render(timelineFixture('month'), { cloudStyle });
+  mockFontScale = 1.6;
+  const largeText = render(timelineFixture('year'), { cloudStyle });
+  const largeLoading = OwnerHomeSummaryPlaceholder({ retrying: true, onRetry: jest.fn(), cloudStyle });
+  for (const tree of [loading, error, ready, newData, largeText, largeLoading]) {
+    const clouds = nodes(tree).filter((node) => node.type === OwnerHomeCloud);
+    expect(clouds).toHaveLength(1);
+    expect(clouds[0].props.style).toBe(cloudStyle);
+  }
+  expect(nodes(largeText).find((node) => node.type === 'LinearGradient')!.key).toContain('summary-type-1.6');
+  expect(nodes(largeLoading).find((node) => node.type === 'LinearGradient')!.key).toContain(
+    'summary-placeholder-type-1.6',
+  );
+  const animation = jest.requireMock('react-native-reanimated');
+  expect(animation.withTiming).not.toHaveBeenCalled();
+  expect(animation.useSharedValue).not.toHaveBeenCalled();
+});
 
 test('loading and retry states display no financial amount or chart, and expose the actual retry action', () => {
   const retry = jest.fn();
@@ -298,6 +325,14 @@ test('one gradient logo cloud stays decorative and cannot intercept summary acti
   expect(content.props.pointerEvents).toBe('none');
   expect(content.props.accessibilityElementsHidden).toBe(true);
   expect(content.props.importantForAccessibility).toBe('no-hide-descendants');
+  expect(content.type).toBe('AnimatedView');
+  expect((content.props.style as unknown[])[0]).toEqual({
+    position: 'absolute',
+    bottom: 24,
+    right: -15,
+    width: 176,
+    height: 106.48,
+  });
   const marks = nodes(content).filter((node) => node.type === 'Path');
   expect(marks).toHaveLength(1);
   expect(marks[0].props.fill).toBe('url(#owner-home-cloud-fill)');

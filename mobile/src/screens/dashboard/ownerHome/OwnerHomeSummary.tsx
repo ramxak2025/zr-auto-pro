@@ -8,17 +8,11 @@ import {
   TouchableOpacity,
   View,
   useWindowDimensions,
+  type StyleProp,
+  type ViewStyle,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import Animated, {
-  cancelAnimation,
-  Easing,
-  ReduceMotion,
-  useAnimatedStyle,
-  useSharedValue,
-  withTiming,
-} from 'react-native-reanimated';
 import { useColors } from '../../../contexts/ThemeContext';
 import { colors } from '../../../theme';
 import type { OwnerHomeTimeline } from '../../../../../shared/types/ownerHome';
@@ -40,6 +34,7 @@ type SummaryProps = {
   onMonthDetails: () => void;
   onInfo: () => void;
   widgetActions?: React.ReactNode;
+  cloudStyle?: StyleProp<ViewStyle>;
 };
 
 /** Values are the validated server totals; this surface never fetches or derives money. */
@@ -47,11 +42,11 @@ export default function OwnerHomeSummary({
   data,
   scope,
   active,
-  reducedMotion,
   onRangeDetails,
   onMonthDetails,
   onInfo,
   widgetActions,
+  cloudStyle,
 }: SummaryProps) {
   const p = useColors();
   const { fontScale } = useWindowDimensions();
@@ -60,24 +55,12 @@ export default function OwnerHomeSummary({
   const live = useRef({ active, data, scope, scopeKey });
   live.current = { active, data, scope, scopeKey };
   const mounted = useRef(true);
-  const opacity = useSharedValue(1);
-  const entrance = useAnimatedStyle(() => ({ opacity: opacity.value }));
   useEffect(() => {
     mounted.current = true;
-    cancelAnimation(opacity);
-    if (active && !reducedMotion) {
-      opacity.value = 0.8;
-      opacity.value = withTiming(1, {
-        duration: 180,
-        easing: Easing.out(Easing.cubic),
-        reduceMotion: ReduceMotion.System,
-      });
-    } else opacity.value = 1;
     return () => {
       mounted.current = false;
-      cancelAnimation(opacity);
     };
-  }, [active, reducedMotion, opacity]);
+  }, []);
   const press = (action: () => void) => {
     const current = live.current;
     if (
@@ -110,7 +93,7 @@ export default function OwnerHomeSummary({
   const changeInk = delta.amount > 0 ? colors.green[100] : delta.amount < 0 ? colors.red[100] : ink;
 
   return (
-    <Animated.View style={[styles.card, entrance]} testID="owner-home-summary">
+    <View style={styles.card} testID="owner-home-summary">
       <LinearGradient
         key={`summary-type-${fontScale}`}
         colors={summaryGradient[p.mode]}
@@ -118,7 +101,7 @@ export default function OwnerHomeSummary({
         end={{ x: 1, y: 1 }}
         style={styles.surface}
       >
-        <OwnerHomeCloud />
+        <OwnerHomeCloud style={cloudStyle} />
         <View style={styles.heading}>
           <Text style={[styles.label, { color: ink }]}>Чистая прибыль</Text>
           <View style={styles.headingActions}>
@@ -189,7 +172,7 @@ export default function OwnerHomeSummary({
           </View>
         </TouchableOpacity>
       </LinearGradient>
-    </Animated.View>
+    </View>
   );
 }
 
@@ -198,11 +181,13 @@ export function OwnerHomeSummaryPlaceholder({
   retrying,
   onRetry,
   widgetActions,
+  cloudStyle,
 }: {
   errorMessage?: string;
   retrying: boolean;
   onRetry: () => unknown;
   widgetActions?: React.ReactNode;
+  cloudStyle?: StyleProp<ViewStyle>;
 }) {
   const p = useColors();
   const { fontScale } = useWindowDimensions();
@@ -216,7 +201,7 @@ export function OwnerHomeSummaryPlaceholder({
         end={{ x: 1, y: 1 }}
         style={styles.surface}
       >
-        <OwnerHomeCloud />
+        <OwnerHomeCloud style={cloudStyle} />
         <View style={styles.heading}>
           <Text style={[styles.label, { color: ink }]}>Чистая прибыль</Text>
           {widgetActions && <View style={styles.headingActions}>{widgetActions}</View>}

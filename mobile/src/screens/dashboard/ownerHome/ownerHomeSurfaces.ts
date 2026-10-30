@@ -1,4 +1,4 @@
-/** Quiet, role-specific surfaces beneath the primary blue financial chart. */
+/** Quiet category tints beneath the primary blue financial summary. */
 export function ownerHomeSurfaces(dark: boolean) {
   return dark
     ? {
@@ -16,15 +16,15 @@ export function ownerHomeSurfaces(dark: boolean) {
       }
     : {
         clients: {
-          background: '#eaf5f1',
+          background: '#f0f7f4',
           ink: '#205f53',
-          divider: '#ccdfd7',
+          divider: '#d5e3dc',
           strong: '#27816e',
           soft: '#a2ccbe',
-          inset: '#dbece5',
+          inset: '#e5f0ea',
         },
-        attention: { background: '#fff6e8', ink: '#80541d', divider: '#edddc3', inset: '#f4e6ce' },
+        attention: { background: '#fff9ef', ink: '#80541d', divider: '#f0e3cc', inset: '#f7ecd8' },
         earnings: { background: '#f2eff8', ink: '#665185', divider: '#e1d9ed', inset: '#e7dff2' },
-        service: { background: '#edf1f6', ink: '#43566e', divider: '#d6dee8', inset: '#dde5ef' },
+        service: { background: '#f2f5f9', ink: '#43566e', divider: '#dce3ec', inset: '#e6edf5' },
       };
 }

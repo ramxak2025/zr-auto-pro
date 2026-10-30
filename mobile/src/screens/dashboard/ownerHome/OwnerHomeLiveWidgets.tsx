@@ -15,6 +15,7 @@ import type { TodayEarnings } from '../../../../../shared/types';
 import { EARNINGS_EXPLANATION } from '../../../../../shared/utils/dashboardAttention';
 import { loadOwnerHome, ownerClock, ownerDateLabel, ownerMoney, type OwnerHomeScope } from './ownerHomeState';
 import { ownerHomeSurfaces } from './ownerHomeSurfaces';
+import { ownerWidgetLayout, ownerWidgetText } from './ownerHomeWidgetDesign';
 import { ownerCallPhoneLabel, ownerCallsSnapshot, type OwnerCallsSnapshot } from './ownerHomeCalls';
 import { newCallsEntry, telephonyDisconnected, type CallsFilter } from '../../callsJournalState';
 import {
@@ -164,8 +165,8 @@ export default function OwnerHomeLiveWidgets({
   const shiftTone = ownerHomeSurfaces(p.mode === 'dark').service;
   const callTone =
     p.mode === 'dark'
-      ? { background: '#32252d', ink: '#edb8c7', divider: '#533d48', quiet: '#d3b7c0' }
-      : { background: '#faeff2', ink: '#8c3f56', divider: '#e9d5dd', quiet: '#795966' };
+      ? { background: '#32252d', ink: '#edb8c7', divider: '#533d48' }
+      : { background: '#faeff2', ink: '#8c3f56', divider: '#e9d5dd' };
   const openCalls = (filter: CallsFilter = 'all') => {
     if (!featureCurrent('callsAllowed')) return;
     navigation.navigate('MoreTab', { screen: 'Calls', params: newCallsEntry(filter), initial: false });
@@ -177,8 +178,12 @@ export default function OwnerHomeLiveWidgets({
     );
   };
   const retry = (label: string, fetching: boolean, refetch: () => unknown, ink: string) => (
-    <View style={styles.notice} accessibilityRole="alert">
-      <Text style={[styles.note, styles.flex, { color: ink }]}>{label}</Text>
+    <View style={[styles.notice, fontScale > 1.2 && styles.noticeStacked]} accessibilityRole="alert">
+      <Text
+        style={[styles.note, styles.flex, fontScale > 1.2 && styles.noticeTextStacked, { color: p.text.secondary }]}
+      >
+        {label}
+      </Text>
       <TouchableOpacity
         accessibilityRole="button"
         accessibilityLabel={`${label}. Повторить`}
@@ -192,10 +197,10 @@ export default function OwnerHomeLiveWidgets({
       </TouchableOpacity>
     </View>
   );
-  const offline = (ink: string) => (
+  const offline = () => (
     <View style={styles.offline} accessibilityRole="alert">
-      <Text style={[styles.name, { color: ink }]}>Нет связи</Text>
-      <Text style={[styles.note, { color: ink }]}>Обновим после подключения</Text>
+      <Text style={[styles.name, { color: p.text.primary }]}>Нет связи</Text>
+      <Text style={[styles.note, { color: p.text.secondary }]}>Обновим после подключения</Text>
     </View>
   );
   const roster =
@@ -258,11 +263,13 @@ export default function OwnerHomeLiveWidgets({
   };
   const summary = calls.data?.kind === 'connected' ? calls.data.summary : null;
   const pendingCalls = calls.data?.kind === 'connected' ? (calls.data.pending ?? []) : [];
+  const stackDetails = fontScale > 1.2 || width < 360;
+  const stackTeamHeader = stackDetails || (earned !== null && ownerMoney(earned.total).length > 12);
   return (
     <>
       {(scheduleAllowed || salaryAllowed) && (
         <View testID="owner-home-team" style={[styles.panel, { backgroundColor: shiftTone.background }]}>
-          <View style={[styles.teamHeading, fontScale > 1.2 && styles.teamHeadingStacked]}>
+          <View style={[styles.teamHeading, stackTeamHeader && styles.teamHeadingStacked]}>
             <TouchableOpacity
               accessibilityRole="button"
               accessibilityLabel="Команда сегодня. Открыть график"
@@ -270,27 +277,34 @@ export default function OwnerHomeLiveWidgets({
               disabled={!canQuery || !scheduleAllowed}
               onPress={() => openSchedule()}
               activeOpacity={0.65}
-              style={styles.teamHeadingLink}
+              style={[styles.teamHeadingLink, stackTeamHeader && styles.teamHeadingLinkStacked]}
             >
-              <Text accessibilityRole="header" style={[styles.teamTitle, { color: shiftTone.ink }]}>
+              <Text accessibilityRole="header" style={[styles.title, { color: p.text.primary }]}>
                 Команда сегодня
               </Text>
               {scheduleAllowed && (
                 <View style={styles.teamHeadingStatus}>
-                  <Text style={[styles.note, { color: shiftTone.ink }]}>
-                    {roster
-                      ? roster.active.length
-                        ? `На смене · ${roster.active.length}`
-                        : 'Открытых смен нет'
-                      : 'График'}
+                  <Text style={[styles.note, { color: p.text.secondary }]}>
+                    {roster ? (
+                      roster.active.length ? (
+                        <>
+                          На смене ·{' '}
+                          <Text style={[styles.activeCount, { color: p.text.primary }]}>{roster.active.length}</Text>
+                        </>
+                      ) : (
+                        'Открытых смен нет'
+                      )
+                    ) : (
+                      'График'
+                    )}
                   </Text>
                   <Ionicons name="chevron-forward" size={12} color={shiftTone.ink} />
                 </View>
               )}
             </TouchableOpacity>
             {salaryAllowed && (
-              <View style={styles.teamTotal}>
-                <Text style={[styles.totalLabel, { color: shiftTone.ink }]}>
+              <View style={[styles.teamTotal, stackTeamHeader && styles.teamTotalStacked]}>
+                <Text style={[styles.note, { color: p.text.secondary }]}>
                   {earned && earned.date !== ownerTeamToday(timezone)
                     ? `За ${ownerDateLabel(earned.date, true)}`
                     : 'Заработано'}
@@ -300,7 +314,7 @@ export default function OwnerHomeLiveWidgets({
                   accessibilityLabel={
                     earned ? `Заработок команды: ${ownerMoney(earned.total)}` : 'Заработок команды пока неизвестен'
                   }
-                  style={[styles.totalAmount, { color: shiftTone.ink }]}
+                  style={[styles.totalAmount, stackTeamHeader && styles.totalAmountStacked, { color: p.text.primary }]}
                 >
                   {earned ? ownerMoney(earned.total) : earnings.isPending ? '…' : '—'}
                 </Text>
@@ -310,7 +324,7 @@ export default function OwnerHomeLiveWidgets({
           <Animated.View layout={LinearTransition.duration(200).reduceMotion(ReduceMotion.System)}>
             {scheduleAllowed &&
               (schedule.fetchStatus === 'paused'
-                ? offline(shiftTone.ink)
+                ? offline()
                 : !schedule.isPending && !roster
                   ? retry(
                       'Смены не обновились',
@@ -323,7 +337,7 @@ export default function OwnerHomeLiveWidgets({
                   : null)}
             {salaryAllowed &&
               (earnings.fetchStatus === 'paused' ? (
-                <Text style={[styles.teamNotice, styles.note, { color: shiftTone.ink }]} accessibilityRole="alert">
+                <Text style={[styles.teamNotice, styles.note, { color: p.text.secondary }]} accessibilityRole="alert">
                   Заработок недоступен без связи
                 </Text>
               ) : !earnings.isPending && !earned ? (
@@ -341,7 +355,7 @@ export default function OwnerHomeLiveWidgets({
                 <Skeleton height={110} radius={8} />
               </View>
             ) : visibleRows.length ? (
-              visibleRows.map((row, index) => {
+              visibleRows.map((row) => {
                 const initials = row.name
                   .split(/\s+/)
                   .map((part) => part[0] || '')
@@ -351,15 +365,12 @@ export default function OwnerHomeLiveWidgets({
                 const status = scheduleAllowed && roster ? shiftDetail(row, timezone) : null;
                 const amount = row.earnedAmount;
                 const amountLabel = amount !== null ? ownerMoney(amount) : earnings.isPending ? '…' : '—';
+                const stackPerson = stackDetails || amountLabel.length > 13;
                 return (
                   <View
                     key={row.id}
                     testID={`owner-home-live-person-${row.id}`}
-                    style={[
-                      styles.person,
-                      (fontScale > 1.2 || width < 360) && styles.personStacked,
-                      index > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: shiftTone.divider },
-                    ]}
+                    style={[styles.person, stackPerson && styles.personStacked, { borderTopColor: shiftTone.divider }]}
                   >
                     <TouchableOpacity
                       testID={`owner-home-team-schedule-${row.id}`}
@@ -369,7 +380,7 @@ export default function OwnerHomeLiveWidgets({
                       disabled={!canQuery || !scheduleAllowed}
                       onPress={() => openSchedule(row.id)}
                       activeOpacity={0.65}
-                      style={[styles.personIdentity, (fontScale > 1.2 || width < 360) && styles.personIdentityStacked]}
+                      style={[styles.personIdentity, stackPerson && styles.personIdentityStacked]}
                     >
                       <EmployeeAvatar
                         userId={row.id}
@@ -381,7 +392,7 @@ export default function OwnerHomeLiveWidgets({
                       </EmployeeAvatar>
                       <View style={styles.personText}>
                         <Text style={[styles.personName, { color: p.text.primary }]}>{row.name}</Text>
-                        {status && <Text style={[styles.personStatus, { color: shiftTone.ink }]}>{status}</Text>}
+                        {status && <Text style={[styles.note, { color: p.text.secondary }]}>{status}</Text>}
                       </View>
                     </TouchableOpacity>
                     {salaryAllowed && (
@@ -397,9 +408,9 @@ export default function OwnerHomeLiveWidgets({
                         disabled={!canQuery || amount === null}
                         onPress={() => openSalary(row.id)}
                         activeOpacity={0.65}
-                        style={[styles.personMoney, (fontScale > 1.2 || width < 360) && styles.personMoneyStacked]}
+                        style={[styles.personMoney, stackPerson && styles.personMoneyStacked]}
                       >
-                        <Text style={[styles.personAmount, { color: shiftTone.ink }]}>{amountLabel}</Text>
+                        <Text style={[styles.personAmount, { color: p.text.primary }]}>{amountLabel}</Text>
                         {amount !== null && <Ionicons name="chevron-forward" size={11} color={shiftTone.ink} />}
                       </TouchableOpacity>
                     )}
@@ -408,7 +419,7 @@ export default function OwnerHomeLiveWidgets({
               })
             ) : (
               (roster || earned) && (
-                <Text style={[styles.teamNotice, styles.note, { color: shiftTone.ink }]}>
+                <Text style={[styles.teamNotice, styles.note, { color: p.text.secondary }]}>
                   {scheduleAllowed ? 'Открытых и запланированных смен нет' : 'Пока нет сотрудников'}
                 </Text>
               )
@@ -440,7 +451,7 @@ export default function OwnerHomeLiveWidgets({
               style={styles.earningsInfo}
             >
               <Ionicons name="information-circle-outline" size={15} color={shiftTone.ink} />
-              <Text style={[styles.totalLabel, { color: shiftTone.ink }]}>Как считается заработок</Text>
+              <Text style={[styles.note, styles.shrink, { color: p.text.secondary }]}>Как считается заработок</Text>
             </TouchableOpacity>
           )}
         </View>
@@ -456,15 +467,17 @@ export default function OwnerHomeLiveWidgets({
             activeOpacity={0.65}
             style={styles.heading}
           >
-            <Text accessibilityRole="header" style={[styles.title, styles.flex, { color: callTone.ink }]}>
-              Звонки сегодня
-            </Text>
+            <View style={[styles.flex, styles.headingText]}>
+              <Text accessibilityRole="header" style={[styles.title, { color: p.text.primary }]}>
+                Звонки сегодня
+              </Text>
+              {/* /calls is tenant-wide even in a point-specific session. Never imply branch attribution. */}
+              <Text style={[styles.note, { color: p.text.secondary }]}>По всей компании</Text>
+            </View>
             <Ionicons name="chevron-forward" size={14} color={callTone.ink} />
           </TouchableOpacity>
-          {/* /calls is tenant-wide even in a point-specific session. Never imply branch attribution. */}
-          <Text style={[styles.scopeLabel, { color: callTone.quiet }]}>По всей компании</Text>
           {calls.fetchStatus === 'paused' ? (
-            offline(callTone.ink)
+            offline()
           ) : calls.isPending ? (
             <View style={styles.loading} accessibilityLabel="Загружаем звонки">
               <Skeleton height={100} radius={8} />
@@ -473,7 +486,7 @@ export default function OwnerHomeLiveWidgets({
             retry('Звонки не обновились', calls.isFetching, calls.refetch, callTone.ink)
           ) : calls.data.kind === 'disconnected' ? (
             <View style={styles.disconnected}>
-              <Text style={[styles.name, { color: callTone.ink }]}>Телефония не подключена</Text>
+              <Text style={[styles.name, { color: p.text.primary }]}>Телефония не подключена</Text>
               {canConnect && (
                 <TouchableOpacity
                   accessibilityRole="button"
@@ -497,12 +510,12 @@ export default function OwnerHomeLiveWidgets({
                 disabled={!canQuery}
                 onPress={() => openCalls('pending')}
                 activeOpacity={0.6}
-                style={styles.callPending}
+                style={[styles.callPending, { borderTopColor: callTone.divider }]}
               >
-                <Text style={[styles.callCount, { color: callTone.ink }]}>{summary.notCalledBack}</Text>
+                <Text style={[styles.callCount, { color: p.text.primary }]}>{summary.notCalledBack}</Text>
                 <View style={[styles.flex, styles.callPendingText]}>
-                  <Text style={[styles.name, { color: callTone.ink }]}>Без перезвона</Text>
-                  <Text style={[styles.note, { color: callTone.quiet }]}>
+                  <Text style={[styles.name, { color: p.text.primary }]}>Без перезвона</Text>
+                  <Text style={[styles.note, { color: p.text.secondary }]}>
                     {summary.total === 0
                       ? 'Сегодня звонков пока нет'
                       : summary.notCalledBack > 0
@@ -512,7 +525,33 @@ export default function OwnerHomeLiveWidgets({
                 </View>
                 <Ionicons name="chevron-forward" size={18} color={callTone.ink} />
               </TouchableOpacity>
-              <View style={[styles.callMetrics, (fontScale > 1.2 || width < 360) && styles.stacked]}>
+              {pendingCalls.length > 0 && (
+                <View style={styles.callPreviews}>
+                  {pendingCalls.map((call) => (
+                    <TouchableOpacity
+                      key={call.phone}
+                      testID={`owner-home-pending-call-${call.id}`}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${call.name || ownerCallPhoneLabel(call.phone)}. Открыть звонки без перезвона`}
+                      disabled={!canQuery}
+                      onPress={() => openCalls('pending')}
+                      style={styles.callPreview}
+                    >
+                      <View style={[styles.flex, styles.callPendingText]}>
+                        <Text style={[styles.callPreviewName, { color: p.text.primary }]}>
+                          {call.name || ownerCallPhoneLabel(call.phone)}
+                        </Text>
+                        <Text style={[styles.note, { color: p.text.secondary }]}>
+                          {ownerClock(call.date, timezone)} ·{' '}
+                          {call.attempts === 1 ? '1 звонок' : `Звонков: ${call.attempts}`}
+                        </Text>
+                      </View>
+                      <Ionicons name="chevron-forward" size={14} color={callTone.ink} />
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+              <View style={[styles.callMetrics, stackDetails && styles.stacked, { borderTopColor: callTone.divider }]}>
                 {[
                   { label: 'Принятые', count: summary.incoming - summary.missed, filter: 'incoming' as const },
                   { label: 'Пропущено', count: summary.missed, filter: 'missed' as const },
@@ -525,46 +564,20 @@ export default function OwnerHomeLiveWidgets({
                     disabled={!canQuery}
                     onPress={() => openCalls(filter)}
                     activeOpacity={0.6}
-                    style={styles.callMetric}
+                    style={[styles.callMetric, stackDetails && styles.callMetricStacked]}
                   >
-                    <Text style={[styles.callMetricCount, { color: callTone.ink }]}>{count}</Text>
-                    <View style={styles.metricLabel}>
-                      <Text style={[styles.note, { color: callTone.ink }]}>{label}</Text>
+                    <View style={styles.callMetricValue}>
+                      <Text style={[styles.callMetricCount, { color: p.text.primary }]}>{count}</Text>
                       <Ionicons name="chevron-forward" size={12} color={callTone.ink} />
                     </View>
+                    <Text style={[styles.note, styles.shrink, { color: p.text.secondary }]}>{label}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
-              {pendingCalls.length > 0 && (
-                <View style={[styles.callPreviews, { borderTopColor: callTone.divider }]}>
-                  {pendingCalls.map((call) => (
-                    <TouchableOpacity
-                      key={call.phone}
-                      testID={`owner-home-pending-call-${call.id}`}
-                      accessibilityRole="button"
-                      accessibilityLabel={`${call.name || ownerCallPhoneLabel(call.phone)}. Открыть звонки без перезвона`}
-                      disabled={!canQuery}
-                      onPress={() => openCalls('pending')}
-                      style={styles.callPreview}
-                    >
-                      <View style={[styles.flex, styles.callPendingText]}>
-                        <Text numberOfLines={1} style={[styles.callPreviewName, { color: p.text.primary }]}>
-                          {call.name || ownerCallPhoneLabel(call.phone)}
-                        </Text>
-                        <Text style={[styles.callPreviewDetail, { color: callTone.quiet }]}>
-                          {ownerClock(call.date, timezone)} ·{' '}
-                          {call.attempts === 1 ? '1 звонок' : `Звонков: ${call.attempts}`}
-                        </Text>
-                      </View>
-                      <Ionicons name="chevron-forward" size={14} color={callTone.ink} />
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              )}
               <View style={[styles.callTotals, { borderTopColor: callTone.divider }]}>
-                <Text style={[styles.note, { color: callTone.quiet }]}>Всего {summary.total}</Text>
+                <Text style={[styles.note, { color: p.text.secondary }]}>Всего {summary.total}</Text>
                 {summary.incoming > 0 && (
-                  <Text style={[styles.note, { color: callTone.quiet }]}>
+                  <Text style={[styles.note, { color: p.text.secondary }]}>
                     Принято {Math.round(((summary.incoming - summary.missed) / summary.incoming) * 100)}% входящих
                   </Text>
                 )}
@@ -578,49 +591,64 @@ export default function OwnerHomeLiveWidgets({
 }
 
 const styles = StyleSheet.create({
-  panel: { marginTop: 20, borderRadius: 22, overflow: 'hidden', paddingBottom: 4 },
+  panel: {
+    marginTop: ownerWidgetLayout.gap,
+    borderRadius: ownerWidgetLayout.radius,
+    overflow: 'hidden',
+    paddingBottom: 4,
+  },
   heading: {
-    minHeight: 54,
-    paddingHorizontal: 18,
-    paddingVertical: 10,
+    minHeight: ownerWidgetLayout.headerMinHeight,
+    paddingHorizontal: ownerWidgetLayout.inset,
+    paddingVertical: 12,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
   },
-  title: { fontSize: 18, fontWeight: '700', letterSpacing: -0.3 },
-  flex: { flex: 1 },
-  link: { fontSize: 14, fontWeight: '600' },
-  note: { fontSize: 13, lineHeight: 18 },
-  name: { fontSize: 15, lineHeight: 20, fontWeight: '600' },
+  headingText: { gap: 2 },
+  title: ownerWidgetText.title,
+  flex: { flex: 1, minWidth: 0 },
+  shrink: { flexShrink: 1 },
+  link: { ...ownerWidgetText.body, fontWeight: '600' },
+  note: ownerWidgetText.label,
+  name: { ...ownerWidgetText.body, fontWeight: '500' },
   teamHeading: {
-    paddingHorizontal: 16,
-    paddingTop: 7,
-    paddingBottom: 8,
+    paddingHorizontal: ownerWidgetLayout.inset,
+    paddingVertical: 12,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
   },
-  teamHeadingStacked: { flexDirection: 'column', alignItems: 'stretch', gap: 0 },
-  teamHeadingLink: { flex: 1, minWidth: 0, minHeight: 52, justifyContent: 'center', gap: 3, paddingVertical: 5 },
-  teamTitle: { fontSize: 16, lineHeight: 22, fontWeight: '600', letterSpacing: -0.15 },
+  teamHeadingStacked: { flexDirection: 'column', alignItems: 'stretch', gap: 8 },
+  teamHeadingLink: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: ownerWidgetLayout.target,
+    justifyContent: 'center',
+    gap: 3,
+  },
+  teamHeadingLinkStacked: { flex: 0 },
   teamHeadingStatus: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 4 },
+  activeCount: ownerWidgetText.value,
   teamTotal: { flexShrink: 1, alignItems: 'flex-end', gap: 3 },
-  totalLabel: { fontSize: 11, lineHeight: 16 },
-  totalAmount: { fontSize: 17, lineHeight: 23, fontWeight: '600', fontVariant: ['tabular-nums'], textAlign: 'right' },
-  teamNotice: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 12 },
+  teamTotalStacked: { alignItems: 'flex-start' },
+  totalAmount: { ...ownerWidgetText.value, textAlign: 'right' },
+  totalAmountStacked: { textAlign: 'left' },
+  teamNotice: { paddingHorizontal: ownerWidgetLayout.inset, paddingTop: 4, paddingBottom: 12 },
   person: {
-    marginHorizontal: 16,
-    minHeight: 54,
+    marginHorizontal: ownerWidgetLayout.inset,
+    minHeight: 60,
+    borderTopWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 12,
   },
   personStacked: { flexDirection: 'column', alignItems: 'stretch', gap: 0 },
   personIdentity: {
-    minHeight: 54,
+    minHeight: 60,
     flex: 1,
     minWidth: 0,
-    paddingVertical: 7,
+    paddingVertical: 9,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
@@ -628,32 +656,28 @@ const styles = StyleSheet.create({
   personIdentityStacked: { flex: 0 },
   personText: { flex: 1, minWidth: 0, gap: 2 },
   personName: { fontSize: 14, lineHeight: 20, fontWeight: '500' },
-  personStatus: { fontSize: 11, lineHeight: 16 },
   personMoney: {
-    minHeight: 44,
-    minWidth: 44,
+    minHeight: ownerWidgetLayout.target,
+    minWidth: ownerWidgetLayout.target,
     maxWidth: '48%',
-    paddingVertical: 7,
+    paddingVertical: 8,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'flex-end',
     gap: 4,
   },
-  personMoneyStacked: { maxWidth: '100%', alignSelf: 'flex-end', marginLeft: 46 },
+  personMoneyStacked: { maxWidth: '100%', alignSelf: 'stretch', marginLeft: 46 },
   personAmount: {
-    fontSize: 14,
-    lineHeight: 20,
-    fontWeight: '600',
-    fontVariant: ['tabular-nums'],
+    ...ownerWidgetText.smallValue,
     textAlign: 'right',
     flexShrink: 1,
   },
   earningsInfo: {
-    minHeight: 44,
-    paddingHorizontal: 16,
+    minHeight: ownerWidgetLayout.target,
+    paddingHorizontal: ownerWidgetLayout.inset,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
+    gap: 6,
     alignSelf: 'flex-start',
   },
   avatar: {
@@ -665,46 +689,71 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   avatarImage: { width: '100%', height: '100%', borderRadius: 18 },
-  initials: { fontSize: 12, fontWeight: '600' },
+  initials: { ...ownerWidgetText.label, fontWeight: '600' },
   expand: {
-    minHeight: 48,
-    marginTop: 5,
+    minHeight: ownerWidgetLayout.target,
+    marginHorizontal: ownerWidgetLayout.inset,
     borderTopWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: 18,
     flexDirection: 'row',
     gap: 7,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  loading: { paddingHorizontal: 18, paddingTop: 2, paddingBottom: 16 },
-  notice: { paddingHorizontal: 18, paddingBottom: 8, flexDirection: 'row', gap: 12, alignItems: 'center' },
-  action: { minHeight: 48, justifyContent: 'center' },
-  offline: { paddingHorizontal: 18, paddingTop: 4, paddingBottom: 16, gap: 3 },
-  scopeLabel: { paddingHorizontal: 18, fontSize: 12, lineHeight: 16, marginTop: -4, marginBottom: 4 },
-  disconnected: { paddingHorizontal: 18, paddingTop: 12, paddingBottom: 12 },
-  connect: { minHeight: 48, alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6 },
-  callPending: {
-    minHeight: 88,
-    paddingHorizontal: 18,
-    paddingVertical: 12,
+  loading: { paddingHorizontal: ownerWidgetLayout.inset, paddingTop: 2, paddingBottom: 16 },
+  notice: {
+    paddingHorizontal: ownerWidgetLayout.inset,
+    paddingBottom: 8,
+    flexDirection: 'row',
+    gap: 12,
+    alignItems: 'center',
+  },
+  noticeStacked: { flexDirection: 'column', alignItems: 'flex-start', gap: 0 },
+  noticeTextStacked: { flex: 0 },
+  action: { minHeight: ownerWidgetLayout.target, justifyContent: 'center' },
+  offline: { paddingHorizontal: ownerWidgetLayout.inset, paddingTop: 4, paddingBottom: 16, gap: 3 },
+  disconnected: { paddingHorizontal: ownerWidgetLayout.inset, paddingTop: 4, paddingBottom: 12 },
+  connect: {
+    minHeight: ownerWidgetLayout.target,
+    alignSelf: 'flex-start',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 14,
+    gap: 6,
+  },
+  callPending: {
+    minHeight: 76,
+    marginHorizontal: ownerWidgetLayout.inset,
+    paddingVertical: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
   },
   callPendingText: { minWidth: 0, gap: 3 },
-  callMetrics: { flexDirection: 'row', paddingHorizontal: 18, gap: 12 },
+  callMetrics: {
+    flexDirection: 'row',
+    marginHorizontal: ownerWidgetLayout.inset,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    gap: 12,
+  },
   stacked: { flexDirection: 'column', gap: 0 },
-  callMetric: { flex: 1, minHeight: 72, paddingVertical: 10, justifyContent: 'center', gap: 4 },
-  callMetricCount: { fontSize: 21, lineHeight: 27, fontWeight: '600', fontVariant: ['tabular-nums'] },
-  callCount: { fontSize: 30, lineHeight: 36, fontWeight: '700', fontVariant: ['tabular-nums'], letterSpacing: -0.7 },
-  callPreviews: { marginHorizontal: 18, borderTopWidth: StyleSheet.hairlineWidth, paddingVertical: 4 },
+  callMetric: { flex: 1, minWidth: 0, minHeight: 68, paddingVertical: 10, justifyContent: 'center', gap: 3 },
+  callMetricStacked: {
+    flex: 0,
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minHeight: 48,
+    gap: 12,
+  },
+  callMetricValue: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6 },
+  callMetricCount: { ...ownerWidgetText.value, lineHeight: 24 },
+  callCount: ownerWidgetText.metric,
+  callPreviews: { marginHorizontal: ownerWidgetLayout.inset, paddingBottom: 8 },
   callPreview: { minHeight: 54, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 10 },
-  callPreviewName: { fontSize: 14, lineHeight: 19, fontWeight: '500' },
-  callPreviewDetail: { fontSize: 12, lineHeight: 17 },
-  metricLabel: { flexDirection: 'row', alignItems: 'center', gap: 4, flexWrap: 'wrap' },
+  callPreviewName: { fontSize: 14, lineHeight: 20, fontWeight: '500' },
   callTotals: {
-    marginHorizontal: 18,
-    paddingTop: 11,
+    marginHorizontal: ownerWidgetLayout.inset,
+    paddingTop: 10,
     paddingBottom: 12,
     borderTopWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',

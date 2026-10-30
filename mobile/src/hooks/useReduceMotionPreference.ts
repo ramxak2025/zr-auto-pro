@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { AccessibilityInfo } from 'react-native';
 
-/** Start conservatively: never run a burst while the OS preference is loading. */
-export function useReduceMotionPreference(): boolean {
-  const [reduced, setReduced] = useState(true);
+/** Default conservatively; a caller may supply the native synchronous preference. */
+export function useReduceMotionPreference(initialReducedMotion = true): boolean {
+  const [reduced, setReduced] = useState(initialReducedMotion);
   useEffect(() => {
     let active = true;
     let changed = false;
