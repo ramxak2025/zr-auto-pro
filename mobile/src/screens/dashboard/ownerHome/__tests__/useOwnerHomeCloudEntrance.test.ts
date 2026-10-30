@@ -6,6 +6,7 @@ const mockValues: { value: number }[] = [];
 const mockEffects: Effect[] = [];
 const mockPendingEffects: (() => void)[] = [];
 const mockTiming = jest.fn((value: number, _config: unknown) => value);
+const mockDelay = jest.fn((_duration: number, animation: number, _reduceMotion: unknown) => animation);
 const mockCancel = jest.fn();
 let mockRefIndex = 0;
 let mockValueIndex = 0;
@@ -38,6 +39,8 @@ jest.mock('react-native-reanimated', () => ({
     return factory();
   },
   withTiming: (value: number, config: unknown) => mockTiming(value, config),
+  withDelay: (duration: number, animation: number, reduceMotion: unknown) =>
+    mockDelay(duration, animation, reduceMotion),
   cancelAnimation: (value: unknown) => mockCancel(value),
   ReduceMotion: { System: 'system' },
   Easing: { cubic: 'cubic', out: (value: unknown) => value },
@@ -67,15 +70,21 @@ beforeEach(() => {
   mockPendingEffects.length = 0;
 });
 
-test('cold entrance is prepared before the first native frame and plays one finite right-to-left arrival', () => {
+test('cold entrance is prepared before the first native frame and waits for the splash exit before arriving', () => {
+  mockDelay.mockReturnValueOnce(0);
   expect(CloudEntranceHarness({}, false)).toEqual({ opacity: 0, transform: [{ translateX: 180 }] });
   expect(mockTiming).not.toHaveBeenCalled();
   commitEffects();
   expect(mockTiming).toHaveBeenCalledTimes(1);
   expect(mockTiming).toHaveBeenCalledWith(1, { duration: 760, easing: 'cubic', reduceMotion: 'system' });
+  expect(mockDelay).toHaveBeenCalledTimes(1);
+  expect(mockDelay).toHaveBeenCalledWith(240, mockTiming.mock.results[0].value, 'system');
+  expect(mockStyle()).toEqual({ opacity: 0, transform: [{ translateX: 180 }] });
+  mockValues[0].value = 1;
   expect(mockStyle()).toEqual({ opacity: 1, transform: [{ translateX: 0 }] });
   CloudEntranceHarness();
   expect(mockTiming).toHaveBeenCalledTimes(1);
+  expect(mockDelay).toHaveBeenCalledTimes(1);
 });
 
 test('unrelated parent renders and remounted summary children cannot reset or replay an in-flight entrance', () => {
@@ -89,7 +98,7 @@ test('unrelated parent renders and remounted summary children cannot reset or re
   expect(mockStyle()).toEqual({ opacity: 0.5, transform: [{ translateX: 90 }] });
 });
 
-test('a real app activation plays once again after cancellation in the background', () => {
+test('a real app activation plays once again immediately without the cold splash delay', () => {
   CloudEntranceHarness();
   mockValues[0].value = 0.3;
   CloudEntranceHarness({ enabled: false });
@@ -98,6 +107,14 @@ test('a real app activation plays once again after cancellation in the backgroun
   CloudEntranceHarness({ activation: 1 });
   CloudEntranceHarness({ activation: 1 });
   expect(mockTiming).toHaveBeenCalledTimes(2);
+  expect(mockDelay).toHaveBeenCalledTimes(1);
+});
+
+test('a first eligible entrance after a resumed activation has no cold splash delay', () => {
+  CloudEntranceHarness({ enabled: false });
+  CloudEntranceHarness({ activation: 1 });
+  expect(mockTiming).toHaveBeenCalledTimes(1);
+  expect(mockDelay).not.toHaveBeenCalled();
 });
 
 test('navigation and inactive-native-sheet visibility changes cancel motion without replaying it', () => {
@@ -115,9 +132,11 @@ test('an initially hidden screen stays static and runs its first entrance only w
   expect(CloudEntranceHarness({ enabled: false }, false)).toEqual({ opacity: 1, transform: [{ translateX: 0 }] });
   commitEffects();
   expect(mockTiming).not.toHaveBeenCalled();
+  expect(mockDelay).not.toHaveBeenCalled();
   CloudEntranceHarness();
   CloudEntranceHarness();
   expect(mockTiming).toHaveBeenCalledTimes(1);
+  expect(mockDelay).toHaveBeenCalledTimes(1);
 });
 
 test('activations while hidden do not animate, and the latest activation plays once when visible', () => {
@@ -135,8 +154,10 @@ test('Reduce Motion starts in the final position and consumes the activation wit
   commitEffects();
   CloudEntranceHarness({ reducedMotion: false });
   expect(mockTiming).not.toHaveBeenCalled();
+  expect(mockDelay).not.toHaveBeenCalled();
   CloudEntranceHarness({ reducedMotion: false, activation: 1 });
   expect(mockTiming).toHaveBeenCalledTimes(1);
+  expect(mockDelay).not.toHaveBeenCalled();
 });
 
 test('enabling Reduce Motion interrupts a running entrance and stays final when the preference changes back', () => {
@@ -152,8 +173,24 @@ test('enabling Reduce Motion interrupts a running entrance and stays final when 
   expect(mockTiming).toHaveBeenCalledTimes(1);
 });
 
-test('unmount cancels the native animation without scheduling another entrance', () => {
+test('Reduce Motion cancels a pending cold delay and shows the cloud immediately', () => {
+  mockDelay.mockReturnValueOnce(0);
   CloudEntranceHarness();
+  expect(mockStyle()).toEqual({ opacity: 0, transform: [{ translateX: 180 }] });
+  mockCancel.mockClear();
+  CloudEntranceHarness({ reducedMotion: true });
+  expect(mockCancel).toHaveBeenCalledWith(mockValues[0]);
+  expect(mockStyle()).toEqual({ opacity: 1, transform: [{ translateX: 0 }] });
+  CloudEntranceHarness();
+  expect(mockDelay).toHaveBeenCalledTimes(1);
+  expect(mockTiming).toHaveBeenCalledTimes(1);
+});
+
+test('unmount cancels the shared value that owns the full delayed entrance without scheduling another', () => {
+  mockDelay.mockReturnValueOnce(0);
+  CloudEntranceHarness();
+  expect(mockDelay).toHaveBeenCalledTimes(1);
+  expect(mockValues[0].value).toBe(mockDelay.mock.results[0].value);
   mockCancel.mockClear();
   unmount();
   expect(mockCancel).toHaveBeenCalledTimes(1);

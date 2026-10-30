@@ -6,6 +6,7 @@ import {
   ReduceMotion,
   useAnimatedStyle,
   useSharedValue,
+  withDelay,
   withTiming,
 } from 'react-native-reanimated';
 
@@ -32,6 +33,7 @@ export function useOwnerHomeCloudEntrance({
       progress.value = 1;
     } else {
       const shouldEnter = enteredActivation.current !== activation;
+      const isColdEntrance = enteredActivation.current === null && activation === 0;
       // Reduced Motion consumes this activation too. Changing the preference or
       // navigating back must never replay an already presented entrance.
       enteredActivation.current = activation;
@@ -39,11 +41,14 @@ export function useOwnerHomeCloudEntrance({
         progress.value = 1;
       } else {
         progress.value = 0;
-        progress.value = withTiming(1, {
+        const arrival = withTiming(1, {
           duration: 760,
           easing: Easing.out(Easing.cubic),
           reduceMotion: ReduceMotion.System,
         });
+        // The owner screen mounts under the splash's 240ms exit. Keep the
+        // cold arrival visible after it clears; resumed entrances start now.
+        progress.value = isColdEntrance ? withDelay(240, arrival, ReduceMotion.System) : arrival;
       }
     }
     return () => cancelAnimation(progress);
