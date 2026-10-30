@@ -51,7 +51,6 @@ jest.mock('react-native', () => ({
   View: 'View',
   Text: 'Text',
   TouchableOpacity: 'TouchableOpacity',
-  ScrollView: 'NativeScrollView',
   ActivityIndicator: 'ActivityIndicator',
   RefreshControl: 'RefreshControl',
   StyleSheet: { create: (styles: unknown) => styles },
@@ -213,7 +212,9 @@ test('accepted filter count matches rows and horizontally scrolling filters keep
   const tree = render(entry('home-1', 'incoming'));
   expect(rows(tree).map((item) => item.props.call.id)).toEqual(['accepted-zero']);
   expect(button(tree, 'Принятые: 1').props.accessibilityState.selected).toBe(true);
-  expect(nodes(tree).find((node) => node.type === 'NativeScrollView')?.props.horizontal).toBe(true);
+  expect(
+    nodes(tree).find((node) => node.type === 'ScrollView' && node.props.horizontal)?.props.reserveBottomNavigation,
+  ).toBe(false);
   for (const label of ['Все: 3', 'Без перезвона: 1', 'Принятые: 1', 'Пропущенные: 1', 'Исходящие: 1']) {
     expect(button(tree, label).props.style.some((style: { minHeight?: number }) => style?.minHeight === 44)).toBe(true);
   }
@@ -222,7 +223,7 @@ test('accepted filter count matches rows and horizontally scrolling filters keep
 test('a requested filter outside the initial viewport scrolls into view on layout', () => {
   const tree = render(entry('outgoing', 'outgoing'));
   const scrollTo = jest.fn();
-  const scroller = nodes(tree).find((node) => node.type === 'NativeScrollView')!;
+  const scroller = nodes(tree).find((node) => node.type === 'ScrollView' && node.props.horizontal)!;
   scroller.props.ref.current = { scrollTo };
   button(tree, 'Исходящие: 1').props.onLayout({ nativeEvent: { layout: { x: 480 } } });
   expect(scrollTo).toHaveBeenCalledWith({ x: 464, animated: false });

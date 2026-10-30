@@ -1,13 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  ActivityIndicator,
-  RefreshControl,
-  ScrollView as NativeScrollView,
-} from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, RefreshControl } from 'react-native';
 import { setAudioModeAsync } from 'expo-audio';
 import IosScreenHeader from '../components/IosScreenHeader';
 import DateTimePickerModal from '../components/DateTimePickerModal';
@@ -133,7 +125,7 @@ export function CallsJournal({
   // play at a time, tapping a different row swaps which one is open.
   const [playingId, setPlayingId] = useState<string | null>(null);
   const access = useRef({ mounted: true, canView, scope });
-  const tabsRef = useRef<NativeScrollView>(null);
+  const tabsRef = useRef<ScrollView>(null);
   Object.assign(access.current, { canView, scope });
   const current = useCallback(() => access.current.mounted && access.current.canView && scope.isCurrent(), [scope]);
 
@@ -362,9 +354,10 @@ export function CallsJournal({
       )}
 
       {/* Filter tabs */}
-      <NativeScrollView
+      <ScrollView
         ref={tabsRef}
         horizontal
+        reserveBottomNavigation={false}
         showsHorizontalScrollIndicator={false}
         style={styles.tabsScroller}
         contentContainerStyle={styles.tabs}
@@ -416,7 +409,7 @@ export function CallsJournal({
             </TouchableOpacity>
           );
         })}
-      </NativeScrollView>
+      </ScrollView>
 
       {/* Call list */}
       <ScrollView
