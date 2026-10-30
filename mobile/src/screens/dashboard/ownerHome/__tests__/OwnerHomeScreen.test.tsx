@@ -133,6 +133,7 @@ jest.mock('../OwnerHomeDateNavigation', () => 'OwnerHomeDateNavigation');
 jest.mock('../OwnerHomeWidgetSync', () => 'OwnerHomeWidgetSync');
 jest.mock('../OwnerHomeLiveWidgets', () => 'OwnerHomeLiveWidgets');
 jest.mock('../OwnerHomeCash', () => 'OwnerHomeCash');
+jest.mock('../OwnerHomeWidgetActions', () => 'OwnerHomeWidgetActions');
 import OwnerHomeScreen, { OwnerHomeContent } from '../OwnerHomeScreen';
 import { timelineFixture } from '../__fixtures__/timeline';
 
@@ -192,6 +193,31 @@ beforeEach(() => {
         },
   );
 });
+
+test.each(['ready', 'loading', 'error'])(
+  'widget appearance controls remain inside the %s summary and open existing settings',
+  (state) => {
+    if (state !== 'ready')
+      timelineState = {
+        data: undefined,
+        isPending: state === 'loading',
+        isError: state === 'error',
+        isFetching: false,
+      };
+    const tree = render();
+    const surface = nodes(tree).find(
+      (node) => node.type === (state === 'ready' ? 'OwnerHomeSummary' : 'OwnerHomeSummaryPlaceholder'),
+    )!;
+    const controls = surface.props.widgetActions as React.ReactElement<any>;
+    expect(controls.type).toBe('OwnerHomeWidgetActions');
+    expect(controls.props.enabled).toBe(true);
+    expect(controls.props.isCurrent()).toBe(true);
+    controls.props.onSettings();
+    expect(nodes(render()).find((node) => node.type === 'Modal')!.props.visible).toBe(true);
+    const toolbar = nodes(tree).find((node) => node.type === 'OwnerHomeToolbar')!;
+    expect(toolbar.props.onSettings).toBeUndefined();
+  },
+);
 
 test('first timeline request keeps scope and asks the server for today without a device date', async () => {
   render();
