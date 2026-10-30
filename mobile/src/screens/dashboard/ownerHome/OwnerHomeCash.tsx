@@ -343,7 +343,7 @@ export default function OwnerHomeCash({
 }
 
 const styles = StyleSheet.create({
-  panel: { borderRadius: 22, overflow: 'hidden', marginBottom: 14 },
+  panel: { borderRadius: 22, overflow: 'hidden', marginTop: 14 },
   heading: {
     minHeight: 56,
     paddingHorizontal: 18,
