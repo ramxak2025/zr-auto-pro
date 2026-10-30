@@ -120,7 +120,15 @@ jest.mock('../OwnerHomeToolbar', () => ({
   OwnerHomeToolbar: 'OwnerHomeToolbar',
   OwnerHomePeriodControl: 'OwnerHomePeriodControl',
 }));
-jest.mock('../OwnerHomeTimelineChart', () => 'OwnerHomeTimelineChart');
+jest.mock('../OwnerHomeSummary', () => ({
+  __esModule: true,
+  default: 'OwnerHomeSummary',
+  OwnerHomeSummaryPlaceholder: 'OwnerHomeSummaryPlaceholder',
+}));
+// Any runtime import of the discarded chart fails this screen suite.
+jest.mock('../OwnerHomeTimelineChart', () => {
+  throw new Error('Owner home must not load the chart');
+});
 jest.mock('../OwnerHomeDateNavigation', () => 'OwnerHomeDateNavigation');
 jest.mock('../OwnerHomeWidgetSync', () => 'OwnerHomeWidgetSync');
 jest.mock('../OwnerHomeLiveWidgets', () => 'OwnerHomeLiveWidgets');
@@ -208,12 +216,12 @@ test.each([
     const widget = nodes(tree).find((node) => node.type === 'OwnerHomeWidgetSync')!;
     const types = nodes(tree).map((node) => node.type);
     expect(types.indexOf('OwnerHomeDateNavigation')).toBeGreaterThan(types.indexOf('OwnerHomePeriodControl'));
-    expect(types.indexOf('OwnerHomeDateNavigation')).toBeLessThan(types.indexOf('OwnerHomeTimelineChart'));
+    expect(types.indexOf('OwnerHomeDateNavigation')).toBeLessThan(types.indexOf('OwnerHomeSummary'));
     (dateNavigation(tree).props.onPrevious as () => void)();
     mockQuery.mockClear();
     tree = render();
     expect(dateNavigation(tree).props).toMatchObject({ period, selectedDate: previous, todayDate: '2026-10-29' });
-    expect(nodes(tree).some((node) => node.type === 'OwnerHomeTimelineChart')).toBe(false);
+    expect(nodes(tree).some((node) => node.type === 'OwnerHomeSummary')).toBe(false);
     expect(nodes(tree).some((node) => String(node.props.accessibilityLabel ?? '').includes('Открыть клиентов'))).toBe(
       false,
     );
@@ -326,12 +334,12 @@ test('history and period changes keep native-widget sync mounted independently; 
   cleanup();
 });
 
-test('date loading/error and an old successful payload remove plot, numbers, tooltip and detail hit targets', () => {
-  expect(nodes(render()).some((node) => node.type === 'OwnerHomeTimelineChart')).toBe(true);
+test('date loading/error and an old successful payload remove the summary, money and detail hit targets', () => {
+  expect(nodes(render()).some((node) => node.type === 'OwnerHomeSummary')).toBe(true);
   chooseCalendarDate('2026-10-28');
   // Even a misbehaving cache returning the old success must not render it under the new date.
   let tree = render();
-  expect(nodes(tree).some((node) => node.type === 'OwnerHomeTimelineChart')).toBe(false);
+  expect(nodes(tree).some((node) => node.type === 'OwnerHomeSummary')).toBe(false);
   expect(nodes(tree).some((node) => String(node.props.accessibilityLabel ?? '').includes('Открыть клиентов'))).toBe(
     false,
   );
@@ -339,11 +347,11 @@ test('date loading/error and an old successful payload remove plot, numbers, too
   mockQuery.mockClear();
   tree = render();
   expect(mockQuery.mock.calls.find(([q]) => q.queryKey.includes('visits'))![0].enabled).toBe(false);
-  expect(nodes(tree).some((node) => node.type === 'OwnerHomeTimelineChart')).toBe(false);
+  expect(nodes(tree).some((node) => node.type === 'OwnerHomeSummary')).toBe(false);
   timelineState = { data: undefined, isPending: false, isError: true, isFetching: false };
   tree = render();
-  expect(nodes(tree).some((node) => node.props.text === 'Сводка не загрузилась')).toBe(true);
-  expect(nodes(tree).some((node) => node.type === 'OwnerHomeTimelineChart')).toBe(false);
+  expect(nodes(tree).some((node) => node.props.errorMessage === 'Сводка не загрузилась')).toBe(true);
+  expect(nodes(tree).some((node) => node.type === 'OwnerHomeSummary')).toBe(false);
 });
 
 test('clients and rapid-return dialogs use the exact timeline visitsRange for week/month/year', async () => {
@@ -373,20 +381,74 @@ test('clients and rapid-return dialogs use the exact timeline visitsRange for we
 test('range detail uses selected totals while the footer retains explicit canonical month context', () => {
   selectPeriod('year');
   timelineState.data = timelineFixture('year');
-  const chart = nodes(render()).find((node) => node.type === 'OwnerHomeTimelineChart')!;
-  (chart.props.onRangeDetails as () => void)();
+  const summary = nodes(render()).find((node) => node.type === 'OwnerHomeSummary')!;
+  (summary.props.onRangeDetails as () => void)();
   let dialog = nodes(render()).find((node) => node.type === 'OwnerHomeDetails')!;
   expect(dialog.props.detail).toMatchObject({
     kind: 'timeline',
     timeline: { range: { period: 'year' }, totals: { netProfit: 3900000 } },
   });
-  (chart.props.onMonthDetails as () => void)();
+  (summary.props.onMonthDetails as () => void)();
   dialog = nodes(render()).find((node) => node.type === 'OwnerHomeDetails')!;
   expect(dialog.props.detail).toMatchObject({
     kind: 'profit',
     period: 'month',
     profit: { current: { mtd: { netProfit: 559500 } } },
   });
+  (summary.props.onInfo as () => void)();
+  dialog = nodes(render()).find((node) => node.type === 'OwnerHomeDetails')!;
+  expect(dialog.props.detail).toMatchObject({ kind: 'timeline-info', timeline: timelineState.data });
+});
+
+test.each(['expired-scope', 'blur', 'background', 'period-change', 'date-change', 'pending', 'error', 'new-response'])(
+  'retained summary callbacks cannot open any financial detail after %s',
+  (event) => {
+    const tree = render();
+    const summary = nodes(tree).find((node) => node.type === 'OwnerHomeSummary')!;
+    if (event === 'expired-scope') mockScopeCurrent = false;
+    if (event === 'blur') {
+      mockFocused = false;
+      render();
+    }
+    if (event === 'background') jest.requireMock('react-native').AppState.currentState = 'background';
+    if (event === 'period-change') {
+      // Guard the gap before React renders the newly requested period.
+      const control = nodes(tree).find((node) => node.type === 'OwnerHomePeriodControl')!;
+      (control.props.onChange as (value: string) => void)('month');
+    }
+    if (event === 'date-change') (dateNavigation(tree).props.onPrevious as () => void)();
+    if (event === 'pending' || event === 'error') {
+      timelineState = {
+        data: timelineState.data,
+        isPending: event === 'pending',
+        isError: event === 'error',
+        isFetching: event === 'pending',
+      };
+      render();
+    }
+    if (event === 'new-response') {
+      timelineState.data = timelineFixture();
+      render();
+    }
+    for (const action of ['onRangeDetails', 'onMonthDetails', 'onInfo']) (summary.props[action] as () => void)();
+    expect(nodes(render()).some((node) => node.type === 'OwnerHomeDetails')).toBe(false);
+  },
+);
+
+test('a changed period remains in a compact loading state until its validated response arrives', () => {
+  const initial = nodes(render()).find((node) => node.type === 'OwnerHomeWidgetSync')!;
+  selectPeriod('month');
+  timelineState = { data: undefined, isPending: true, isError: false, isFetching: true };
+  let tree = render();
+  const placeholder = nodes(tree).find((node) => node.type === 'OwnerHomeSummaryPlaceholder')!;
+  expect(placeholder.props.errorMessage).toBeUndefined();
+  expect(nodes(tree).some((node) => node.type === 'OwnerHomeSummary')).toBe(false);
+  expect(nodes(tree).find((node) => node.type === 'OwnerHomeWidgetSync')!.props).toEqual(initial.props);
+  timelineState = { data: timelineFixture('month'), isPending: false, isError: false, isFetching: false };
+  tree = render();
+  expect(nodes(tree).find((node) => node.type === 'OwnerHomeSummary')!.props.data).toBe(timelineState.data);
+  expect(nodes(tree).some((node) => node.type === 'OwnerHomeSummaryPlaceholder')).toBe(false);
+  expect(nodes(tree).some((node) => node.type === 'OwnerHomeTimelineChart')).toBe(false);
 });
 
 test('disabled build and non-director roles never enable pilot queries', () => {
@@ -406,7 +468,7 @@ test('disabled build and non-director roles never enable pilot queries', () => {
   }
 });
 
-test('point switch remounts local range, tooltip and modal state under a different owner key', () => {
+test('point switch remounts local range and modal state under a different owner key', () => {
   const first = OwnerHomeScreen();
   mockAuth.user.currentPointId = 'point-B';
   const second = OwnerHomeScreen();

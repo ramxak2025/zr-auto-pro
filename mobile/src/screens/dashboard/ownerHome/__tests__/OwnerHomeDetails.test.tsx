@@ -38,6 +38,7 @@ jest.mock('../../../../contexts/ThemeContext', () => ({
 jest.mock('../../../../api/services', () => ({ reportsApi: {} }));
 jest.mock('../OwnerHomeOperational', () => ({ OwnerHomeRetry: 'OwnerHomeRetry' }));
 import OwnerHomeDetails, { ReturnVehicle } from '../OwnerHomeDetails';
+import { timelineFixture } from '../__fixtures__/timeline';
 
 const fixture: OwnerHomeRapidReturnRow = {
   carId: 'car',
@@ -62,10 +63,41 @@ function nodes(node: React.ReactNode): React.ReactElement<Record<string, unknown
   if (!React.isValidElement<Record<string, unknown>>(node)) return [];
   return [node, ...React.Children.toArray(node.props.children as React.ReactNode).flatMap(nodes)];
 }
+function text(node: React.ReactNode): string {
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (!React.isValidElement<Record<string, unknown>>(node)) return '';
+  return React.Children.toArray(node.props.children as React.ReactNode)
+    .map(text)
+    .join('');
+}
 beforeEach(() => {
   mockPermission.mockReturnValue(true);
   mockDispatch.mockClear();
 });
+
+test.each(['timeline', 'timeline-info'] as const)(
+  '%s explains the summary and preserves the current-plan basis',
+  (kind) => {
+    const data = timelineFixture();
+    const dialog = OwnerHomeDetails({
+      detail: { kind, timeline: data },
+      scope: { key: ['account'], isCurrent: () => true },
+      onClose: jest.fn(),
+    });
+    const detail = nodes(dialog).find(
+      (node) => typeof node.type === 'function' && node.type.name === 'TimelineDetails',
+    )!;
+    const content = (detail.type as React.FunctionComponent<Record<string, unknown>>)(detail.props);
+    const copy = text(dialog) + text(content as React.ReactNode);
+    expect(copy).toContain(data.basisLabel);
+    expect(copy).toContain(data.basisDetail);
+    expect(copy).toContain('В сводке — чистая прибыль после расходов и оборот за выбранный период');
+    expect(copy).toContain('такими же датами прошлого месяца');
+    expect(copy).toContain('Мотивация уже входит в премии и не вычитается повторно');
+    expect(copy).not.toMatch(/график|первый час|Над ним/);
+    if (kind === 'timeline-info') expect(copy).toContain('О расчёте сводки');
+  },
+);
 
 test('a real detail open waits for native dismissal and addresses CheckDetail inside the Checks tab', () => {
   const onClose = jest.fn();

@@ -28,7 +28,7 @@ import { useReduceMotionPreference } from '../../../hooks/useReduceMotionPrefere
 import { OwnerHomeToolbar, OwnerHomePeriodControl } from './OwnerHomeToolbar';
 import OwnerHomeDateNavigation from './OwnerHomeDateNavigation';
 import { ownerPeriodNavigation } from './ownerHomePeriodNavigation';
-import OwnerHomeTimelineChart from './OwnerHomeTimelineChart';
+import OwnerHomeSummary, { OwnerHomeSummaryPlaceholder } from './OwnerHomeSummary';
 import { ownerHomeSurfaces } from './ownerHomeSurfaces';
 import { ownerTimelineModel } from './ownerHomeTimelineModel';
 import { prefKey, usePreference } from '../../../hooks/usePreference';
@@ -123,6 +123,8 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
   const model = useMemo(() => (response ? ownerTimelineModel(response, period, asOf) : null), [response, period, asOf]);
   const financialReady = !!response && !!model && !timeline.isPending && !timeline.isError;
   const data = financialReady ? response : undefined;
+  const financialContext = useRef(data);
+  financialContext.current = data;
   const invalidTimeline = !!response && !model;
   const calendarContext = useRef<Pick<OwnerHomeTimeline, 'todayDate' | 'timezone'> | null>(null);
   if (data) calendarContext.current = { todayDate: data.todayDate, timezone: data.timezone };
@@ -149,6 +151,16 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
     return current.scopeKey === scopeKey && current.enabled && scope.isCurrent() && AppState.currentState === 'active'
       ? current
       : null;
+  };
+  const openFinancialDetail = (next: OwnerHomeDetail) => {
+    const current = currentNavigation();
+    if (
+      data &&
+      financialContext.current === data &&
+      current?.period === data.range.period &&
+      current.selectedDate === data.canonicalDate
+    )
+      setDetail(next);
   };
   const chooseDate = (date: string) => {
     const current = currentNavigation();
@@ -249,44 +261,28 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
           onCalendar={openCalendar}
         />
         {data && model ? (
-          <OwnerHomeTimelineChart
+          <OwnerHomeSummary
             key={`${period}:${asOf ?? 'today'}`}
             data={data}
-            model={model}
             scope={scope}
             active={enabled}
             reducedMotion={reducedMotion}
-            onRangeDetails={() => setDetail({ kind: 'timeline', timeline: data })}
-            onMonthDetails={() => setDetail({ kind: 'profit', period: 'month', profit: data.footer })}
-            onInfo={() => setDetail({ kind: 'timeline-info', timeline: data })}
+            onRangeDetails={() => openFinancialDetail({ kind: 'timeline', timeline: data })}
+            onMonthDetails={() => openFinancialDetail({ kind: 'profit', period: 'month', profit: data.footer })}
+            onInfo={() => openFinancialDetail({ kind: 'timeline-info', timeline: data })}
           />
         ) : (
-          <View style={[styles.financePlaceholder, { backgroundColor: p.bg.card }]}>
-            <Text style={[styles.placeholderCaption, { color: p.text.secondary }]}>
-              {selectedDate
-                ? ownerDateLabel(selectedDate, selectedDate.slice(0, 4) !== calendarMeta?.todayDate.slice(0, 4))
-                : 'Период сервиса'}
-            </Text>
-            {timeline.isError || invalidTimeline ? (
-              <OwnerHomeRetry
-                text={invalidTimeline ? 'Данные графика не совпали с периодом' : 'Сводка не загрузилась'}
-                busy={timeline.isFetching}
-                onRetry={timeline.refetch}
-              />
-            ) : (
-              <View
-                accessibilityRole="progressbar"
-                accessibilityLabel="Загружается выбранный период"
-                style={styles.financeLoading}
-              >
-                <View style={[styles.financeSkeleton, { height: 180, backgroundColor: p.bg.muted }]} />
-                <View style={{ flexDirection: 'row', gap: 14 }}>
-                  <View style={[styles.financeSkeleton, { height: 44, flex: 1, backgroundColor: p.bg.muted }]} />
-                  <View style={[styles.financeSkeleton, { height: 44, flex: 1, backgroundColor: p.bg.muted }]} />
-                </View>
-              </View>
-            )}
-          </View>
+          <OwnerHomeSummaryPlaceholder
+            errorMessage={
+              timeline.isError || invalidTimeline
+                ? invalidTimeline
+                  ? 'Данные сводки не совпали с периодом'
+                  : 'Сводка не загрузилась'
+                : undefined
+            }
+            retrying={timeline.isFetching}
+            onRetry={timeline.refetch}
+          />
         )}
 
         <View style={[styles.clients, { backgroundColor: clientTone.background }]}>
@@ -435,10 +431,6 @@ const styles = StyleSheet.create({
   statusBarScrim: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 21 },
   bottomSafe: { position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 20 },
   content: { paddingHorizontal: 17, paddingBottom: 24 },
-  financePlaceholder: { minHeight: 360, borderRadius: 18, padding: 14, justifyContent: 'space-between' },
-  placeholderCaption: { fontSize: 12, lineHeight: 17 },
-  financeLoading: { gap: 12, paddingVertical: 14 },
-  financeSkeleton: { borderRadius: 7 },
   clients: { marginTop: 14, borderRadius: 18, overflow: 'hidden' },
   clientHeading: {
     minHeight: 44,
