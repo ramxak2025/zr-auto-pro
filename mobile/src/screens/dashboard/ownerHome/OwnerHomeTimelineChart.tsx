@@ -56,7 +56,9 @@ export default function OwnerHomeTimelineChart({
   const [cardWidth, setCardWidth] = useState(Math.max(260, windowWidth - 34));
   const [inspection, setInspection] = useState<{ identity: string; index: number } | null>(null);
   const content = useSharedValue(reducedMotion ? 1 : 0),
-    draw = useSharedValue(reducedMotion ? 1 : 0);
+    draw = useSharedValue(reducedMotion ? 1 : 0),
+    fill = useSharedValue(reducedMotion ? 1 : 0),
+    focus = useSharedValue(1);
   const selectedIndex = useSharedValue(-1),
     selectedIdentity = useSharedValue('');
   const revealed = useRef(false);
@@ -91,9 +93,11 @@ export default function OwnerHomeTimelineChart({
   useEffect(() => {
     cancelAnimation(content);
     cancelAnimation(draw);
+    cancelAnimation(fill);
     if (!active || reducedMotion || revealed.current) {
       content.value = 1;
       draw.value = 1;
+      fill.value = 1;
       return;
     }
     revealed.current = true;
@@ -109,7 +113,14 @@ export default function OwnerHomeTimelineChart({
       },
       draw: () => {
         draw.value = withTiming(1, {
-          duration: 450,
+          duration: 720,
+          easing: Easing.out(Easing.cubic),
+          reduceMotion: ReduceMotion.System,
+        });
+      },
+      settle: () => {
+        fill.value = withTiming(1, {
+          duration: 320,
           easing: Easing.out(Easing.cubic),
           reduceMotion: ReduceMotion.System,
         });
@@ -119,16 +130,18 @@ export default function OwnerHomeTimelineChart({
       stop();
       cancelAnimation(content);
       cancelAnimation(draw);
+      cancelAnimation(fill);
+      cancelAnimation(focus);
     };
-  }, [active, reducedMotion, model.identity, content, draw]);
+  }, [active, reducedMotion, model.identity, content, draw, fill, focus]);
   const contentStyle = useAnimatedStyle(() => ({
     opacity: content.value,
     transform: [{ translateY: (1 - content.value) * 6 }],
   }));
   const revenueStroke = useAnimatedProps(() => ({ strokeDashoffset: geometry.revenuePath.length * (1 - draw.value) }));
   const profitStroke = useAnimatedProps(() => ({ strokeDashoffset: geometry.profitPath.length * (1 - draw.value) }));
-  const endpoint = useAnimatedProps(() => ({ opacity: draw.value }));
-  const areaProps = useAnimatedProps(() => ({ opacity: draw.value }));
+  const endpoint = useAnimatedProps(() => ({ opacity: Math.max(0, (draw.value - 0.75) * 4) }));
+  const areaProps = useAnimatedProps(() => ({ opacity: fill.value }));
   const lineProps = useAnimatedProps(() => {
     const i = selectedIndex.value,
       valid = active && selectedIdentity.value === signature && i >= 0 && i < geometry.xs.length;
@@ -145,6 +158,26 @@ export default function OwnerHomeTimelineChart({
       valid = active && selectedIdentity.value === signature && i >= 0 && i < geometry.profit.length;
     return { cx: valid ? geometry.profit[i].x : 0, cy: valid ? geometry.profit[i].y : 0, opacity: valid ? 1 : 0 };
   });
+  const revenueHalo = useAnimatedProps(() => {
+    const i = selectedIndex.value,
+      valid = active && selectedIdentity.value === signature && i >= 0 && i < geometry.revenue.length;
+    return {
+      cx: valid ? geometry.revenue[i].x : 0,
+      cy: valid ? geometry.revenue[i].y : 0,
+      r: 5 + focus.value * 6,
+      opacity: valid ? 0.17 * focus.value : 0,
+    };
+  });
+  const profitHalo = useAnimatedProps(() => {
+    const i = selectedIndex.value,
+      valid = active && selectedIdentity.value === signature && i >= 0 && i < geometry.profit.length;
+    return {
+      cx: valid ? geometry.profit[i].x : 0,
+      cy: valid ? geometry.profit[i].y : 0,
+      r: 5 + focus.value * 6,
+      opacity: valid ? 0.2 * focus.value : 0,
+    };
+  });
   const inspect = useCallback((index: number, identity: string) => {
     if (live.current.active && live.current.scope.isCurrent() && identity === live.current.signature)
       setInspection(index < 0 ? null : { identity, index });
@@ -158,6 +191,14 @@ export default function OwnerHomeTimelineChart({
       selectedIdentity.value = signature;
       if (index !== selectedIndex.value || identityChanged) {
         selectedIndex.value = index;
+        cancelAnimation(focus);
+        focus.value = reducedMotion ? 1 : 0;
+        if (!reducedMotion)
+          focus.value = withTiming(1, {
+            duration: 220,
+            easing: Easing.out(Easing.cubic),
+            reduceMotion: ReduceMotion.System,
+          });
         runOnJS(inspect)(index, signature);
       }
     };
@@ -175,7 +216,18 @@ export default function OwnerHomeTimelineChart({
         if (success) move(event.x, true);
       });
     return Gesture.Exclusive(pan, tap);
-  }, [active, model.points.length, geometry.xs, plotWidth, signature, selectedIndex, selectedIdentity, inspect]);
+  }, [
+    active,
+    model.points.length,
+    geometry.xs,
+    plotWidth,
+    signature,
+    selectedIndex,
+    selectedIdentity,
+    inspect,
+    focus,
+    reducedMotion,
+  ]);
   const accessibilityInspect = (direction: number) => {
     const current = inspection?.identity === signature ? inspection.index : -1;
     const index = Math.max(0, Math.min(model.points.length - 1, current + direction));
@@ -314,6 +366,8 @@ export default function OwnerHomeTimelineChart({
                 strokeWidth={1}
                 animatedProps={lineProps}
               />
+              <AnimatedCircle fill="#e9f1ff" animatedProps={revenueHalo} />
+              <AnimatedCircle fill="#a5f0cc" animatedProps={profitHalo} />
               <AnimatedCircle r={4.5} fill="#1b44ad" stroke="#e9f1ff" strokeWidth={2} animatedProps={revenueDot} />
               <AnimatedCircle r={4.5} fill="#a5f0cc" animatedProps={profitDot} />
             </G>

@@ -14,11 +14,13 @@ export function startOwnerHomeSequence({
   isCurrent,
   reveal,
   draw,
+  settle,
 }: {
   reducedMotion: boolean;
   isCurrent: () => boolean;
   reveal: () => void;
   draw: () => void;
+  settle?: () => void;
 }): () => void {
   let alive = true;
   const invoke = (callback: () => void) => () => {
@@ -27,6 +29,7 @@ export function startOwnerHomeSequence({
   if (reducedMotion) {
     invoke(reveal)();
     invoke(draw)();
+    if (settle) invoke(settle)();
     return () => {
       alive = false;
     };
@@ -37,12 +40,15 @@ export function startOwnerHomeSequence({
       .then((engine) => {
         if (!alive || !isCurrent()) return;
         timeline = engine.timeline({ paused: true });
-        timeline.call(invoke(reveal), [], 0).call(invoke(draw), [], 0.05).play(0);
+        timeline.call(invoke(reveal), [], 0).call(invoke(draw), [], 0.05);
+        if (settle) timeline.call(invoke(settle), [], 0.4);
+        timeline.play(0);
       })
       .catch(() => {
         // Animation is noncritical: exact validated data must remain visible if loading its scheduler fails.
         invoke(reveal)();
         invoke(draw)();
+        if (settle) invoke(settle)();
       });
   return () => {
     alive = false;

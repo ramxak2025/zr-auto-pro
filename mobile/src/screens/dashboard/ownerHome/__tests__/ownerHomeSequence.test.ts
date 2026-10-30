@@ -85,3 +85,31 @@ test('an invalidated scope before lazy import resolves creates no timeline', asy
   await settleImport();
   expect(mockCreate).not.toHaveBeenCalled();
 });
+
+test('the final fill stage cannot run after a period switch or cancellation', async () => {
+  const settle = jest.fn();
+  let current = true;
+  const stop = startOwnerHomeSequence({
+    reducedMotion: false,
+    isCurrent: () => current,
+    reveal: jest.fn(),
+    draw: jest.fn(),
+    settle,
+  });
+  await settleImport();
+  expect(mockCallbacks).toHaveLength(3);
+  current = false;
+  mockCallbacks[2]();
+  expect(settle).not.toHaveBeenCalled();
+  stop();
+  current = true;
+  mockCallbacks[2]();
+  expect(settle).not.toHaveBeenCalled();
+});
+
+test('reduced motion exposes the final fill immediately without starting the ticker', () => {
+  const settle = jest.fn();
+  startOwnerHomeSequence({ reducedMotion: true, isCurrent: () => true, reveal: jest.fn(), draw: jest.fn(), settle });
+  expect(settle).toHaveBeenCalledTimes(1);
+  expect(mockCreate).not.toHaveBeenCalled();
+});
