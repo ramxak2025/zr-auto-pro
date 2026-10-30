@@ -268,7 +268,11 @@ export default function OwnerHomeLiveWidgets({
   return (
     <>
       {(scheduleAllowed || salaryAllowed) && (
-        <View testID="owner-home-team" style={[styles.panel, { backgroundColor: shiftTone.background }]}>
+        <View
+          key={`team-type-${fontScale}`}
+          testID="owner-home-team"
+          style={[styles.panel, { backgroundColor: shiftTone.background }]}
+        >
           <View style={[styles.teamHeading, stackTeamHeader && styles.teamHeadingStacked]}>
             <TouchableOpacity
               accessibilityRole="button"
@@ -457,7 +461,11 @@ export default function OwnerHomeLiveWidgets({
         </View>
       )}
       {callsAllowed && (
-        <View testID="owner-home-live-calls" style={[styles.panel, { backgroundColor: callTone.background }]}>
+        <View
+          key={`calls-type-${fontScale}`}
+          testID="owner-home-live-calls"
+          style={[styles.panel, { backgroundColor: callTone.background }]}
+        >
           <TouchableOpacity
             accessibilityRole="button"
             accessibilityLabel="Звонки сегодня. Открыть журнал звонков"
