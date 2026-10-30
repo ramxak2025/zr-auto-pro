@@ -12,6 +12,7 @@ const mockVisitsApi = jest.fn();
 const mockInvalidate = jest.fn(() => Promise.resolve());
 const mockFocusEffect = jest.fn();
 let mockFocused = true;
+let mockScopeCurrent = true;
 const mockConstants = { expoConfig: { extra: { ownerHomePilot: true as unknown } } };
 const mockAuth = {
   user: { id: 'user-A', tenantId: 'tenant-A', currentPointId: 'point-A', role: 'director', permissions: {} },
@@ -120,12 +121,17 @@ jest.mock('../OwnerHomeToolbar', () => ({
   OwnerHomePeriodControl: 'OwnerHomePeriodControl',
 }));
 jest.mock('../OwnerHomeTimelineChart', () => 'OwnerHomeTimelineChart');
+jest.mock('../OwnerHomeDateNavigation', () => 'OwnerHomeDateNavigation');
 jest.mock('../OwnerHomeWidgetSync', () => 'OwnerHomeWidgetSync');
+jest.mock('../OwnerHomeLiveWidgets', () => 'OwnerHomeLiveWidgets');
 import OwnerHomeScreen, { OwnerHomeContent } from '../OwnerHomeScreen';
 import { timelineFixture } from '../__fixtures__/timeline';
 
 let timelineState: { data?: OwnerHomeTimeline; isPending: boolean; isError: boolean; isFetching: boolean };
-const scope = { key: ['account-A', 'tenant-A', 'user-A', 'point-A', 1, 7, 'Europe/Moscow'], isCurrent: () => true };
+const scope = {
+  key: ['account-A', 'tenant-A', 'user-A', 'point-A', 1, 7, 'Europe/Moscow'],
+  isCurrent: () => mockScopeCurrent,
+};
 function render() {
   mockStateIndex = 0;
   mockRefIndex = 0;
@@ -146,6 +152,9 @@ function selectPeriod(period: 'day' | 'week' | 'month' | 'year') {
   const control = nodes(render()).find((node) => node.type === 'OwnerHomePeriodControl')!;
   (control.props.onChange as (period: string) => void)(period);
 }
+function dateNavigation(tree = render()) {
+  return nodes(tree).find((node) => node.type === 'OwnerHomeDateNavigation')!;
+}
 beforeEach(() => {
   jest.clearAllMocks();
   mockStates.length = 0;
@@ -157,6 +166,7 @@ beforeEach(() => {
   mockAuth.user.role = 'director';
   mockAuth.user.currentPointId = 'point-A';
   mockFocused = true;
+  mockScopeCurrent = true;
   timelineState = { data: timelineFixture(), isPending: false, isError: false, isFetching: false };
   mockTimelineApi.mockResolvedValue({ data: timelineFixture() });
   mockVisitsApi.mockResolvedValue({
@@ -182,6 +192,108 @@ test('first timeline request keeps scope and asks the server for today without a
   await options.queryFn();
   expect(mockTimelineApi).toHaveBeenCalledWith({ period: 'day' });
   expect(mockQuery.mock.calls.some(([q]) => q.queryKey.includes('profit'))).toBe(false);
+});
+
+test.each([
+  ['day', '2026-10-28'],
+  ['week', '2026-10-25'],
+  ['month', '2026-09-30'],
+  ['year', '2025-12-31'],
+] as const)(
+  '%s arrows request the adjacent period and hide old money before the response',
+  async (period, previous) => {
+    selectPeriod(period);
+    timelineState.data = timelineFixture(period);
+    let tree = render();
+    const widget = nodes(tree).find((node) => node.type === 'OwnerHomeWidgetSync')!;
+    const types = nodes(tree).map((node) => node.type);
+    expect(types.indexOf('OwnerHomeDateNavigation')).toBeGreaterThan(types.indexOf('OwnerHomePeriodControl'));
+    expect(types.indexOf('OwnerHomeDateNavigation')).toBeLessThan(types.indexOf('OwnerHomeTimelineChart'));
+    (dateNavigation(tree).props.onPrevious as () => void)();
+    mockQuery.mockClear();
+    tree = render();
+    expect(dateNavigation(tree).props).toMatchObject({ period, selectedDate: previous, todayDate: '2026-10-29' });
+    expect(nodes(tree).some((node) => node.type === 'OwnerHomeTimelineChart')).toBe(false);
+    expect(nodes(tree).some((node) => String(node.props.accessibilityLabel ?? '').includes('Открыть клиентов'))).toBe(
+      false,
+    );
+    const timelineQuery = mockQuery.mock.calls.find(([q]) => q.queryKey.includes('timeline'))![0];
+    expect(timelineQuery.queryKey).toEqual(['owner-home', ...scope.key, 'timeline', period, previous]);
+    expect(timelineQuery.refetchInterval).toBe(false);
+    expect(mockQuery.mock.calls.find(([q]) => q.queryKey.includes('visits'))![0].enabled).toBe(false);
+    await timelineQuery.queryFn();
+    expect(mockTimelineApi).toHaveBeenLastCalledWith({ period, asOf: previous });
+    expect(nodes(tree).find((node) => node.type === 'OwnerHomeWidgetSync')!.props).toEqual(widget.props);
+    (dateNavigation(tree).props.onNext as () => void)();
+    mockQuery.mockClear();
+    tree = render();
+    const currentQuery = mockQuery.mock.calls.find(([q]) => q.queryKey.includes('timeline'))![0];
+    expect(currentQuery.queryKey.slice(-2)).toEqual([period, 'today']);
+    expect(currentQuery.refetchInterval).toBe(60_000);
+    expect(dateNavigation(tree).props.selectedDate).toBe('2026-10-29');
+    (dateNavigation(tree).props.onNext as () => void)();
+    expect(dateNavigation().props.selectedDate).toBe('2026-10-29');
+  },
+);
+
+test('two quick previous taps advance twice before rendering, and today restores the live query', () => {
+  const previous = dateNavigation().props.onPrevious as () => void;
+  previous();
+  previous();
+  expect(dateNavigation().props.selectedDate).toBe('2026-10-27');
+  (dateNavigation().props.onToday as () => void)();
+  expect(dateNavigation().props.selectedDate).toBe('2026-10-29');
+  expect(
+    mockQuery.mock.calls
+      .filter(([q]) => q.queryKey.includes('timeline'))
+      .at(-1)![0]
+      .queryKey.at(-1),
+  ).toBe('today');
+});
+
+test('an arrow callback from the old period cannot page the newly selected period', () => {
+  const oldPrevious = dateNavigation().props.onPrevious as () => void;
+  selectPeriod('month');
+  oldPrevious();
+  const navigation = dateNavigation();
+  expect(navigation.props.period).toBe('month');
+  expect(navigation.props.selectedDate).toBe('2026-10-29');
+});
+
+test.each(['expired-scope', 'blur', 'background'])('a late date-navigation callback is ignored after %s', (state) => {
+  const previous = dateNavigation().props.onPrevious as () => void;
+  if (state === 'expired-scope') mockScopeCurrent = false;
+  if (state === 'blur') {
+    mockFocused = false;
+    render();
+  }
+  if (state === 'background') jest.requireMock('react-native').AppState.currentState = 'background';
+  previous();
+  expect(dateNavigation().props.selectedDate).toBe('2026-10-29');
+});
+
+test('the period label opens the existing exact-date calendar, which rejects future dates', () => {
+  (dateNavigation().props.onCalendar as () => void)();
+  let picker = nodes(render()).find((node) => node.type === 'DateTimePickerModal')!;
+  expect(picker.props.timeZone).toBe('Europe/Moscow');
+  (picker.props.onConfirm as (date: Date) => void)(new Date('2026-10-30T12:00:00+03:00'));
+  expect(jest.requireMock('react-native').Alert.alert).toHaveBeenCalledWith(
+    'Дата сводки',
+    'Выберите сегодняшнюю или прошедшую дату по времени автосервиса.',
+  );
+  expect(dateNavigation().props.selectedDate).toBe('2026-10-29');
+  (dateNavigation().props.onCalendar as () => void)();
+  picker = nodes(render()).find((node) => node.type === 'DateTimePickerModal')!;
+  (picker.props.onConfirm as (date: Date) => void)(new Date('2026-09-12T12:00:00+03:00'));
+  expect(dateNavigation().props.selectedDate).toBe('2026-09-12');
+});
+
+test('an exact-date confirmation from an expired account scope cannot change the requested date', () => {
+  (dateNavigation().props.onCalendar as () => void)();
+  const picker = nodes(render()).find((node) => node.type === 'DateTimePickerModal')!;
+  mockScopeCurrent = false;
+  (picker.props.onConfirm as (date: Date) => void)(new Date('2026-09-12T12:00:00+03:00'));
+  expect(dateNavigation().props.selectedDate).toBe('2026-10-29');
 });
 
 test('history and period changes keep native-widget sync mounted independently; blur/background unmount it', () => {

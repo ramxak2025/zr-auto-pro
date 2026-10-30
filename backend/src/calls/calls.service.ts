@@ -1,3 +1,4 @@
+import { markCallFollowUps } from './call-follow-ups';
 import { Injectable, Inject, BadRequestException, Logger } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { Pool } from 'pg';
@@ -284,34 +285,7 @@ export class CallsService {
       const outgoing = mappedCalls.filter((c: any) => c.direction === 'outgoing');
       const missed = mappedCalls.filter((c: any) => c.direction === 'incoming' && c.status === 'missed');
 
-      // Build set of phones we called back (outgoing with duration > 0 OR any answered incoming from same number after the missed call)
-      const calledBackPhones = new Set<string>();
-      // Outgoing calls to the same number count as "called back"
-      for (const c of outgoing) {
-        if (c.duration > 0) {
-          const phone = (c.to || '').replace(/[\s\-\+\(\)]/g, '');
-          calledBackPhones.add(phone.length >= 10 ? phone.slice(-10) : phone);
-        }
-      }
-      // Answered incoming from the same number also counts (they called again and we picked up)
-      for (const c of incoming) {
-        if (c.status === 'answered') {
-          const phone = (c.from || '').replace(/[\s\-\+\(\)]/g, '');
-          calledBackPhones.add(phone.length >= 10 ? phone.slice(-10) : phone);
-        }
-      }
-
-      // Mark missed calls as calledBack and count notCalledBack
-      const notCalledBack: any[] = [];
-      for (const c of missed) {
-        const phone = (c.from || '').replace(/[\s\-\+\(\)]/g, '');
-        const phoneShort = phone.length >= 10 ? phone.slice(-10) : phone;
-        if (calledBackPhones.has(phoneShort)) {
-          c.calledBack = true;
-        } else {
-          notCalledBack.push(c);
-        }
-      }
+      const notCalledBack = markCallFollowUps(mappedCalls);
 
       return {
         calls: mappedCalls,
@@ -405,28 +379,7 @@ export class CallsService {
     const outgoing = mappedCalls.filter((c) => c.direction === 'outgoing');
     const missed = mappedCalls.filter((c) => c.direction === 'incoming' && c.status === 'missed');
 
-    // "Called back": an outgoing answered call OR a later answered incoming from the
-    // same number clears a missed call — identical logic to the МоиЗвонки path.
-    const calledBackPhones = new Set<string>();
-    const short = (phone: string) => {
-      const p = (phone || '').replace(/[\s\-\+\(\)]/g, '');
-      return p.length >= 10 ? p.slice(-10) : p;
-    };
-    for (const c of outgoing) {
-      if (c.duration > 0) calledBackPhones.add(short(c.to));
-    }
-    for (const c of incoming) {
-      if (c.status === 'answered') calledBackPhones.add(short(c.from));
-    }
-
-    const notCalledBack: typeof missed = [];
-    for (const c of missed) {
-      if (calledBackPhones.has(short(c.from))) {
-        c.calledBack = true;
-      } else {
-        notCalledBack.push(c);
-      }
-    }
+    const notCalledBack = markCallFollowUps(mappedCalls);
 
     return {
       calls: mappedCalls,

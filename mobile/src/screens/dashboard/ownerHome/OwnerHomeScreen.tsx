@@ -26,6 +26,8 @@ import DateTimePickerModal from '../../../components/DateTimePickerModal';
 import Modal from '../../../components/Modal';
 import { useReduceMotionPreference } from '../../../hooks/useReduceMotionPreference';
 import { OwnerHomeToolbar, OwnerHomePeriodControl } from './OwnerHomeToolbar';
+import OwnerHomeDateNavigation from './OwnerHomeDateNavigation';
+import { ownerPeriodNavigation } from './ownerHomePeriodNavigation';
 import OwnerHomeTimelineChart from './OwnerHomeTimelineChart';
 import { ownerHomeSurfaces } from './ownerHomeSurfaces';
 import { ownerTimelineModel } from './ownerHomeTimelineModel';
@@ -34,12 +36,11 @@ import { formatDayKey } from '../../../../../shared/utils/formatters';
 import { invalidateAttendanceQueries } from '../../../../../shared/utils/attendanceQueries';
 import type { OwnerHomeTimeline, OwnerHomeTimelinePeriod } from '../../../../../shared/types/ownerHome';
 import OwnerHomeOperational, { OwnerHomeRetry } from './OwnerHomeOperational';
+import OwnerHomeLiveWidgets from './OwnerHomeLiveWidgets';
 import OwnerHomeDetails, { type OwnerHomeDetail } from './OwnerHomeDetails';
 import OwnerHomeWidgetSync from './OwnerHomeWidgetSync';
 import {
   loadOwnerHome,
-  moveOwnerDay,
-  moveOwnerMonth,
   ownerDateLabel,
   ownerHomeEnabled,
   ownerPickerDate,
@@ -78,7 +79,6 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
   const [active, setActive] = useState(AppState.currentState === 'active');
   const [asOf, setAsOf] = useState<string | undefined>();
   const [period, setPeriod] = useState<OwnerHomeTimelinePeriod>('day');
-  const [preferredDay, setPreferredDay] = useState<number | undefined>();
   const [calendarVisible, setCalendarVisible] = useState(false);
   const [settingsVisible, setSettingsVisible] = useState(false);
   const [detail, setDetail] = useState<OwnerHomeDetail | null>(null);
@@ -127,7 +127,9 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
   const calendarContext = useRef<Pick<OwnerHomeTimeline, 'todayDate' | 'timezone'> | null>(null);
   if (data) calendarContext.current = { todayDate: data.todayDate, timezone: data.timezone };
   const calendarMeta = calendarContext.current;
-  const selectedDate = data?.canonicalDate ?? asOf ?? calendarMeta?.todayDate;
+  const selectedDate = asOf ?? calendarMeta?.todayDate;
+  const navigationContext = useRef({ scopeKey, enabled, period, selectedDate, calendarMeta });
+  navigationContext.current = { scopeKey, enabled, period, selectedDate, calendarMeta };
   const range = data?.visitsRange;
   const visits = useQuery({
     queryKey: ['owner-home', ...scope.key, 'visits', range?.from ?? null, range?.to ?? null],
@@ -142,14 +144,38 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
     refetchInterval: enabled && !asOf ? 60_000 : false,
   });
 
-  const chooseDate = (date: string, preferred?: number) => {
-    if (!calendarMeta || date > calendarMeta.todayDate) {
+  const currentNavigation = () => {
+    const current = navigationContext.current;
+    return current.scopeKey === scopeKey && current.enabled && scope.isCurrent() && AppState.currentState === 'active'
+      ? current
+      : null;
+  };
+  const chooseDate = (date: string) => {
+    const current = currentNavigation();
+    if (!current?.calendarMeta) return;
+    if (!ownerPeriodNavigation('day', date, current.calendarMeta.todayDate)) {
       Alert.alert('Дата сводки', 'Выберите сегодняшнюю или прошедшую дату по времени автосервиса.');
       return;
     }
-    setAsOf(date === calendarMeta.todayDate ? undefined : date);
-    setPreferredDay(preferred ?? Number(date.slice(8, 10)));
+    // Consecutive taps can arrive before React renders the next requested date.
+    navigationContext.current.selectedDate = date;
+    setAsOf(date === current.calendarMeta.todayDate ? undefined : date);
     setDetail(null);
+  };
+  const pageDate = (direction: -1 | 1) => {
+    const current = currentNavigation();
+    if (!current?.calendarMeta || current.period !== period) return;
+    const navigation = ownerPeriodNavigation(period, current.selectedDate, current.calendarMeta.todayDate);
+    const next = direction < 0 ? navigation?.previousDate : navigation?.nextDate;
+    if (next) chooseDate(next);
+  };
+  const returnToToday = () => {
+    const current = currentNavigation();
+    if (current?.calendarMeta) chooseDate(current.calendarMeta.todayDate);
+  };
+  const openCalendar = () => {
+    const current = currentNavigation();
+    if (current?.calendarMeta && current.selectedDate) setCalendarVisible(true);
   };
   const refreshAll = async () => {
     setRefreshing(true);
@@ -160,31 +186,16 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
     }
   };
   const openDateMenu = () => {
-    if (!selectedDate || !calendarMeta) return;
+    const current = currentNavigation();
+    if (!current?.selectedDate || !current.calendarMeta) return;
     const choices = [
-      { text: 'Выбрать дату', onPress: () => setCalendarVisible(true) },
-      {
-        text: 'На месяц раньше',
-        onPress: () =>
-          chooseDate(moveOwnerMonth(selectedDate, -1, preferredDay), preferredDay ?? Number(selectedDate.slice(8))),
-      },
-      ...(asOf
-        ? [
-            {
-              text: 'Сегодня',
-              onPress: () => {
-                setAsOf(undefined);
-                setPreferredDay(undefined);
-                setDetail(null);
-              },
-            },
-          ]
-        : []),
+      { text: 'Выбрать дату', onPress: openCalendar },
+      ...(current.selectedDate !== current.calendarMeta.todayDate ? [{ text: 'Сегодня', onPress: returnToToday }] : []),
     ];
     if (Platform.OS === 'ios') {
       ActionSheetIOS.showActionSheetWithOptions(
         {
-          title: ownerDateLabel(selectedDate, true),
+          title: ownerDateLabel(current.selectedDate, true),
           options: [...choices.map((choice) => choice.text), 'Отмена'],
           cancelButtonIndex: choices.length,
           userInterfaceStyle: p.mode,
@@ -192,7 +203,7 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
         (index) => choices[index]?.onPress(),
       );
     } else {
-      Alert.alert('Дата сводки', ownerDateLabel(selectedDate, true), choices, { cancelable: true });
+      Alert.alert('Дата сводки', ownerDateLabel(current.selectedDate, true), choices, { cancelable: true });
     }
   };
   const historical = !!data && data.canonicalDate !== data.todayDate;
@@ -211,7 +222,7 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshAll} tintColor={p.accent.primary} />}
       >
         <OwnerHomeToolbar
-          calendarEnabled={!!selectedDate && !!calendarMeta}
+          calendarEnabled={enabled && scope.isCurrent() && !!selectedDate && !!calendarMeta}
           onCalendar={openDateMenu}
           onSettings={() => setSettingsVisible(true)}
           reducedMotion={reducedMotion}
@@ -219,11 +230,23 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
         <OwnerHomePeriodControl
           value={period}
           onChange={(value) => {
+            if (!currentNavigation()) return;
+            navigationContext.current.period = value;
             setPeriod(value);
             setDetail(null);
           }}
           dayIsToday={!asOf || asOf === calendarMeta?.todayDate}
           reducedMotion={reducedMotion}
+        />
+        <OwnerHomeDateNavigation
+          period={period}
+          selectedDate={selectedDate}
+          todayDate={calendarMeta?.todayDate}
+          enabled={enabled && scope.isCurrent()}
+          onPrevious={() => pageDate(-1)}
+          onNext={() => pageDate(1)}
+          onToday={returnToToday}
+          onCalendar={openCalendar}
         />
         {data && model ? (
           <OwnerHomeTimelineChart
@@ -352,9 +375,10 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
         </View>
         {historical && (
           <Text style={[styles.historyNote, { color: p.text.secondary }]}>
-            Ниже — работа сервиса сейчас и заработок за сегодня, {ownerDateLabel(data.todayDate)}.
+            Ниже — смены, звонки, задачи и заработок за сегодня, {ownerDateLabel(data.todayDate)}.
           </Text>
         )}
+        <OwnerHomeLiveWidgets scope={scope} enabled={enabled} />
         <OwnerHomeOperational
           scope={scope}
           enabled={enabled}
@@ -383,6 +407,7 @@ export function OwnerHomeContent({ scope, reducedMotion = true }: { scope: Owner
           timeZone={calendarMeta.timezone}
           onCancel={() => setCalendarVisible(false)}
           onConfirm={(date) => {
+            if (!currentNavigation()) return;
             setCalendarVisible(false);
             chooseDate(formatDayKey(date, calendarMeta.timezone));
           }}
