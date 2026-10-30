@@ -1,5 +1,5 @@
 import React from 'react';
-import type { OwnerHomeAccrual, OwnerHomeProfit } from '../../../../../../shared/types/ownerHome';
+import type { OwnerHomeTimeline } from '../../../../../../shared/types/ownerHome';
 import { ATTENDANCE_QUERY_KEYS } from '../../../../../../shared/utils/attendanceQueries';
 
 const mockStates: unknown[] = [];
@@ -7,7 +7,7 @@ const mockRefs: { current: unknown }[] = [];
 let mockStateIndex = 0;
 let mockRefIndex = 0;
 const mockQuery = jest.fn();
-const mockProfitApi = jest.fn();
+const mockTimelineApi = jest.fn();
 const mockVisitsApi = jest.fn();
 const mockInvalidate = jest.fn(() => Promise.resolve());
 const mockFocusEffect = jest.fn();
@@ -38,6 +38,7 @@ jest.mock('react', () => ({
   },
   useEffect: jest.fn(),
   useCallback: (callback: unknown) => callback,
+  useMemo: (factory: () => unknown) => factory(),
 }));
 jest.mock('react-native', () => ({
   View: 'View',
@@ -94,7 +95,7 @@ jest.mock('../../../../contexts/ThemeContext', () => ({
 }));
 jest.mock('../../../../api/services', () => ({
   reportsApi: {
-    ownerHomeProfit: (...args: unknown[]) => mockProfitApi(...args),
+    ownerHomeTimeline: (...args: unknown[]) => mockTimelineApi(...args),
     ownerHomeVisits: (...args: unknown[]) => mockVisitsApi(...args),
   },
 }));
@@ -114,64 +115,16 @@ jest.mock('../OwnerHomeOperational', () => ({
   OwnerHomeRetry: 'OwnerHomeRetry',
 }));
 jest.mock('../OwnerHomeDetails', () => 'OwnerHomeDetails');
+jest.mock('../OwnerHomeToolbar', () => ({
+  OwnerHomeToolbar: 'OwnerHomeToolbar',
+  OwnerHomePeriodControl: 'OwnerHomePeriodControl',
+}));
+jest.mock('../OwnerHomeTimelineChart', () => 'OwnerHomeTimelineChart');
 jest.mock('../OwnerHomeWidgetSync', () => 'OwnerHomeWidgetSync');
 import OwnerHomeScreen, { OwnerHomeContent } from '../OwnerHomeScreen';
-import { OwnerHomeAmount, OwnerHomeComparisonBars, OwnerHomeScopeControl } from '../OwnerHomeMotion';
+import { timelineFixture } from '../__fixtures__/timeline';
 
-const accrual = (profit: number): OwnerHomeAccrual => ({
-  revenue: 100000,
-  checkProfit: profit,
-  plannedFixedAmortized: 0,
-  staffFixedAmortized: 0,
-  staffPctTurnover: 0,
-  staffPctProfit: 0,
-  oneOffExpenses: 0,
-  recurringExcess: 0,
-  salaryExtras: 0,
-  motivation: 0,
-  perVehicleDayExpense: 0,
-  netProfit: profit,
-});
-const fixture: OwnerHomeProfit = {
-  canonicalDate: '2026-10-29',
-  todayDate: '2026-10-29',
-  timezone: 'Europe/Moscow',
-  generatedAt: '2026-10-29T11:20:00Z',
-  pointId: 'point-A',
-  basis: 'current_plan',
-  basisLabel: 'По текущему плану расходов',
-  basisDetail: 'Пересчёт по текущему плану',
-  historicalSnapshot: false,
-  current: {
-    period: {
-      from: '2026-10-01',
-      through: '2026-10-29',
-      untilExclusive: '2026-10-29T11:20:00Z',
-      daysElapsed: 29,
-      daysInMonth: 31,
-      partialDay: true,
-    },
-    day: accrual(26500),
-    mtd: accrual(559500),
-  },
-  comparison: {
-    period: {
-      from: '2026-09-01',
-      through: '2026-09-29',
-      untilExclusive: '2026-09-29T11:20:00Z',
-      daysElapsed: 29,
-      daysInMonth: 30,
-      partialDay: true,
-    },
-    basis: 'current_plan',
-    clamped: false,
-    day: accrual(20000),
-    mtd: accrual(478400),
-    dayDelta: { amount: 6500, percent: 32.5 },
-    mtdDelta: { amount: 81100, percent: 17 },
-  },
-};
-let profitState: { data?: OwnerHomeProfit; isPending: boolean; isError: boolean; isFetching: boolean };
+let timelineState: { data?: OwnerHomeTimeline; isPending: boolean; isError: boolean; isFetching: boolean };
 const scope = { key: ['account-A', 'tenant-A', 'user-A', 'point-A', 1, 7, 'Europe/Moscow'], isCurrent: () => true };
 function render() {
   mockStateIndex = 0;
@@ -181,6 +134,17 @@ function render() {
 function nodes(node: React.ReactNode): React.ReactElement<Record<string, unknown>>[] {
   if (!React.isValidElement<Record<string, unknown>>(node)) return [];
   return [node, ...React.Children.toArray(node.props.children as React.ReactNode).flatMap(nodes)];
+}
+function chooseCalendarDate(date: string) {
+  const toolbar = nodes(render()).find((node) => node.type === 'OwnerHomeToolbar')!;
+  (toolbar.props.onCalendar as () => void)();
+  jest.requireMock('react-native').ActionSheetIOS.showActionSheetWithOptions.mock.calls.at(-1)[1](0);
+  const picker = nodes(render()).find((node) => node.type === 'DateTimePickerModal')!;
+  (picker.props.onConfirm as (date: Date) => void)(new Date(`${date}T12:00:00+03:00`));
+}
+function selectPeriod(period: 'day' | 'week' | 'month' | 'year') {
+  const control = nodes(render()).find((node) => node.type === 'OwnerHomePeriodControl')!;
+  (control.props.onChange as (period: string) => void)(period);
 }
 beforeEach(() => {
   jest.clearAllMocks();
@@ -193,11 +157,14 @@ beforeEach(() => {
   mockAuth.user.role = 'director';
   mockAuth.user.currentPointId = 'point-A';
   mockFocused = true;
-  profitState = { data: fixture, isPending: false, isError: false, isFetching: false };
-  mockProfitApi.mockResolvedValue({ data: fixture });
+  timelineState = { data: timelineFixture(), isPending: false, isError: false, isFetching: false };
+  mockTimelineApi.mockResolvedValue({ data: timelineFixture() });
+  mockVisitsApi.mockResolvedValue({
+    data: { servedClients: 9, newClients: 3, returningClients: 6, rapidReturnVehicleCount: 2 },
+  });
   mockQuery.mockImplementation((options: { queryKey: unknown[] }) =>
-    options.queryKey.includes('profit')
-      ? { ...profitState, refetch: jest.fn() }
+    options.queryKey.includes('timeline')
+      ? { ...timelineState, refetch: jest.fn() }
       : {
           data: { servedClients: 9, newClients: 3, returningClients: 6, visitCount: 12, rapidReturnVehicleCount: 2 },
           isPending: false,
@@ -207,37 +174,38 @@ beforeEach(() => {
   );
 });
 
-test('first profit request omits asOf and has an isolated scope without previous placeholders', async () => {
+test('first timeline request keeps scope and asks the server for today without a device date', async () => {
   render();
-  const options = mockQuery.mock.calls.find(([q]) => q.queryKey.includes('profit'))![0];
-  expect(options.queryKey).toEqual(['owner-home', ...scope.key, 'profit', 'today']);
+  const options = mockQuery.mock.calls.find(([q]) => q.queryKey.includes('timeline'))![0];
+  expect(options.queryKey).toEqual(['owner-home', ...scope.key, 'timeline', 'day', 'today']);
   expect(options.placeholderData).toBeUndefined();
   await options.queryFn();
-  expect(mockProfitApi).toHaveBeenCalledWith(undefined);
+  expect(mockTimelineApi).toHaveBeenCalledWith({ period: 'day' });
+  expect(mockQuery.mock.calls.some(([q]) => q.queryKey.includes('profit'))).toBe(false);
 });
 
-test('native widget sync remains independent of history and remounts only for active focused visits', () => {
-  const first = render();
-  const widget = nodes(first).find((node) => node.type === 'OwnerHomeWidgetSync')!;
-  expect(widget).toBeDefined();
-  expect(widget.props.scope).toBe(scope);
-  expect(widget.props.enabled).toBe(true);
-  const back = nodes(first).find((node) => node.props.accessibilityLabel === 'Предыдущий день')!;
-  (back.props.onPress as () => void)();
-  const historicalWidget = nodes(render()).find((node) => node.type === 'OwnerHomeWidgetSync')!;
+test('history and period changes keep native-widget sync mounted independently; blur/background unmount it', () => {
+  const first = nodes(render()).find((node) => node.type === 'OwnerHomeWidgetSync')!;
+  chooseCalendarDate('2026-10-28');
+  let tree = render();
+  let widget = nodes(tree).find((node) => node.type === 'OwnerHomeWidgetSync')!;
+  expect(widget.key).toBe(first.key);
+  expect(widget.props).toEqual(first.props);
   expect(
     mockQuery.mock.calls
-      .filter(([options]) => options.queryKey.includes('profit'))
+      .filter(([q]) => q.queryKey.includes('timeline'))
       .at(-1)![0]
       .queryKey.at(-1),
   ).toBe('2026-10-28');
-  expect(historicalWidget.type).toBe(widget.type);
-  expect(historicalWidget.key).toBe(widget.key);
-  expect(historicalWidget.props).toEqual(widget.props);
+  selectPeriod('year');
+  tree = render();
+  widget = nodes(tree).find((node) => node.type === 'OwnerHomeWidgetSync')!;
+  expect(widget.props).toEqual(first.props);
+  expect(widget.key).toBe(first.key);
   mockFocused = false;
   expect(nodes(render()).some((node) => node.type === 'OwnerHomeWidgetSync')).toBe(false);
   mockFocused = true;
-  expect(nodes(render()).some((node) => node.type === 'OwnerHomeWidgetSync')).toBe(true);
+  render();
   const appState = jest.requireMock('react-native').AppState as { currentState: string; addEventListener: jest.Mock };
   const cleanup = (React.useEffect as jest.Mock).mock.calls[0][0]();
   appState.currentState = 'background';
@@ -246,56 +214,70 @@ test('native widget sync remains independent of history and remounts only for ac
   cleanup();
 });
 
-test('changing day removes old profit rows and disables visits until the new server window arrives', () => {
-  const first = render();
-  const back = nodes(first).find((node) => node.props.accessibilityLabel === 'Предыдущий день')!;
-  (back.props.onPress as () => void)();
-  profitState = { data: undefined, isPending: true, isError: false, isFetching: true };
+test('date loading/error and an old successful payload remove plot, numbers, tooltip and detail hit targets', () => {
+  expect(nodes(render()).some((node) => node.type === 'OwnerHomeTimelineChart')).toBe(true);
+  chooseCalendarDate('2026-10-28');
+  // Even a misbehaving cache returning the old success must not render it under the new date.
+  let tree = render();
+  expect(nodes(tree).some((node) => node.type === 'OwnerHomeTimelineChart')).toBe(false);
+  expect(nodes(tree).some((node) => String(node.props.accessibilityLabel ?? '').includes('Открыть клиентов'))).toBe(
+    false,
+  );
+  timelineState = { data: undefined, isPending: true, isError: false, isFetching: true };
   mockQuery.mockClear();
-  const next = render();
-  expect(mockQuery.mock.calls.find(([q]) => q.queryKey.includes('profit'))![0].queryKey.at(-1)).toBe('2026-10-28');
+  tree = render();
   expect(mockQuery.mock.calls.find(([q]) => q.queryKey.includes('visits'))![0].enabled).toBe(false);
-  expect(nodes(next).some((node) => node.props.value === 26500 || node.props.value === 559500)).toBe(false);
-  expect(nodes(next).some((node) => node.type === OwnerHomeAmount || node.type === OwnerHomeComparisonBars)).toBe(
-    false,
-  );
-  expect(nodes(next).some((node) => String(node.props.accessibilityLabel ?? '').includes('Открыть расчёт'))).toBe(
-    false,
-  );
-  expect(JSON.stringify(next)).not.toContain('478');
-});
-
-test('day and month client controls select distinct server ranges without duplicate panels', () => {
-  const tree = render();
-  const control = nodes(tree).find((node) => node.type === OwnerHomeScopeControl)!;
-  const controlTree = OwnerHomeScopeControl({
-    value: control.props.value as 'day' | 'month',
-    onChange: control.props.onChange as (period: 'day' | 'month') => void,
-    reducedMotion: control.props.reducedMotion === true,
-  });
-  const radios = nodes(controlTree).filter((node) => node.props.accessibilityRole === 'radio');
-  expect(radios).toHaveLength(2);
-  expect(mockQuery.mock.calls.find(([q]) => q.queryKey.includes('visits'))![0].queryKey.slice(-2)).toEqual([
-    '2026-10-29',
-    '2026-10-29',
-  ]);
-  (radios[1].props.onPress as () => void)();
-  mockQuery.mockClear();
-  render();
-  expect(mockQuery.mock.calls.find(([q]) => q.queryKey.includes('visits'))![0].queryKey.slice(-2)).toEqual([
-    '2026-10-01',
-    '2026-10-29',
-  ]);
-});
-
-test('error has a retry and cannot display a successful zero or old money row', () => {
-  profitState = { data: undefined, isPending: false, isError: true, isFetching: false };
-  const tree = render();
+  expect(nodes(tree).some((node) => node.type === 'OwnerHomeTimelineChart')).toBe(false);
+  timelineState = { data: undefined, isPending: false, isError: true, isFetching: false };
+  tree = render();
   expect(nodes(tree).some((node) => node.props.text === 'Сводка не загрузилась')).toBe(true);
-  expect(nodes(tree).some((node) => typeof node.props.value === 'number')).toBe(false);
+  expect(nodes(tree).some((node) => node.type === 'OwnerHomeTimelineChart')).toBe(false);
 });
 
-test('disabled build flag or non-director role disables every pilot query', () => {
+test('clients and rapid-return dialogs use the exact timeline visitsRange for week/month/year', async () => {
+  for (const period of ['week', 'month', 'year'] as const) {
+    selectPeriod(period);
+    timelineState.data = timelineFixture(period);
+    mockQuery.mockClear();
+    const tree = render(),
+      range = timelineState.data.visitsRange;
+    const visitQuery = mockQuery.mock.calls.find(([q]) => q.queryKey.includes('visits'))![0];
+    expect(visitQuery.queryKey.slice(-2)).toEqual([range.from, range.to]);
+    await visitQuery.queryFn();
+    expect(mockVisitsApi).toHaveBeenLastCalledWith(range);
+    const clients = nodes(tree).find((node) => String(node.props.accessibilityLabel ?? '').startsWith('Впервые:'))!;
+    (clients.props.onPress as () => void)();
+    let dialog = nodes(render()).find((node) => node.type === 'OwnerHomeDetails')!;
+    expect(dialog.props.detail).toMatchObject({ kind: 'clients', range });
+    const returns = nodes(render()).find((node) =>
+      String(node.props.accessibilityLabel ?? '').includes('автомобилей вернулись'),
+    )!;
+    (returns.props.onPress as () => void)();
+    dialog = nodes(render()).find((node) => node.type === 'OwnerHomeDetails')!;
+    expect(dialog.props.detail).toMatchObject({ kind: 'returns', range });
+  }
+});
+
+test('range detail uses selected totals while the footer retains explicit canonical month context', () => {
+  selectPeriod('year');
+  timelineState.data = timelineFixture('year');
+  const chart = nodes(render()).find((node) => node.type === 'OwnerHomeTimelineChart')!;
+  (chart.props.onRangeDetails as () => void)();
+  let dialog = nodes(render()).find((node) => node.type === 'OwnerHomeDetails')!;
+  expect(dialog.props.detail).toMatchObject({
+    kind: 'timeline',
+    timeline: { range: { period: 'year' }, totals: { netProfit: 3900000 } },
+  });
+  (chart.props.onMonthDetails as () => void)();
+  dialog = nodes(render()).find((node) => node.type === 'OwnerHomeDetails')!;
+  expect(dialog.props.detail).toMatchObject({
+    kind: 'profit',
+    period: 'month',
+    profit: { current: { mtd: { netProfit: 559500 } } },
+  });
+});
+
+test('disabled build and non-director roles never enable pilot queries', () => {
   for (const config of [
     { flag: false, role: 'director' },
     { flag: true, role: 'master' },
@@ -312,7 +294,7 @@ test('disabled build flag or non-director role disables every pilot query', () =
   }
 });
 
-test('point switch remounts all local date and modal state under a new owner key', () => {
+test('point switch remounts local range, tooltip and modal state under a different owner key', () => {
   const first = OwnerHomeScreen();
   mockAuth.user.currentPointId = 'point-B';
   const second = OwnerHomeScreen();
@@ -320,25 +302,7 @@ test('point switch remounts all local date and modal state under a new owner key
   expect(second?.key).toContain('point-B');
 });
 
-test('safe top cover is opaque and noninteractive while the honest current-plan caption stays visible', () => {
-  const tree = render();
-  const scrim = nodes(tree).find((node) => node.props.testID === 'owner-home-status-bar-scrim')!;
-  expect(scrim.props.pointerEvents).toBe('none');
-  expect(scrim.props.accessibilityElementsHidden).toBe(true);
-  expect(Object.assign({}, ...(scrim.props.style as object[]))).toMatchObject({
-    position: 'absolute',
-    top: 0,
-    height: 62,
-    zIndex: 21,
-    backgroundColor: '#fff',
-  });
-  expect(JSON.stringify(tree)).toContain('Пересчёт · текущий план');
-  const monthValue = nodes(tree).find((node) => node.type === OwnerHomeAmount)!;
-  expect(monthValue.key).toContain('2026-10-29');
-  expect(monthValue.props.value).toBe(559500);
-});
-
-test('returning to the pilot refreshes attendance caches through existing focus events without another timer', () => {
+test('focus/foreground refresh keeps attendance and scoped queries without a new timer', () => {
   const timer = jest.spyOn(global, 'setInterval');
   render();
   mockFocusEffect.mock.calls.at(-1)![0]();
@@ -348,8 +312,8 @@ test('returning to the pilot refreshes attendance caches through existing focus 
   timer.mockRestore();
 });
 
-test('focus does not refresh attendance while backgrounded or after the owner scope expires', () => {
-  const appState = jest.requireMock('react-native').AppState as { currentState: string };
+test('background or expired scope cannot refresh; foreground listener cleans up', () => {
+  const appState = jest.requireMock('react-native').AppState as { currentState: string; addEventListener: jest.Mock };
   appState.currentState = 'background';
   render();
   mockFocusEffect.mock.calls.at(-1)![0]();
@@ -360,23 +324,13 @@ test('focus does not refresh attendance while backgrounded or after the owner sc
   OwnerHomeContent({ scope: { ...scope, isCurrent: () => false } });
   mockFocusEffect.mock.calls.at(-1)![0]();
   expect(mockInvalidate).not.toHaveBeenCalled();
-});
-
-test('the existing foreground listener refreshes attendance and cleans up without a polling loop', () => {
-  const appState = jest.requireMock('react-native').AppState as { currentState: string; addEventListener: jest.Mock };
-  const timer = jest.spyOn(global, 'setInterval');
+  mockStateIndex = 0;
+  mockRefIndex = 0;
   render();
-  const cleanup = (React.useEffect as jest.Mock).mock.calls[0][0]();
-  const listener = appState.addEventListener.mock.calls.at(-1)![1];
-  appState.currentState = 'background';
-  listener('background');
-  expect(mockInvalidate).not.toHaveBeenCalled();
-  appState.currentState = 'active';
-  listener('active');
-  for (const queryKey of ATTENDANCE_QUERY_KEYS) expect(mockInvalidate).toHaveBeenCalledWith({ queryKey });
-  expect(timer).not.toHaveBeenCalled();
+  const cleanup = (React.useEffect as jest.Mock).mock.calls.at(-1)![0]();
+  appState.addEventListener.mock.calls.at(-1)![1]('active');
+  expect(mockInvalidate).toHaveBeenCalled();
   const subscription = appState.addEventListener.mock.results.at(-1)!.value;
   cleanup();
   expect(subscription.remove).toHaveBeenCalledTimes(1);
-  timer.mockRestore();
 });

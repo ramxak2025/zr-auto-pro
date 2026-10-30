@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import Animated, { LinearTransition, ReduceMotion } from 'react-native-reanimated';
 import { StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 import { CommonActions, type NavigationProp, useNavigation } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
@@ -13,6 +14,7 @@ import type { TabParamList } from '../../../navigation/AppNavigator';
 import { ATTENTION_LABELS, EARNINGS_EXPLANATION } from '../../../../../shared/utils/dashboardAttention';
 import type { AttentionBucketId } from '../../../../../shared/types';
 import { openAttention } from '../attentionNavigation';
+import { ownerHomeSurfaces } from './ownerHomeSurfaces';
 import { loadOwnerHome, ownerDateLabel, ownerMoney, type OwnerHomeScope } from './ownerHomeState';
 
 const attentionIcons: Record<AttentionBucketId, keyof typeof Ionicons.glyphMap> = {
@@ -64,6 +66,7 @@ export default function OwnerHomeOperational({
 }) {
   const p = useColors();
   const { fontScale } = useWindowDimensions();
+  const tones = ownerHomeSurfaces(p.mode === 'dark');
   const largeText = fontScale > 1.2;
   const { user, hasPermission } = useAuth();
   const { shiftModeEnabled, isCashier } = usePosSettings();
@@ -93,86 +96,104 @@ export default function OwnerHomeOperational({
   const canOpenNfc = user?.tenant?.attendanceMode === 'nfc';
   const canOpenCashShift = shiftModeEnabled && isCashier;
   if (!owner) return null;
-  const buckets = attention.data?.buckets.filter((bucket) => bucket.error || (bucket.count ?? 0) > 0) ?? [];
+  const hasAttention = Array.isArray(attention.data?.buckets);
+  const buckets = hasAttention
+    ? attention.data!.buckets.filter(
+        (bucket) =>
+          bucket.error ||
+          !attentionIcons[bucket.id] ||
+          bucket.count === null ||
+          !Number.isFinite(bucket.count) ||
+          bucket.count !== 0,
+      )
+    : [];
   const employees = earnings.data?.employees ?? [];
   return (
     <>
-      <View style={styles.section}>
-        <View style={styles.heading}>
-          <Text accessibilityRole="header" style={[styles.title, { color: p.text.primary }]}>
+      <View style={[styles.section, styles.group, { backgroundColor: tones.attention.background }]}>
+        <View style={styles.panelHeading}>
+          <Ionicons name="alert-circle-outline" size={19} color={tones.attention.ink} />
+          <Text accessibilityRole="header" style={[styles.title, styles.headingLabel, { color: tones.attention.ink }]}>
             Требует внимания
           </Text>
-          <Text style={[styles.note, { color: p.text.secondary }]}>Сейчас</Text>
+          <Text style={[styles.note, { color: tones.attention.ink }]}>Сейчас</Text>
         </View>
-        <View style={[styles.group, { backgroundColor: p.bg.card, borderColor: p.border.subtle }]}>
-          {attention.isPending ? (
-            <View style={styles.padding}>
-              <Skeleton height={76} radius={8} />
-            </View>
-          ) : attention.isError ? (
-            <OwnerHomeRetry text="Задачи не обновились" busy={attention.isFetching} onRetry={attention.refetch} />
-          ) : buckets.length ? (
-            buckets.map((bucket) =>
-              bucket.error ? (
-                <OwnerHomeRetry
-                  key={bucket.id}
-                  text={`${ATTENTION_LABELS[bucket.id]}: не загрузилось`}
-                  busy={attention.isFetching}
-                  onRetry={attention.refetch}
-                />
-              ) : (
-                <TouchableOpacity
-                  key={bucket.id}
-                  style={[styles.row, { borderBottomColor: p.border.subtle }]}
-                  accessibilityRole="button"
-                  accessibilityLabel={`${ATTENTION_LABELS[bucket.id]}: ${bucket.count}`}
-                  onPress={() =>
-                    openAttention(navigation, bucket.id, hasPermission('checks_view_all') ? undefined : user?.id)
-                  }
-                >
-                  <View style={styles.rowIcon}>
-                    <Ionicons
-                      name={attentionIcons[bucket.id]}
-                      size={20}
-                      color={
-                        bucket.id === 'bookings'
-                          ? p.accent.primaryText
-                          : bucket.id === 'low-stock'
-                            ? p.mode === 'dark'
-                              ? '#e1bb85'
-                              : '#876139'
-                            : p.text.secondary
-                      }
-                    />
-                  </View>
-                  <Text style={[styles.name, { color: p.text.primary }]}>{ATTENTION_LABELS[bucket.id]}</Text>
-                  <Text style={[styles.amount, { color: p.text.primary }]}>{bucket.count}</Text>
-                  <Ionicons name="chevron-forward" size={15} color={p.text.secondary} />
-                </TouchableOpacity>
-              ),
-            )
-          ) : (
-            <Text style={[styles.empty, { color: p.text.secondary }]}>Срочных задач нет</Text>
-          )}
-        </View>
+        {attention.isPending ? (
+          <View style={styles.padding}>
+            <Skeleton height={76} radius={8} />
+          </View>
+        ) : attention.isError || !hasAttention ? (
+          <OwnerHomeRetry text="Задачи не обновились" busy={attention.isFetching} onRetry={attention.refetch} />
+        ) : buckets.length ? (
+          buckets.map((bucket, index) => {
+            const unavailable =
+              bucket.error ||
+              bucket.count === null ||
+              !Number.isFinite(bucket.count) ||
+              bucket.count < 0 ||
+              !attentionIcons[bucket.id];
+            return (
+              <TouchableOpacity
+                key={bucket.id}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  unavailable
+                    ? `${ATTENTION_LABELS[bucket.id] ?? 'Задачи'}: не загрузилось. Повторить`
+                    : `${ATTENTION_LABELS[bucket.id]}: ${bucket.count}`
+                }
+                disabled={unavailable && attention.isFetching}
+                activeOpacity={0.6}
+                onPress={() =>
+                  unavailable
+                    ? attention.refetch()
+                    : openAttention(navigation, bucket.id, hasPermission('checks_view_all') ? undefined : user?.id)
+                }
+                style={[
+                  styles.taskRow,
+                  index > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: tones.attention.divider },
+                ]}
+              >
+                <Ionicons name={attentionIcons[bucket.id] ?? 'refresh-outline'} size={20} color={tones.attention.ink} />
+                <Text style={[styles.taskLabel, { color: p.text.primary }]}>
+                  {ATTENTION_LABELS[bucket.id] ?? 'Задачи'}
+                </Text>
+                <View style={[styles.taskBadge, { backgroundColor: tones.attention.inset }]}>
+                  {unavailable ? (
+                    <Ionicons name="refresh-outline" size={16} color={tones.attention.ink} />
+                  ) : (
+                    <Text style={[styles.taskCount, { color: tones.attention.ink }]}>{bucket.count}</Text>
+                  )}
+                </View>
+                <Ionicons name="chevron-forward" size={13} color={tones.attention.ink} />
+              </TouchableOpacity>
+            );
+          })
+        ) : (
+          <View style={styles.quietRow}>
+            <Ionicons name="checkmark-done-outline" size={22} color={tones.attention.ink} />
+            <Text style={[styles.name, { color: tones.attention.ink }]}>Срочных задач нет</Text>
+          </View>
+        )}
       </View>
       {(canOpenBoard || canOpenNfc || canOpenCashShift) && (
         <View style={styles.section}>
           <Text accessibilityRole="header" style={[styles.title, styles.singleHeading, { color: p.text.primary }]}>
             Сервис сейчас
           </Text>
-          <View style={[styles.group, { backgroundColor: p.bg.card, borderColor: p.border.subtle }]}>
+          <View style={[styles.group, { backgroundColor: tones.service.background }]}>
             {canOpenBoard && (
               <TouchableOpacity
                 accessibilityRole="button"
-                style={[styles.operationRow, { borderBottomColor: p.border.subtle }]}
+                style={[styles.operationRow, { borderBottomColor: tones.service.divider }]}
                 onPress={() =>
                   navigation.dispatch(
                     CommonActions.navigate({ name: 'Checks', params: { screen: 'WorkBoard', initial: false } }),
                   )
                 }
               >
-                <Ionicons name="albums-outline" size={21} color={p.accent.primaryText} />
+                <View style={[styles.operationIcon, { backgroundColor: tones.service.inset }]}>
+                  <Ionicons name="albums-outline" size={19} color={tones.service.ink} />
+                </View>
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.name, { color: p.text.primary }]}>Доска заказ-нарядов</Text>
                 </View>
@@ -183,10 +204,12 @@ export default function OwnerHomeOperational({
               <TouchableOpacity
                 accessibilityRole="button"
                 accessibilityLabel="Открыть отметку NFC"
-                style={[styles.operationRow, { borderBottomColor: p.border.subtle }]}
+                style={[styles.operationRow, { borderBottomColor: tones.service.divider }]}
                 onPress={() => navigation.dispatch(CommonActions.navigate({ name: 'NfcAttendance' }))}
               >
-                <Ionicons name="radio-outline" size={21} color={p.accent.primaryText} />
+                <View style={[styles.operationIcon, { backgroundColor: tones.service.inset }]}>
+                  <Ionicons name="radio-outline" size={19} color={tones.service.ink} />
+                </View>
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.name, { color: p.text.primary }]}>Рабочая смена</Text>
                 </View>
@@ -197,14 +220,16 @@ export default function OwnerHomeOperational({
               <TouchableOpacity
                 accessibilityRole="button"
                 accessibilityLabel="Открыть кассовую смену"
-                style={[styles.operationRow, { borderBottomColor: p.border.subtle }]}
+                style={[styles.operationRow, { borderBottomColor: tones.service.divider }]}
                 onPress={() =>
                   navigation.dispatch(
                     CommonActions.navigate({ name: 'MoreTab', params: { screen: 'CashShift', initial: false } }),
                   )
                 }
               >
-                <Ionicons name="cash-outline" size={21} color={p.accent.primaryText} />
+                <View style={[styles.operationIcon, { backgroundColor: tones.service.inset }]}>
+                  <Ionicons name="cash-outline" size={19} color={tones.service.ink} />
+                </View>
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.name, { color: p.text.primary }]}>Кассовая смена</Text>
                 </View>
@@ -215,16 +240,21 @@ export default function OwnerHomeOperational({
         </View>
       )}
       {salaryAllowed && showEarnings && (
-        <View style={styles.section}>
-          <View style={styles.heading}>
-            <Text accessibilityRole="header" style={[styles.title, { color: p.text.primary }]}>
-              Мастера сегодня
-            </Text>
+        <View style={[styles.section, styles.group, { backgroundColor: tones.earnings.background }]}>
+          <View style={styles.earningsHeading}>
+            <View style={styles.earningsHeadingText}>
+              <Text accessibilityRole="header" style={[styles.title, { color: tones.earnings.ink }]}>
+                Мастера сегодня
+              </Text>
+              <Text style={[styles.note, { color: p.text.secondary }]}>Заработок команды</Text>
+            </View>
             {earnings.data && !earnings.isError && (
-              <Text style={[styles.amount, { color: p.text.primary }]}>{ownerMoney(earnings.data.total)}</Text>
+              <Text style={[styles.earningsTotal, { color: tones.earnings.ink }]}>
+                {ownerMoney(earnings.data.total)}
+              </Text>
             )}
           </View>
-          <View style={[styles.group, { backgroundColor: p.bg.card, borderColor: p.border.subtle }]}>
+          <Animated.View layout={LinearTransition.duration(220).reduceMotion(ReduceMotion.System)}>
             {earnings.isPending ? (
               <View style={styles.padding}>
                 <Skeleton height={100} radius={8} />
@@ -236,12 +266,20 @@ export default function OwnerHomeOperational({
                 <View
                   key={employee.id}
                   testID={`owner-home-earnings-${employee.id}`}
-                  style={[styles.row, largeText && styles.employeeRowStacked, { borderBottomColor: p.border.subtle }]}
+                  style={[
+                    styles.row,
+                    largeText && styles.employeeRowStacked,
+                    { borderBottomColor: tones.earnings.divider },
+                  ]}
                 >
                   <EmployeeAvatar
                     avatar={employee.avatar}
                     userId={employee.id}
-                    style={[styles.avatar, largeText && styles.employeeAvatarTop, { backgroundColor: p.bg.muted }]}
+                    style={[
+                      styles.avatar,
+                      largeText && styles.employeeAvatarTop,
+                      { backgroundColor: tones.earnings.inset },
+                    ]}
                     imageStyle={styles.avatar}
                   >
                     <Text style={{ color: p.text.secondary }}>{employee.name.trim().slice(0, 1)}</Text>
@@ -249,14 +287,32 @@ export default function OwnerHomeOperational({
                   {largeText ? (
                     <View style={styles.employeeTextStack}>
                       <Text style={[styles.employeeStackedName, { color: p.text.primary }]}>{employee.name}</Text>
-                      <Text style={[styles.amount, { color: p.text.primary }]}>
+                      <Text
+                        style={[
+                          styles.amount,
+                          styles.earnedChip,
+                          {
+                            color: employee.earnedAmount < 0 ? p.text.primary : tones.earnings.ink,
+                            backgroundColor: tones.earnings.inset,
+                          },
+                        ]}
+                      >
                         {ownerMoney(employee.earnedAmount)}
                       </Text>
                     </View>
                   ) : (
                     <>
                       <Text style={[styles.name, { color: p.text.primary }]}>{employee.name}</Text>
-                      <Text style={[styles.amount, { color: p.text.primary }]}>
+                      <Text
+                        style={[
+                          styles.amount,
+                          styles.earnedChip,
+                          {
+                            color: employee.earnedAmount < 0 ? p.text.primary : tones.earnings.ink,
+                            backgroundColor: tones.earnings.inset,
+                          },
+                        ]}
+                      >
                         {ownerMoney(employee.earnedAmount)}
                       </Text>
                     </>
@@ -270,15 +326,18 @@ export default function OwnerHomeOperational({
               <TouchableOpacity
                 accessibilityRole="button"
                 accessibilityState={{ expanded }}
-                style={styles.more}
+                accessibilityLabel={expanded ? 'Свернуть' : `Показать всех (${employees.length})`}
+                style={[styles.more, { borderTopColor: tones.earnings.divider }]}
+                activeOpacity={0.65}
                 onPress={() => setExpanded(!expanded)}
               >
-                <Text style={{ color: p.accent.primaryText }}>
+                <Text style={{ color: tones.earnings.ink, fontSize: 13, fontWeight: '500' }}>
                   {expanded ? 'Свернуть' : `Показать всех (${employees.length})`}
                 </Text>
+                <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={16} color={tones.earnings.ink} />
               </TouchableOpacity>
             )}
-          </View>
+          </Animated.View>
           {earnings.data && !earnings.isError && (
             <Text style={[styles.caption, { color: p.text.secondary }]}>
               {ownerDateLabel(earnings.data.date)} · {EARNINGS_EXPLANATION}
@@ -291,20 +350,63 @@ export default function OwnerHomeOperational({
 }
 
 const styles = StyleSheet.create({
-  section: { marginTop: 18 },
-  heading: {
+  section: { marginTop: 14 },
+  panelHeading: {
+    minHeight: 48,
+    paddingHorizontal: 14,
+    paddingTop: 4,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    flexWrap: 'wrap',
-    gap: 8,
-    minHeight: 30,
-    marginBottom: 7,
-    paddingHorizontal: 2,
+    gap: 9,
   },
+  headingLabel: { flex: 1, minWidth: 0 },
+  taskRow: {
+    minHeight: 48,
+    marginHorizontal: 14,
+    paddingVertical: 8,
+    gap: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  taskLabel: { flex: 1, minWidth: 0, fontSize: 13, lineHeight: 19 },
+  taskBadge: {
+    minWidth: 29,
+    minHeight: 27,
+    borderRadius: 8,
+    paddingHorizontal: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  taskCount: { fontSize: 15, lineHeight: 21, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  quietRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingBottom: 16,
+    paddingTop: 4,
+  },
+  earningsHeading: {
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    gap: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+  },
+  earningsHeadingText: { flex: 1, minWidth: 145, gap: 3 },
+  earningsTotal: { fontSize: 20, lineHeight: 27, fontWeight: '600', fontVariant: ['tabular-nums'], flexShrink: 1 },
+  earnedChip: {
+    borderRadius: 8,
+    overflow: 'hidden',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    alignSelf: 'flex-start',
+  },
+  operationIcon: { width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   title: { fontSize: 16, lineHeight: 22, fontWeight: '600', letterSpacing: -0.15 },
   singleHeading: { marginBottom: 7, paddingHorizontal: 2 },
-  group: { borderRadius: 16, overflow: 'hidden' },
+  group: { borderRadius: 18, overflow: 'hidden' },
   rowIcon: { width: 25, alignItems: 'center', justifyContent: 'center' },
   row: {
     minHeight: 53,
@@ -342,7 +444,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 11,
   },
-  avatar: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
-  more: { minHeight: 48, alignItems: 'center', justifyContent: 'center', padding: 10 },
-  caption: { fontSize: 12, lineHeight: 18, marginTop: 8, paddingHorizontal: 2 },
+  avatar: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
+  more: { minHeight: 46, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, padding: 10 },
+  caption: { fontSize: 11, lineHeight: 16, paddingBottom: 13, paddingHorizontal: 14, paddingTop: 6 },
 });

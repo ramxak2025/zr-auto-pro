@@ -15,6 +15,7 @@ import { formatMoney } from '../../../../../shared/utils/formatters';
 import type {
   OwnerHomeClientCohort,
   OwnerHomeProfit,
+  OwnerHomeTimeline,
   OwnerHomeRapidReturnRow,
   OwnerHomeVisitsQuery,
 } from '../../../../../shared/types/ownerHome';
@@ -30,6 +31,8 @@ import {
 import { OwnerHomeRetry } from './OwnerHomeOperational';
 
 export type OwnerHomeDetail =
+  | { kind: 'timeline'; timeline: OwnerHomeTimeline }
+  | { kind: 'timeline-info'; timeline: OwnerHomeTimeline }
   | { kind: 'basis'; profit: OwnerHomeProfit }
   | { kind: 'profit'; period: 'day' | 'month'; profit: OwnerHomeProfit }
   | { kind: 'clients'; cohort: OwnerHomeClientCohort; range: OwnerHomeVisitsQuery; timezone: string }
@@ -48,10 +51,12 @@ export default function OwnerHomeDetails({
   detail,
   scope,
   onClose,
+  reducedMotion = false,
 }: {
   detail: OwnerHomeDetail;
   scope: OwnerHomeScope;
   onClose: () => void;
+  reducedMotion?: boolean;
 }) {
   const p = useColors();
   const insets = useSafeAreaInsets();
@@ -89,19 +94,23 @@ export default function OwnerHomeDetails({
     close();
   };
   const title =
-    detail.kind === 'basis'
-      ? 'Чистая прибыль'
-      : detail.kind === 'profit'
-        ? 'Расчёт прибыли'
-        : detail.kind === 'returns'
-          ? 'Повторные заезды'
-          : detail.cohort === 'new'
-            ? 'Клиенты впервые'
-            : 'Повторные клиенты';
+    detail.kind === 'timeline-info'
+      ? 'О расчёте и графике'
+      : detail.kind === 'timeline'
+        ? 'Расчёт за период'
+        : detail.kind === 'basis'
+          ? 'Чистая прибыль'
+          : detail.kind === 'profit'
+            ? 'Расчёт прибыли'
+            : detail.kind === 'returns'
+              ? 'Повторные заезды'
+              : detail.cohort === 'new'
+                ? 'Клиенты впервые'
+                : 'Повторные клиенты';
   return (
     <Modal
       visible={visible}
-      animationType={Platform.OS === 'ios' ? 'slide' : 'none'}
+      animationType={!reducedMotion && Platform.OS === 'ios' ? 'slide' : 'none'}
       presentationStyle="pageSheet"
       allowSwipeDismissal
       onRequestClose={close}
@@ -131,7 +140,9 @@ export default function OwnerHomeDetails({
           reserveBottomNavigation={false}
           contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 28 }]}
         >
-          {detail.kind === 'basis' || detail.kind === 'profit' ? (
+          {detail.kind === 'timeline' || detail.kind === 'timeline-info' ? (
+            <TimelineDetails detail={detail} />
+          ) : detail.kind === 'basis' || detail.kind === 'profit' ? (
             <ProfitDetails detail={detail} />
           ) : detail.kind === 'clients' ? (
             <ClientList detail={detail} scope={scope} open={open} />
@@ -141,6 +152,66 @@ export default function OwnerHomeDetails({
         </ScrollView>
       </View>
     </Modal>
+  );
+}
+
+function TimelineDetails({ detail }: { detail: Extract<OwnerHomeDetail, { kind: 'timeline' | 'timeline-info' }> }) {
+  const p = useColors(),
+    { timeline } = detail;
+  const period = ownerRangeLabel(timeline.range.from, timeline.range.through);
+  return (
+    <>
+      <Text style={[styles.subtitle, { color: p.text.secondary }]}>
+        {period} ·{' '}
+        {timeline.range.partialDay
+          ? `до ${ownerClock(timeline.range.untilExclusive, timeline.timezone)}`
+          : 'по конец дня'}{' '}
+        · {timeline.timezone}
+      </Text>
+      <Text style={[styles.sectionTitle, { color: p.text.primary }]}>{timeline.basisLabel}</Text>
+      <Text style={[styles.paragraph, { color: p.text.secondary }]}>{timeline.basisDetail}</Text>
+      {timeline.allocationDetail && (
+        <Text style={[styles.paragraph, { color: p.text.secondary }]}>{timeline.allocationDetail}</Text>
+      )}
+      <Text style={[styles.paragraph, { color: p.text.secondary }]}>
+        Дневной расчёт сохраняет правила даты начисления премий. В неделе, месяце и году премия, назначенная месяцу,
+        учитывается в своём месяце один раз. Поэтому сумма результатов отдельных дней может отличаться от итога периода.
+      </Text>
+      {detail.kind === 'timeline' && (
+        <View style={[styles.group, { backgroundColor: p.bg.card, borderColor: p.border.subtle }]}>
+          {accrualBreakdown(timeline.totals).map((row) => (
+            <View key={row.label} style={[styles.detailRow, { borderBottomColor: p.border.subtle }]}>
+              <Text style={[styles.rowLabel, { color: p.text.primary }]}>{row.label}</Text>
+              <Text style={[styles.rowValue, { color: p.text.primary }]}>
+                {row.contribution > 0 ? '+' : row.contribution < 0 ? '−' : ''}
+                {formatMoney(Math.abs(row.contribution), 2)}
+              </Text>
+            </View>
+          ))}
+          <View style={styles.total}>
+            <Text style={[styles.totalLabel, { color: p.text.primary }]}>Чистая прибыль</Text>
+            <Text style={[styles.totalValue, { color: p.text.primary }]}>
+              {formatMoney(timeline.totals.netProfit, 2)}
+            </Text>
+          </View>
+        </View>
+      )}
+      <Text style={[styles.paragraph, { color: p.text.secondary, marginTop: 14 }]}>
+        Оборот: {formatMoney(timeline.totals.revenue, 2)}. Мотивация уже входит в премии и не вычитается повторно.
+        Выплаты и остаток денег в кассе — отдельные показатели.
+      </Text>
+      <Text style={[styles.paragraph, { color: p.text.secondary }]}>
+        На графике — оборот и прибыль за каждый{' '}
+        {timeline.range.period === 'day' ? 'час' : timeline.range.period === 'year' ? 'месяц' : 'день'}. Над ним — итоги
+        выбранного периода. Будущие даты остаются пустыми.
+        {timeline.intradayPolicy === 'daily_costs_at_opening'
+          ? ' Расходы дня без точного времени включены в первый час; это распределение затрат, а не время оплаты.'
+          : ''}
+      </Text>
+      <Text style={[styles.paragraph, { color: p.text.secondary }]}>
+        Нижняя строка панели всегда показывает месяц выбранной даты и сравнение с таким же периодом прошлого месяца.
+      </Text>
+    </>
   );
 }
 
