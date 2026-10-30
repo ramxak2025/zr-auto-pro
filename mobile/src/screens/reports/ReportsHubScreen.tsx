@@ -48,6 +48,9 @@ export const REPORT_CATALOG_QUERY_KEY = ['report-catalog'] as const;
 
 /** Иконка и акцент карточки по id отчёта — имена Ionicons, которые есть в шиме (lucide). */
 export const REPORT_VISUALS: Record<ReportId, { icon: string; color: string }> = {
+  sales: { icon: 'receipt-outline', color: colors.blue[600] },
+  'gross-profit': { icon: 'trending-up-outline', color: colors.green[600] },
+  abc: { icon: 'stats-chart-outline', color: colors.purple[600] },
   summary: { icon: 'stats-chart-outline', color: colors.primary[600] },
   masters: { icon: 'people-outline', color: colors.indigo[600] },
   salary: { icon: 'wallet-outline', color: colors.green[600] },

@@ -2,9 +2,20 @@ import React from 'react';
 import type { OwnerHomeRapidReturnRow } from '../../../../../../shared/types/ownerHome';
 const mockPermission = jest.fn(() => true);
 const mockDispatch = jest.fn();
+const mockStates: unknown[] = [];
+let mockStateIndex = 0;
 jest.mock('react', () => ({
   ...jest.requireActual('react'),
-  useState: (value: unknown) => [value, jest.fn()],
+  useState: (value: unknown) => {
+    const index = mockStateIndex++;
+    if (!(index in mockStates)) mockStates[index] = value;
+    return [
+      mockStates[index],
+      (next: unknown) => {
+        mockStates[index] = typeof next === 'function' ? next(mockStates[index]) : next;
+      },
+    ];
+  },
   useEffect: jest.fn(),
   useRef: (value: unknown) => ({ current: value }),
 }));
@@ -37,8 +48,10 @@ jest.mock('../../../../contexts/ThemeContext', () => ({
 }));
 jest.mock('../../../../api/services', () => ({ reportsApi: {} }));
 jest.mock('../OwnerHomeOperational', () => ({ OwnerHomeRetry: 'OwnerHomeRetry' }));
-import OwnerHomeDetails, { ReturnVehicle } from '../OwnerHomeDetails';
-import { timelineFixture } from '../__fixtures__/timeline';
+import OwnerHomeDetails, { ReturnVehicle, type OwnerHomeDetail } from '../OwnerHomeDetails';
+import { accrualFixture, footerFixture, timelineFixture } from '../__fixtures__/timeline';
+import { formatMoney } from '../../../../../../shared/utils/formatters';
+import { ownerRangeLabel } from '../ownerHomeState';
 
 const fixture: OwnerHomeRapidReturnRow = {
   carId: 'car',
@@ -73,31 +86,161 @@ function text(node: React.ReactNode): string {
 beforeEach(() => {
   mockPermission.mockReturnValue(true);
   mockDispatch.mockClear();
+  mockStates.length = 0;
+  mockStateIndex = 0;
+});
+
+function resolveFinancial(node: React.ReactNode): React.ReactNode {
+  if (!React.isValidElement<Record<string, unknown>>(node)) return node;
+  if (typeof node.type === 'function') {
+    return resolveFinancial((node.type as (props: Record<string, unknown>) => React.ReactNode)(node.props));
+  }
+  return React.cloneElement(
+    node,
+    {},
+    ...React.Children.toArray(node.props.children as React.ReactNode).map(resolveFinancial),
+  );
+}
+function financialTree(detail: Extract<OwnerHomeDetail, { kind: 'timeline' | 'timeline-info' | 'profit' | 'basis' }>) {
+  mockStateIndex = 0;
+  return resolveFinancial(
+    OwnerHomeDetails({ detail, scope: { key: ['account'], isCurrent: () => true }, onClose: jest.fn() }),
+  );
+}
+function disclosure(tree: React.ReactNode) {
+  return nodes(tree).find((node) => node.props.accessibilityLabel === 'Как считаем')!;
+}
+
+test.each(['day', 'week', 'month', 'year'] as const)(
+  '%s puts the selected period and exact calculation before accounting notes',
+  (period) => {
+    const data = timelineFixture(period);
+    const copy = text(financialTree({ kind: 'timeline', timeline: data }));
+    expect(copy).toContain(ownerRangeLabel(data.range.from, data.range.through));
+    expect(copy).toContain('Текущий филиал · до 14:20');
+    expect(copy).toContain('Europe/Moscow');
+    expect(copy).toContain(`Оборот${formatMoney(data.totals.revenue, 2)}`);
+    expect(copy).toContain(`Прибыль по чекам+${formatMoney(data.totals.checkProfit, 2)}`);
+    expect(copy).toContain(`Постоянные расходы−${formatMoney(3000, 2)}`);
+    expect(copy).toContain(`Чистая прибыль${formatMoney(data.totals.netProfit, 2)}`);
+    expect(copy.indexOf('Чистая прибыль')).toBeLessThan(copy.indexOf('По текущему плану'));
+    expect(copy).not.toContain(data.basisDetail);
+    expect(copy).not.toMatch(/график|первый час|Над ним/);
+  },
+);
+
+test('calculation keeps expense reversals positive and does not deduct the motivation subset twice', () => {
+  const data = {
+    ...timelineFixture(),
+    totals: {
+      revenue: 25000.75,
+      checkProfit: 9000.25,
+      plannedFixedAmortized: 2000,
+      staffFixedAmortized: 1000,
+      staffPctTurnover: 200,
+      staffPctProfit: 100,
+      oneOffExpenses: 300,
+      recurringExcess: -100.5,
+      salaryExtras: 700,
+      motivation: 300,
+      perVehicleDayExpense: 50,
+      netProfit: 4750.75,
+    },
+  };
+  const copy = text(financialTree({ kind: 'timeline', timeline: data }));
+  expect(copy).toContain(`Премии и мотивация−${formatMoney(700, 2)}`);
+  expect(copy).toContain(`Постоянка вне Плана+${formatMoney(100.5, 2)}`);
+  expect(copy).toContain(`За автомобиль в день−${formatMoney(50, 2)}`);
+  expect(copy).toContain(`Чистая прибыль${formatMoney(4750.75, 2)}`);
+  expect(copy).not.toContain(`Мотивация−${formatMoney(300, 2)}`);
 });
 
 test.each(['timeline', 'timeline-info'] as const)(
-  '%s explains the summary and preserves the current-plan basis',
+  '%s reveals and collapses source accounting rules without changing the calculation',
   (kind) => {
-    const data = timelineFixture();
-    const dialog = OwnerHomeDetails({
-      detail: { kind, timeline: data },
-      scope: { key: ['account'], isCurrent: () => true },
-      onClose: jest.fn(),
-    });
-    const detail = nodes(dialog).find(
-      (node) => typeof node.type === 'function' && node.type.name === 'TimelineDetails',
-    )!;
-    const content = (detail.type as React.FunctionComponent<Record<string, unknown>>)(detail.props);
-    const copy = text(dialog) + text(content as React.ReactNode);
-    expect(copy).toContain(data.basisLabel);
-    expect(copy).toContain(data.basisDetail);
-    expect(copy).toContain('В сводке — чистая прибыль после расходов и оборот за выбранный период');
-    expect(copy).toContain('такими же датами прошлого месяца');
-    expect(copy).toContain('Мотивация уже входит в премии и не вычитается повторно');
-    expect(copy).not.toMatch(/график|первый час|Над ним/);
-    if (kind === 'timeline-info') expect(copy).toContain('О расчёте сводки');
+    const data = {
+      ...timelineFixture(),
+      basisDetail: 'Исторические результаты пересчитаны по текущему плану. Это не архивный снимок.',
+    };
+    const detail = { kind, timeline: data };
+    const collapsed = financialTree(detail);
+    expect(disclosure(collapsed).props.accessibilityState).toEqual({ expanded: false });
+    expect(text(collapsed)).not.toContain(data.basisDetail);
+    expect(text(collapsed)).not.toContain(data.allocationDetail);
+    (disclosure(collapsed).props.onPress as () => void)();
+    const expanded = financialTree(detail);
+    expect(disclosure(expanded).props.accessibilityState).toEqual({ expanded: true });
+    expect(text(expanded)).toContain(data.basisDetail);
+    expect(text(expanded)).toContain(data.allocationDetail);
+    expect(text(expanded)).toContain('Выплаты и остаток кассы считаются отдельно');
+    expect(text(expanded)).toContain(`Чистая прибыль${formatMoney(data.totals.netProfit, 2)}`);
+    (disclosure(expanded).props.onPress as () => void)();
+    expect(text(financialTree(detail))).toBe(text(collapsed));
+    expect(mockDispatch).not.toHaveBeenCalled();
   },
 );
+
+test('info starts with a compact net-profit formula and explicit comparable month dates', () => {
+  const data = timelineFixture('year');
+  const copy = text(financialTree({ kind: 'timeline-info', timeline: data }));
+  expect(copy).toContain('Как считаем прибыль');
+  expect(copy).toContain('Прибыль по чекам− Расходы и начисления');
+  expect(copy).toContain(`Чистая прибыль${formatMoney(data.totals.netProfit, 2)}`);
+  expect(copy).toContain('Себестоимость и сдельная оплата уже в прибыли по чекам');
+  expect(copy).toContain('Мотивация включена в премии один раз');
+  expect(copy).toContain(
+    `Месяц: ${ownerRangeLabel(data.footer.current.period.from, data.footer.current.period.through)}`,
+  );
+  expect(copy).toContain(
+    `Сравнение: ${ownerRangeLabel(data.footer.comparison.period.from, data.footer.comparison.period.through)}, до 14:20`,
+  );
+  expect(copy).not.toContain('Постоянные расходы');
+  expect(copy).not.toContain(data.basisDetail);
+});
+
+test('monthly details retain the actual MTD comparison rather than the current day', () => {
+  const copy = text(financialTree({ kind: 'profit', period: 'month', profit: footerFixture }));
+  expect(copy).toContain(`Чистая прибыль${formatMoney(footerFixture.current.mtd.netProfit, 2)}`);
+  expect(copy).toContain(`${ownerRangeLabel('2026-09-01', '2026-09-29')} · до 14:20`);
+  expect(copy).toContain(`Было${formatMoney(footerFixture.comparison.mtd.netProfit, 2)}`);
+  expect(copy).toContain(`Изменение+${formatMoney(81100, 2)} · +17%`);
+  expect(copy).not.toContain(formatMoney(footerFixture.current.day.netProfit, 2));
+  expect(copy).not.toContain(footerFixture.basisDetail);
+});
+
+test.each([0, -200])(
+  'monthly comparison with baseline %s preserves money change and explains the missing percent on demand',
+  (baseline) => {
+    const profit = {
+      ...footerFixture,
+      comparison: {
+        ...footerFixture.comparison,
+        mtd: accrualFixture(baseline),
+        mtdDelta: { amount: 750.25, percent: 999 },
+      },
+    };
+    const detail = { kind: 'profit' as const, period: 'month' as const, profit };
+    const tree = financialTree(detail);
+    expect(text(tree)).toContain(`Изменение+${formatMoney(750.25, 2)}`);
+    expect(text(tree)).not.toContain('%');
+    (disclosure(tree).props.onPress as () => void)();
+    expect(text(financialTree(detail))).toContain('При нулевой или отрицательной базе показываем изменение в рублях');
+  },
+);
+
+test('all-point completed periods keep their scope, date and timezone', () => {
+  const source = timelineFixture('month');
+  const data = {
+    ...source,
+    pointId: null,
+    range: { ...source.range, from: '2025-12-01', through: '2025-12-31', partialDay: false },
+  };
+  const copy = text(financialTree({ kind: 'timeline', timeline: data }));
+  expect(copy).toContain(ownerRangeLabel('2025-12-01', '2025-12-31'));
+  expect(copy).toContain('Все филиалы · по конец дня');
+  expect(copy).toContain('Europe/Moscow');
+  expect(copy).not.toContain('до 14:20');
+});
 
 test('a real detail open waits for native dismissal and addresses CheckDetail inside the Checks tab', () => {
   const onClose = jest.fn();

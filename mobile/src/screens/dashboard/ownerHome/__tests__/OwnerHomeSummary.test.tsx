@@ -20,11 +20,13 @@ jest.mock('react-native', () => ({
   Text: 'Text',
   TouchableOpacity: 'TouchableOpacity',
   ActivityIndicator: 'ActivityIndicator',
+  Image: 'Image',
   AppState: { currentState: 'active' },
   Platform: { OS: 'ios' },
   StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 0.5 },
 }));
 jest.mock('expo-linear-gradient', () => ({ LinearGradient: 'LinearGradient' }));
+jest.mock('../../../../../assets/logo.png', () => 'autexa-existing-logo');
 jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 jest.mock('react-native-reanimated', () => ({
   __esModule: true,
@@ -234,4 +236,22 @@ test('loading and retry states display no financial amount or chart, and expose 
   expect(retry).toHaveBeenCalledTimes(1);
   const busy = OwnerHomeSummaryPlaceholder({ errorMessage: 'Сводка не загрузилась', retrying: true, onRetry: retry });
   expect(buttons(busy)[0].props.disabled).toBe(true);
+});
+
+test('the existing brand asset stays decorative and cannot intercept summary actions or screen-reader navigation', () => {
+  const tree = render(timelineFixture());
+  const pattern = nodes(tree).find((node) => typeof node.type === 'function' && node.type.name === 'BrandClouds')!;
+  const content = (pattern.type as (props: Record<string, unknown>) => React.ReactElement<Record<string, unknown>>)(
+    pattern.props,
+  );
+  expect(content.props.pointerEvents).toBe('none');
+  expect(content.props.accessibilityElementsHidden).toBe(true);
+  expect(content.props.importantForAccessibility).toBe('no-hide-descendants');
+  const marks = nodes(content).filter((node) => node.type === 'Image');
+  expect(marks).toHaveLength(2);
+  for (const mark of marks) {
+    expect(mark.props.source).toBe('autexa-existing-logo');
+    expect(mark.props.accessible).toBe(false);
+  }
+  expect(buttons(content)).toHaveLength(0);
 });

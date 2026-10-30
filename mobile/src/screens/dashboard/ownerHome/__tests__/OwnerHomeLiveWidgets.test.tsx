@@ -52,7 +52,10 @@ jest.mock('react-native-reanimated', () => ({
   ReduceMotion: { System: 'system' },
 }));
 jest.mock('@react-navigation/native', () => ({
-  useNavigation: () => ({ dispatch: mockDispatch }),
+  useNavigation: () => ({
+    dispatch: mockDispatch,
+    navigate: (name: string, params: unknown) => mockDispatch({ type: 'NAVIGATE', payload: { name, params } }),
+  }),
   CommonActions: { navigate: (payload: unknown) => ({ type: 'NAVIGATE', payload }) },
 }));
 jest.mock('@tanstack/react-query', () => ({ useQuery: (options: unknown) => mockQuery(options) }));
@@ -318,14 +321,14 @@ test('today always comes from the server even when the optional calendar hint is
   await query('shifts').queryFn();
   expect(mockCallsApi).toHaveBeenLastCalledWith({});
   expect(mockScheduleApi).toHaveBeenLastCalledWith();
-  expect(loaded).toEqual({ kind: 'connected', summary });
+  expect(loaded).toEqual({ kind: 'connected', summary, pending: [] });
   jest.clearAllMocks();
   render({ todayDate: undefined });
   await query('calls').queryFn();
   expect(mockCallsApi).toHaveBeenLastCalledWith({});
 });
 
-test('only a copied summary reaches the calls cache, without customer data or unknown fields', async () => {
+test('only a copied summary and bounded previews reach the calls cache, without full rows or unknown fields', async () => {
   mockCallsApi.mockResolvedValue({
     data: {
       calls: [{ clientPhone: 'private', recordingUrl: 'private' }],
@@ -334,7 +337,7 @@ test('only a copied summary reaches the calls cache, without customer data or un
   });
   render();
   const loaded = await query('calls').queryFn();
-  expect(loaded).toEqual({ kind: 'connected', summary });
+  expect(loaded).toEqual({ kind: 'connected', summary, pending: [] });
   expect(JSON.stringify(loaded)).not.toContain('private');
 });
 
@@ -350,7 +353,7 @@ test('only the exact no-integration response becomes disconnected; provider and 
   await expect(query('calls').queryFn()).resolves.toEqual({ kind: 'disconnected' });
   const providerError = new Error('Provider offline');
   mockCallsApi.mockRejectedValue(providerError);
-  await expect(query('calls').queryFn()).rejects.toBe(providerError);
+  await expect(query('calls').queryFn()).rejects.toThrow('Не удалось обновить звонки');
   expect(query('calls').refetchInterval({ state: { data: { kind: 'disconnected' } } })).toBe(false);
   expect(query('calls').refetchInterval({ state: { data: { kind: 'connected' } } })).toBe(60_000);
 });
@@ -372,7 +375,7 @@ test.each([
   await expect(query('calls').queryFn()).rejects.toThrow('Не удалось прочитать сводку звонков');
 });
 
-test('confirmed zero remains a real zero, while each attention count opens the unfiltered real calls route', () => {
+test('confirmed zero remains a real zero and each metric opens its real today filter with a fresh entry identity', () => {
   mockCalls.data = { kind: 'connected', summary: emptySummary };
   const zeroTree = render();
   expect(button(zeroTree, 'Не перезвонили: 0. Открыть журнал звонков')).toBeDefined();
@@ -382,10 +385,78 @@ test('confirmed zero remains a real zero, while each attention count opens the u
   const tree = render();
   (button(tree, 'Не перезвонили: 3. Открыть журнал звонков').props.onPress as () => void)();
   (button(tree, 'Пропущено: 5. Открыть журнал звонков').props.onPress as () => void)();
+  (button(tree, 'Принятые: 7. Открыть журнал звонков').props.onPress as () => void)();
+  (button(tree, 'Исходящие: 4. Открыть журнал звонков').props.onPress as () => void)();
+  (button(tree, 'Звонки сегодня. Открыть журнал звонков').props.onPress as () => void)();
   expect(mockDispatch.mock.calls).toEqual([
-    [{ type: 'NAVIGATE', payload: { name: 'MoreTab', params: { screen: 'Calls', initial: false } } }],
-    [{ type: 'NAVIGATE', payload: { name: 'MoreTab', params: { screen: 'Calls', initial: false } } }],
+    ...['pending', 'missed', 'incoming', 'outgoing', 'all'].map((filter) => [
+      {
+        type: 'NAVIGATE',
+        payload: {
+          name: 'MoreTab',
+          params: {
+            screen: 'Calls',
+            params: { focusToday: true, filter, entryRequestId: expect.any(String) },
+            initial: false,
+          },
+        },
+      },
+    ]),
   ]);
+  expect(new Set(mockDispatch.mock.calls.map(([action]) => action.payload.params.params.entryRequestId)).size).toBe(5);
+  expect(textContent(tree)).toContain('Принято 58% входящих');
+  expect(textContent(zeroTree)).toContain('Сегодня звонков пока нет');
+  expect(textContent(zeroTree)).not.toContain('%');
+});
+
+test('caller previews use tenant time and open the pending journal without initiating a call', () => {
+  mockTimezone = 'Asia/Vladivostok';
+  mockCalls.data = {
+    kind: 'connected',
+    summary,
+    pending: [
+      {
+        id: 'preview-a',
+        phone: '+79990000001',
+        name: 'Синтетический клиент',
+        date: '2026-10-30T01:15:00Z',
+        attempts: 2,
+      },
+      { id: 'preview-b', phone: '+79990000002', name: null, date: '2026-10-30T01:00:00Z', attempts: 1 },
+    ],
+  };
+  const tree = render();
+  const preview = byId(tree, 'owner-home-pending-call-preview-a');
+  expect(textContent(preview)).toContain('11:15 · Звонков: 2');
+  expect(textContent(tree)).toContain('+7 (999) 000-00-02');
+  (preview.props.onPress as () => void)();
+  expect(mockDispatch.mock.calls[0][0].payload.params.params.filter).toBe('pending');
+});
+
+test('captured calls actions and responses recheck permission, visibility, role and scope', async () => {
+  const tree = render();
+  const captured = button(tree, 'Не перезвонили: 3. Открыть журнал звонков');
+  const capturedQuery = query('calls');
+  render({ enabled: false });
+  (captured.props.onPress as () => void)();
+  await expect(capturedQuery.queryFn()).rejects.toThrow('Сессия изменилась');
+  mockAuth.hasPermission.mockReturnValue(false);
+  render();
+  (captured.props.onPress as () => void)();
+  mockAuth.hasPermission.mockReturnValue(true);
+  mockAuth.user.role = 'master';
+  render();
+  (captured.props.onPress as () => void)();
+  expect(mockDispatch).not.toHaveBeenCalled();
+  expect(mockCallsApi).not.toHaveBeenCalled();
+  mockAuth.user.role = 'director';
+  render();
+  mockCallsApi.mockImplementation(async () => {
+    mockAuth.hasPermission.mockReturnValue(false);
+    render();
+    return { data: { summary, calls: [] } };
+  });
+  await expect(capturedQuery.queryFn()).rejects.toThrow('Сессия изменилась');
 });
 
 test('disconnected state offers the real integrations route only with settings permission', () => {

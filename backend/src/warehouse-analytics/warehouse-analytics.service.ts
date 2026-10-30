@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { pointFilterSql, warehousePointFilterSql } from '../common/point-scope';
 import { listTenantTimezones, zonedDateKey } from '../common/timezone';
+import { loadAnalysis } from '../reports/builder/analysis-query';
 
 export type Period = 'week' | 'month' | 'quarter' | 'year';
 export type Urgency = 'critical' | 'now' | 'soon' | 'overstocked';
@@ -351,36 +352,29 @@ export class WarehouseAnalyticsService {
       }
     }
 
-    // ABC analysis — sort products by revenue desc, cumulative split 80/15/5
-    const sortedByRevenue = [...salesRows]
-      .map((r) => ({
-        revenue: parseFloat(r.revenue) || 0,
-        stock: parseFloat(r.stock) || 0,
-        cost: parseFloat(r.cost_price) || 0,
-      }))
-      .sort((a, b) => b.revenue - a.revenue);
-    const totalRevenue = sortedByRevenue.reduce((sum, r) => sum + r.revenue, 0);
-    const abc: { [k in 'A' | 'B' | 'C']: AbcTier } = {
-      A: { tier: 'A', count: 0, value: 0, pct: 0 },
-      B: { tier: 'B', count: 0, value: 0, pct: 0 },
-      C: { tier: 'C', count: 0, value: 0, pct: 0 },
-    };
-    let cumulative = 0;
-    for (const r of sortedByRevenue) {
-      const stockValue = r.stock * r.cost;
-      cumulative += r.revenue;
-      const ratio = totalRevenue > 0 ? cumulative / totalRevenue : 1;
-      let tier: 'A' | 'B' | 'C';
-      if (ratio <= 0.8) tier = 'A';
-      else if (ratio <= 0.95) tier = 'B';
-      else tier = 'C';
-      abc[tier].count += 1;
-      abc[tier].value += stockValue;
-    }
-    const totalAbcValue = abc.A.value + abc.B.value + abc.C.value;
-    for (const tier of ['A', 'B', 'C'] as const) {
-      abc[tier].pct = totalAbcValue > 0 ? (abc[tier].value / totalAbcValue) * 100 : 0;
-    }
+    // ABC alone uses the canonical snapshot calculation (discounts/returns included).
+    // Existing stock metrics retain their contracts. Classification runs over ALL
+    // authorised catalogue IDs before the report display limit; zero-sales stock is C.
+    const abcNow = new Date().toISOString();
+    const abcData = await loadAnalysis(
+      this.pool,
+      {
+        tenantId: tenantID,
+        pointId,
+        dateFrom: periodStartDate,
+        dateTo: abcNow.slice(0, 10),
+        tz: 'UTC',
+        days,
+      },
+      {
+        kind: 'products',
+        basis: 'revenue',
+        warehouse: { productIds: salesRows.map((r) => String(r.id)), from: periodStartIso, to: abcNow },
+      },
+    );
+    const abcAnalysis = (['A', 'B', 'C'] as const).map(
+      (tier) => abcData.warehouse_tiers?.find((r) => r.tier === tier) ?? { tier, count: 0, value: 0, pct: 0 },
+    );
 
     // Average margin (per-product) and GMROI = gross profit / avg cost value
     let marginSum = 0;
@@ -425,7 +419,7 @@ export class WarehouseAnalyticsService {
       deadStock30: dead30,
       deadStock60: dead60,
       deadStock90: dead90,
-      abcAnalysis: [abc.A, abc.B, abc.C],
+      abcAnalysis,
       avgMargin,
       gmroi,
       overStocked: overStocked.slice(0, 20),

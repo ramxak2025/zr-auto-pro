@@ -24,6 +24,7 @@ import { colors, spacing, fontSize, fontWeight, softTint } from '../../theme';
 import { callsApi } from '../../api/services';
 import type { useColors } from '../../contexts/ThemeContext';
 import { formatTimeShort } from '../../../../shared/utils/formatters';
+import { isMissedCall } from '../../screens/callsJournalState';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -107,7 +108,7 @@ export const CallRow = React.memo(function CallRow({
    */
   timeZone: string;
 }) {
-  const isMissed = call.direction === 'incoming' && (call.status === 'missed' || call.duration === 0);
+  const isMissed = isMissedCall(call);
   const isIncoming = call.direction === 'incoming';
   const displayPhone = isIncoming ? call.from : call.to;
   const callTime = call.date ? formatTimeShort(call.date, timeZone) : '';

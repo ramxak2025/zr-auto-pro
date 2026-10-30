@@ -15,6 +15,8 @@ import type { TodayEarnings } from '../../../../../shared/types';
 import { EARNINGS_EXPLANATION } from '../../../../../shared/utils/dashboardAttention';
 import { loadOwnerHome, ownerClock, ownerDateLabel, ownerMoney, type OwnerHomeScope } from './ownerHomeState';
 import { ownerHomeSurfaces } from './ownerHomeSurfaces';
+import { ownerCallPhoneLabel, ownerCallsSnapshot, type OwnerCallsSnapshot } from './ownerHomeCalls';
+import { newCallsEntry, telephonyDisconnected, type CallsFilter } from '../../callsJournalState';
 import {
   ownerShiftRoster,
   ownerTeamRows,
@@ -24,40 +26,12 @@ import {
 } from './ownerHomeTeam';
 
 export { ownerShiftRoster } from './ownerHomeTeam';
+export {
+  callsSummary as ownerCallsSummary,
+  telephonyDisconnected as ownerTelephonyDisconnected,
+} from '../../callsJournalState';
 
-type CallsSummary = Awaited<ReturnType<typeof callsApi.getCalls>>['data']['summary'];
-type CallsSnapshot = { kind: 'connected'; summary: CallsSummary } | { kind: 'disconnected' };
 let scheduleFocusSequence = 0;
-
-/** Reject unavailable or inconsistent totals rather than turning them into reassuring zeros. */
-export function ownerCallsSummary(value: unknown): CallsSummary | null {
-  if (!value || typeof value !== 'object') return null;
-  const summary = value as CallsSummary;
-  const fields = [summary.total, summary.incoming, summary.outgoing, summary.missed, summary.notCalledBack];
-  if (fields.some((count) => !Number.isSafeInteger(count) || count < 0)) return null;
-  if (
-    summary.total !== summary.incoming + summary.outgoing ||
-    summary.missed > summary.incoming ||
-    summary.notCalledBack > summary.missed
-  )
-    return null;
-  return {
-    total: summary.total,
-    incoming: summary.incoming,
-    outgoing: summary.outgoing,
-    missed: summary.missed,
-    notCalledBack: summary.notCalledBack,
-  };
-}
-
-/** CallsService emits this exact response only when neither supported provider is connected. */
-export function ownerTelephonyDisconnected(error: unknown): boolean {
-  const response = (error as { response?: { status?: number; data?: { message?: unknown } } } | null)?.response;
-  return (
-    response?.status === 400 &&
-    response.data?.message === 'МоиЗвонки не настроен. Подключите интеграцию в разделе Маркетинг.'
-  );
-}
 
 function shiftDetail(row: OwnerTeamRow, timezone: string): string {
   const employee = row.schedule;
@@ -107,21 +81,23 @@ export default function OwnerHomeLiveWidgets({
     canQuery,
     scheduleAllowed,
     salaryAllowed,
+    callsAllowed,
+    canConnect,
     earnings: null as TodayEarnings | null,
     employeeIds: new Set<string>(),
   });
-  Object.assign(access.current, { scopeKey, canQuery, scheduleAllowed, salaryAllowed });
+  Object.assign(access.current, { scopeKey, canQuery, scheduleAllowed, salaryAllowed, callsAllowed, canConnect });
   useEffect(() => {
     access.current.mounted = true;
     return () => {
       access.current.mounted = false;
     };
   }, []);
-  const featureCurrent = (feature: 'scheduleAllowed' | 'salaryAllowed') => {
+  const featureCurrent = (feature: 'scheduleAllowed' | 'salaryAllowed' | 'callsAllowed' | 'canConnect') => {
     const latest = access.current;
     return latest.mounted && latest.scopeKey === scopeKey && latest.canQuery && latest[feature] && scope.isCurrent();
   };
-  const assertFeature = (feature: 'scheduleAllowed' | 'salaryAllowed') => {
+  const assertFeature = (feature: 'scheduleAllowed' | 'salaryAllowed' | 'callsAllowed') => {
     if (!featureCurrent(feature)) throw new Error('Сессия изменилась');
   };
   const schedule = useQuery({
@@ -158,22 +134,23 @@ export default function OwnerHomeLiveWidgets({
     refetchInterval: canQuery && salaryAllowed ? 60_000 : false,
     placeholderData: undefined,
   });
-  const calls = useQuery<CallsSnapshot>({
+  const calls = useQuery<OwnerCallsSnapshot>({
     queryKey: ['owner-home', ...scope.key, 'live-calls-today', todayDate ?? 'today'],
     queryFn: () =>
-      loadOwnerHome<CallsSnapshot>(scope, async () => {
+      loadOwnerHome<OwnerCallsSnapshot>(scope, async () => {
+        assertFeature('callsAllowed');
+        let response;
         try {
           // An omitted date resolves TODAY in the tenant timezone on both provider paths.
           // Do not reuse the historical chart date or a yesterday-valued calendar snapshot.
-          const response = await callsApi.getCalls({});
-          const summary = ownerCallsSummary(response.data?.summary);
-          if (!summary) throw new Error('Не удалось прочитать сводку звонков');
-          // Retain no customer rows, phone numbers or recording URLs in this widget's cache.
-          return { data: { kind: 'connected', summary } };
+          response = await callsApi.getCalls({});
         } catch (error) {
-          if (ownerTelephonyDisconnected(error)) return { data: { kind: 'disconnected' } };
-          throw error;
+          assertFeature('callsAllowed');
+          if (telephonyDisconnected(error)) return { data: { kind: 'disconnected' } };
+          throw new Error('Не удалось обновить звонки');
         }
+        assertFeature('callsAllowed');
+        return { data: ownerCallsSnapshot(response.data) };
       }),
     enabled: canQuery && callsAllowed,
     staleTime: 30_000,
@@ -189,9 +166,15 @@ export default function OwnerHomeLiveWidgets({
     p.mode === 'dark'
       ? { background: '#32252d', ink: '#edb8c7', divider: '#533d48', quiet: '#d3b7c0' }
       : { background: '#faeff2', ink: '#8c3f56', divider: '#e9d5dd', quiet: '#795966' };
-  const open = (screen: 'Calls' | 'Integrations') => {
-    if (!scope.isCurrent()) return;
-    navigation.dispatch(CommonActions.navigate({ name: 'MoreTab', params: { screen, initial: false } }));
+  const openCalls = (filter: CallsFilter = 'all') => {
+    if (!featureCurrent('callsAllowed')) return;
+    navigation.navigate('MoreTab', { screen: 'Calls', params: newCallsEntry(filter), initial: false });
+  };
+  const openIntegrations = () => {
+    if (!featureCurrent('canConnect') || !featureCurrent('callsAllowed')) return;
+    navigation.dispatch(
+      CommonActions.navigate({ name: 'MoreTab', params: { screen: 'Integrations', initial: false } }),
+    );
   };
   const retry = (label: string, fetching: boolean, refetch: () => unknown, ink: string) => (
     <View style={styles.notice} accessibilityRole="alert">
@@ -274,6 +257,7 @@ export default function OwnerHomeLiveWidgets({
     );
   };
   const summary = calls.data?.kind === 'connected' ? calls.data.summary : null;
+  const pendingCalls = calls.data?.kind === 'connected' ? (calls.data.pending ?? []) : [];
   return (
     <>
       {(scheduleAllowed || salaryAllowed) && (
@@ -466,7 +450,9 @@ export default function OwnerHomeLiveWidgets({
           <TouchableOpacity
             accessibilityRole="button"
             accessibilityLabel="Звонки сегодня. Открыть журнал звонков"
-            onPress={() => open('Calls')}
+            disabled={!canQuery}
+            accessibilityState={{ disabled: !canQuery }}
+            onPress={() => openCalls()}
             activeOpacity={0.65}
             style={styles.heading}
           >
@@ -492,7 +478,8 @@ export default function OwnerHomeLiveWidgets({
                 <TouchableOpacity
                   accessibilityRole="button"
                   accessibilityLabel="Подключить телефонию"
-                  onPress={() => open('Integrations')}
+                  disabled={!canQuery}
+                  onPress={openIntegrations}
                   style={styles.connect}
                 >
                   <Text style={[styles.link, { color: callTone.ink }]}>Подключить</Text>
@@ -502,22 +489,45 @@ export default function OwnerHomeLiveWidgets({
             </View>
           ) : summary ? (
             <>
+              <TouchableOpacity
+                testID="owner-home-calls-pending"
+                accessibilityRole="button"
+                accessibilityLabel={`Не перезвонили: ${summary.notCalledBack}. Открыть журнал звонков`}
+                accessibilityHint="Звонки без перезвона за сегодня"
+                disabled={!canQuery}
+                onPress={() => openCalls('pending')}
+                activeOpacity={0.6}
+                style={styles.callPending}
+              >
+                <Text style={[styles.callCount, { color: callTone.ink }]}>{summary.notCalledBack}</Text>
+                <View style={[styles.flex, styles.callPendingText]}>
+                  <Text style={[styles.name, { color: callTone.ink }]}>Без перезвона</Text>
+                  <Text style={[styles.note, { color: callTone.quiet }]}>
+                    {summary.total === 0
+                      ? 'Сегодня звонков пока нет'
+                      : summary.notCalledBack > 0
+                        ? 'Открыть список'
+                        : 'Пропущенных без перезвона нет'}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={callTone.ink} />
+              </TouchableOpacity>
               <View style={[styles.callMetrics, (fontScale > 1.2 || width < 360) && styles.stacked]}>
                 {[
-                  { label: 'Не перезвонили', count: summary.notCalledBack },
-                  { label: 'Пропущено', count: summary.missed },
-                ].map(({ label, count }) => (
+                  { label: 'Принятые', count: summary.incoming - summary.missed, filter: 'incoming' as const },
+                  { label: 'Пропущено', count: summary.missed, filter: 'missed' as const },
+                  { label: 'Исходящие', count: summary.outgoing, filter: 'outgoing' as const },
+                ].map(({ label, count, filter }) => (
                   <TouchableOpacity
                     key={label}
                     accessibilityRole="button"
                     accessibilityLabel={`${label}: ${count}. Открыть журнал звонков`}
-                    onPress={() => open('Calls')}
+                    disabled={!canQuery}
+                    onPress={() => openCalls(filter)}
                     activeOpacity={0.6}
                     style={styles.callMetric}
                   >
-                    <Text style={[styles.callCount, { color: count > 0 ? callTone.ink : callTone.quiet }]}>
-                      {count}
-                    </Text>
+                    <Text style={[styles.callMetricCount, { color: callTone.ink }]}>{count}</Text>
                     <View style={styles.metricLabel}>
                       <Text style={[styles.note, { color: callTone.ink }]}>{label}</Text>
                       <Ionicons name="chevron-forward" size={12} color={callTone.ink} />
@@ -525,10 +535,39 @@ export default function OwnerHomeLiveWidgets({
                   </TouchableOpacity>
                 ))}
               </View>
+              {pendingCalls.length > 0 && (
+                <View style={[styles.callPreviews, { borderTopColor: callTone.divider }]}>
+                  {pendingCalls.map((call) => (
+                    <TouchableOpacity
+                      key={call.phone}
+                      testID={`owner-home-pending-call-${call.id}`}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${call.name || ownerCallPhoneLabel(call.phone)}. Открыть звонки без перезвона`}
+                      disabled={!canQuery}
+                      onPress={() => openCalls('pending')}
+                      style={styles.callPreview}
+                    >
+                      <View style={[styles.flex, styles.callPendingText]}>
+                        <Text numberOfLines={1} style={[styles.callPreviewName, { color: p.text.primary }]}>
+                          {call.name || ownerCallPhoneLabel(call.phone)}
+                        </Text>
+                        <Text style={[styles.callPreviewDetail, { color: callTone.quiet }]}>
+                          {ownerClock(call.date, timezone)} ·{' '}
+                          {call.attempts === 1 ? '1 звонок' : `Звонков: ${call.attempts}`}
+                        </Text>
+                      </View>
+                      <Ionicons name="chevron-forward" size={14} color={callTone.ink} />
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
               <View style={[styles.callTotals, { borderTopColor: callTone.divider }]}>
                 <Text style={[styles.note, { color: callTone.quiet }]}>Всего {summary.total}</Text>
-                <Text style={[styles.note, { color: callTone.quiet }]}>Входящие {summary.incoming}</Text>
-                <Text style={[styles.note, { color: callTone.quiet }]}>Исходящие {summary.outgoing}</Text>
+                {summary.incoming > 0 && (
+                  <Text style={[styles.note, { color: callTone.quiet }]}>
+                    Принято {Math.round(((summary.incoming - summary.missed) / summary.incoming) * 100)}% входящих
+                  </Text>
+                )}
               </View>
             </>
           ) : null}
@@ -644,10 +683,24 @@ const styles = StyleSheet.create({
   scopeLabel: { paddingHorizontal: 18, fontSize: 12, lineHeight: 16, marginTop: -4, marginBottom: 4 },
   disconnected: { paddingHorizontal: 18, paddingTop: 12, paddingBottom: 12 },
   connect: { minHeight: 48, alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6 },
-  callMetrics: { flexDirection: 'row', paddingHorizontal: 18, gap: 20 },
+  callPending: {
+    minHeight: 88,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+  },
+  callPendingText: { minWidth: 0, gap: 3 },
+  callMetrics: { flexDirection: 'row', paddingHorizontal: 18, gap: 12 },
   stacked: { flexDirection: 'column', gap: 0 },
-  callMetric: { flex: 1, minHeight: 100, paddingVertical: 12, justifyContent: 'center', gap: 4 },
+  callMetric: { flex: 1, minHeight: 72, paddingVertical: 10, justifyContent: 'center', gap: 4 },
+  callMetricCount: { fontSize: 21, lineHeight: 27, fontWeight: '600', fontVariant: ['tabular-nums'] },
   callCount: { fontSize: 30, lineHeight: 36, fontWeight: '700', fontVariant: ['tabular-nums'], letterSpacing: -0.7 },
+  callPreviews: { marginHorizontal: 18, borderTopWidth: StyleSheet.hairlineWidth, paddingVertical: 4 },
+  callPreview: { minHeight: 54, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  callPreviewName: { fontSize: 14, lineHeight: 19, fontWeight: '500' },
+  callPreviewDetail: { fontSize: 12, lineHeight: 17 },
   metricLabel: { flexDirection: 'row', alignItems: 'center', gap: 4, flexWrap: 'wrap' },
   callTotals: {
     marginHorizontal: 18,

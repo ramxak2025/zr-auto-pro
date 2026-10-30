@@ -5,14 +5,16 @@ import { checkMoneyBaseWhere } from '../../../common/check-money-sql';
 import { warehousePointFilterSql } from '../../../common/point-scope';
 import { BuiltReport, MAIN_ROW_LIMIT, ReportBuilder, ReportContext, SECTION_ROW_LIMIT } from '../report-context';
 import { ReportColumn, ReportRow, ReportSection } from '../report-types';
-import { baseParams, dayKey, inPeriod, localDate, num, pct, pushPoint, round2 } from '../report-sql';
+import { baseParams, dayKey, inPeriod, localDate, num, pct, round2 } from '../report-sql';
+import { loadAnalysis } from '../analysis-query';
+import { analysisNotes } from './analyses.builder';
 
 /**
  * По товарам.
  *
  * Продажи — товарные строки проведённых чеков периода: гарантийные чеки не
- * продажа (выручки нет), чек с полным возвратом снят целиком, частичный
- * возврат вычитается построчно из check_return_lines (количество и сумма;
+ * продажа (выручки нет), полный возврат снимает выручку и количество,
+ * частичный возврат вычитается построчно из check_return_lines (количество и сумма;
  * себестоимость возвращается только если товар вернулся на склад, а не в
  * брак — как реверс COGS в returns.service). Остаток и склад — по складам
  * филиала сессии (warehouses.point_id — единственный источник филиала товара).
@@ -51,18 +53,7 @@ export class ProductsBuilder implements ReportBuilder {
           { key: 'stock', title: 'Остаток сейчас', type: 'number' },
         ];
 
-    const totals: ReportRow = { name: 'Итого', qty: 0, revenue: 0, cost: 0, profit: 0, markup: 0 };
-    if (!byCategory) {
-      totals.category = null;
-      totals.stock = null;
-    }
-    for (const r of sales.rows) {
-      totals.qty = round2((totals.qty as number) + (r.qty as number));
-      totals.revenue = round2((totals.revenue as number) + (r.revenue as number));
-      totals.cost = round2((totals.cost as number) + (r.cost as number));
-      totals.profit = round2((totals.profit as number) + (r.profit as number));
-    }
-    totals.markup = pct(totals.profit as number, totals.cost as number);
+    const totals = sales.totals;
 
     return {
       kpis: [
@@ -89,82 +80,73 @@ export class ProductsBuilder implements ReportBuilder {
       rows: sales.rows,
       totals,
       truncated: sales.truncated,
-      sections: [stale.section, writeoffs.section],
+      sections: [...(sales.adjustments ? [sales.adjustments] : []), stale.section, writeoffs.section],
       filters: { groupBy: byCategory ? 'category' : 'product', groupByLabel: byCategory ? 'По папкам' : 'По товарам' },
       notes: [
-        'Продажи — товарные строки проведённых чеков за период без гарантийных; возвраты вычтены (полный — весь чек, частичный — по строкам).',
-        'Прибыль = выручка − себестоимость; наценка = прибыль ÷ себестоимость. Скидка чека здесь не распределяется по товарам.',
+        ...sales.notes,
+        'Прибыль = выручка − себестоимость товаров; наценка = прибыль ÷ себестоимость. Полный возврат в брак сохраняет себестоимость как убыток.',
         `«Залежались» — есть остаток, продаж в периоде не было; дни без продаж считаются до ${ctx.refDate}.`,
         'Списания и брак — из движений склада за период по текущей себестоимости товара.',
       ],
     };
   }
 
-  private async sales(ctx: ReportContext, byCategory: boolean): Promise<{ rows: ReportRow[]; truncated: boolean }> {
-    const params = baseParams(ctx);
-    const ph = pushPoint(params, ctx.pointId);
-    const chPoint = ph ? ` AND ch.point_id = ${ph}` : '';
-    const groupKey = byCategory
-      ? `COALESCE(NULLIF(p.category, ''), 'Без папки')`
-      : `COALESCE(l.product_id::text, 'name:' || lower(l.name))`;
-    const { rows } = await this.pool.query(
-      `WITH l AS (
-         SELECT pl.id AS line_id, pl.product_id, pl.name, pl.quantity, pl.total_sell, pl.total_cost
-           FROM checks ch
-           JOIN check_product_lines pl ON pl.check_id = ch.id
-          WHERE ch.tenant_id = $1 AND ${checkMoneyBaseWhere('ch')} AND ${inPeriod('ch.date')}
-            AND ch.payment_method IS DISTINCT FROM 'warranty'
-            AND NOT (ch.is_returned = true AND ch.return_scope = 'full')${chPoint}
-       ),
-       ret AS (
-         SELECT rl.product_line_id,
-                SUM(rl.quantity) AS qty,
-                SUM(rl.amount) AS amount,
-                SUM(CASE WHEN cr.destination = 'warehouse' THEN rl.quantity ELSE 0 END) AS qty_back
-           FROM check_return_lines rl
-           JOIN check_returns cr ON cr.id = rl.return_id AND cr.tenant_id = $1
-          WHERE rl.product_line_id IN (SELECT line_id FROM l)
-          GROUP BY rl.product_line_id
-       )
-       SELECT ${groupKey} AS key,
-              ${byCategory ? `${groupKey}` : `COALESCE(p.name, MIN(l.name))`} AS name,
-              ${byCategory ? `NULL::text` : `MIN(p.category)`} AS category,
-              ${byCategory ? `NULL::numeric` : `MIN(p.stock)`} AS stock,
-              ${byCategory ? `NULL::text` : `MIN(l.product_id::text)`} AS product_id,
-              COALESCE(SUM(l.quantity - COALESCE(r.qty, 0)), 0) AS qty,
-              COALESCE(SUM(l.total_sell - COALESCE(r.amount, 0)), 0) AS revenue,
-              COALESCE(SUM(l.total_cost - CASE WHEN l.quantity > 0 THEN l.total_cost / l.quantity * COALESCE(r.qty_back, 0) ELSE 0 END), 0) AS cost
-         FROM l
-         LEFT JOIN ret r ON r.product_line_id = l.line_id
-         LEFT JOIN products p ON p.id = l.product_id
-        GROUP BY ${groupKey}${byCategory ? '' : ', p.name'}
-        ORDER BY revenue DESC, name
-        LIMIT ${MAIN_ROW_LIMIT + 1}`,
-      params,
-    );
-    // Строка, обнулившаяся возвратом (продали и целиком вернули), — не продажа:
-    // не показываем, иначе в отчёте висят товары с нулями.
-    const live = rows.filter((r) => num(r.qty) !== 0 || num(r.revenue) !== 0 || num(r.cost) !== 0);
-    const truncated = live.length > MAIN_ROW_LIMIT;
-    const data = truncated ? live.slice(0, MAIN_ROW_LIMIT) : live;
+  private async sales(
+    ctx: ReportContext,
+    byCategory: boolean,
+  ): Promise<{
+    rows: ReportRow[];
+    totals: ReportRow;
+    truncated: boolean;
+    notes: string[];
+    adjustments?: ReportSection;
+  }> {
+    const data = await loadAnalysis(this.pool, ctx, { kind: 'products', basis: 'revenue', byCategory });
+    const full = data.totals;
+    const totals: ReportRow = {
+      name: 'Итого',
+      qty: full.product_qty,
+      revenue: full.revenue,
+      cost: full.cost,
+      profit: full.gross,
+      markup: full.gross === null || full.cost === null || full.cost <= 0 ? null : pct(full.gross, full.cost),
+    };
+    if (!byCategory) {
+      totals.category = null;
+      totals.stock = null;
+    }
     return {
-      truncated,
-      rows: data.map((r) => {
-        const revenue = num(r.revenue);
-        const cost = num(r.cost);
-        const profit = round2(revenue - cost);
+      totals,
+      truncated: data.rows.length > MAIN_ROW_LIMIT,
+      notes: analysisNotes(data),
+      adjustments:
+        data.adjustment.checks > 0
+          ? {
+              key: 'adjustments',
+              title: 'Не распределено по позициям',
+              description:
+                'Общие корректировки чеков. В товарную выручку и прибыль не входят; учтены в общем отчёте «Продажи».',
+              columns: [
+                { key: 'name', title: 'Состав', type: 'text' },
+                { key: 'revenue', title: 'Выручка', type: 'money' },
+                { key: 'cost', title: 'Себестоимость товаров', type: 'money' },
+              ],
+              rows: [{ name: 'Корректировки чеков', revenue: data.adjustment.revenue, cost: data.adjustment.cost }],
+            }
+          : undefined,
+      rows: data.rows.slice(0, MAIN_ROW_LIMIT).map((r) => {
         const row: ReportRow = {
-          _id: r.product_id ?? null,
-          name: String(r.name ?? '—'),
-          qty: num(r.qty),
-          revenue,
-          cost,
-          profit,
-          markup: pct(profit, cost),
+          _id: r.entity_id,
+          name: r.name,
+          qty: r.qty,
+          revenue: r.revenue,
+          cost: r.cost,
+          profit: r.gross,
+          markup: r.gross === null || r.cost === null || r.cost <= 0 ? null : pct(r.gross, r.cost),
         };
         if (!byCategory) {
-          row.category = r.category ?? null;
-          row.stock = r.stock === null || r.stock === undefined ? null : num(r.stock);
+          row.category = r.category;
+          row.stock = r.stock;
         }
         return row;
       }),

@@ -13,6 +13,7 @@ import { PaymentsBuilder } from './builders/payments.builder';
 import { ExpensesBuilder } from './builders/expenses.builder';
 import { BookingsBuilder } from './builders/bookings.builder';
 import { PointsBuilder } from './builders/points.builder';
+import { AbcBuilder, GrossProfitBuilder, SalesBuilder } from './builders/analyses.builder';
 
 /**
  * Конструктор отчётов (раздел «Отчёты», 2026-09-25). Отдельный модуль внутри
@@ -39,6 +40,9 @@ import { PointsBuilder } from './builders/points.builder';
     ExpensesBuilder,
     BookingsBuilder,
     PointsBuilder,
+    SalesBuilder,
+    GrossProfitBuilder,
+    AbcBuilder,
   ],
 })
 export class ReportBuilderModule {}

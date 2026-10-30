@@ -39,10 +39,11 @@ const MIN_WIDTH_CLASSES: Array<[number, string]> = [
 
 /**
  * Замер Onest 12/600 в Chrome: кириллица 6,9–7,6 px на знак — берём верхнюю
- * границу. Плюс иконка сортировки 14 + зазор 4 + отступы ячейки 24 (≈ 44).
+ * границу. Резерв для сортировки, зазора и отступов ячейки — 56 px:
+ * короткое слово «Маржа» тоже должно помещаться целиком.
  */
 const PX_PER_CHAR = 7.6;
-const HEADER_EXTRA = 44;
+const HEADER_EXTRA = 56;
 
 /** Предпочтительная ширина колонки — заголовок в одну строку. */
 export function headerWidth(title: string, min = 80, max = 208): number {

@@ -13,6 +13,7 @@ import type { RootStackParamList, TabParamList } from '../../../navigation/AppNa
 import { accrualBreakdown } from '../../../../../shared/utils/accrualBreakdown';
 import { formatMoney } from '../../../../../shared/utils/formatters';
 import type {
+  OwnerHomeAccrual,
   OwnerHomeClientCohort,
   OwnerHomeProfit,
   OwnerHomeTimeline,
@@ -95,7 +96,7 @@ export default function OwnerHomeDetails({
   };
   const title =
     detail.kind === 'timeline-info'
-      ? 'О расчёте сводки'
+      ? 'Как считаем прибыль'
       : detail.kind === 'timeline'
         ? 'Расчёт за период'
         : detail.kind === 'basis'
@@ -161,53 +162,45 @@ function TimelineDetails({ detail }: { detail: Extract<OwnerHomeDetail, { kind: 
   const period = ownerRangeLabel(timeline.range.from, timeline.range.through);
   return (
     <>
-      <Text style={[styles.subtitle, { color: p.text.secondary }]}>
-        {period} ·{' '}
-        {timeline.range.partialDay
-          ? `до ${ownerClock(timeline.range.untilExclusive, timeline.timezone)}`
-          : 'по конец дня'}{' '}
-        · {timeline.timezone}
-      </Text>
-      <Text style={[styles.sectionTitle, { color: p.text.primary }]}>{timeline.basisLabel}</Text>
-      <Text style={[styles.paragraph, { color: p.text.secondary }]}>{timeline.basisDetail}</Text>
-      {timeline.allocationDetail && (
-        <Text style={[styles.paragraph, { color: p.text.secondary }]}>{timeline.allocationDetail}</Text>
+      <FinancialPeriod
+        period={period}
+        window={timeline.range}
+        pointId={timeline.pointId}
+        timezone={timeline.timezone}
+      />
+      {detail.kind === 'timeline' ? (
+        <ProfitBreakdown totals={timeline.totals} />
+      ) : (
+        <>
+          <ProfitFormula netProfit={timeline.totals.netProfit} />
+          <Text style={[styles.calculationCopy, { color: p.text.secondary }]}>
+            Себестоимость и сдельная оплата уже в прибыли по чекам. Мотивация включена в премии один раз.
+          </Text>
+          <Text style={[styles.calculationCopy, { color: p.text.secondary }]}>
+            Месяц: {ownerRangeLabel(timeline.footer.current.period.from, timeline.footer.current.period.through)}
+            {'\n'}
+            Сравнение:{' '}
+            {ownerRangeLabel(timeline.footer.comparison.period.from, timeline.footer.comparison.period.through)}
+            {timeline.footer.comparison.period.partialDay
+              ? `, до ${ownerClock(timeline.footer.comparison.period.untilExclusive, timeline.timezone)}`
+              : ', по конец дня'}
+            .
+          </Text>
+        </>
       )}
-      <Text style={[styles.paragraph, { color: p.text.secondary }]}>
-        Дневной расчёт сохраняет правила даты начисления премий. В неделе, месяце и году премия, назначенная месяцу,
-        учитывается в своём месяце один раз. Поэтому сумма результатов отдельных дней может отличаться от итога периода.
-      </Text>
-      {detail.kind === 'timeline' && (
-        <View style={[styles.group, { backgroundColor: p.bg.card, borderColor: p.border.subtle }]}>
-          {accrualBreakdown(timeline.totals).map((row) => (
-            <View key={row.label} style={[styles.detailRow, { borderBottomColor: p.border.subtle }]}>
-              <Text style={[styles.rowLabel, { color: p.text.primary }]}>{row.label}</Text>
-              <Text style={[styles.rowValue, { color: p.text.primary }]}>
-                {row.contribution > 0 ? '+' : row.contribution < 0 ? '−' : ''}
-                {formatMoney(Math.abs(row.contribution), 2)}
-              </Text>
-            </View>
-          ))}
-          <View style={styles.total}>
-            <Text style={[styles.totalLabel, { color: p.text.primary }]}>Чистая прибыль</Text>
-            <Text style={[styles.totalValue, { color: p.text.primary }]}>
-              {formatMoney(timeline.totals.netProfit, 2)}
-            </Text>
-          </View>
-        </View>
-      )}
-      <Text style={[styles.paragraph, { color: p.text.secondary, marginTop: 14 }]}>
-        Оборот: {formatMoney(timeline.totals.revenue, 2)}. Мотивация уже входит в премии и не вычитается повторно.
-        Выплаты и остаток денег в кассе — отдельные показатели.
-      </Text>
-      <Text style={[styles.paragraph, { color: p.text.secondary }]}>
-        В сводке — чистая прибыль после расходов и оборот за выбранный период. Эти суммы относятся к периоду работы, а
-        не к дате оплаты.
-      </Text>
-      <Text style={[styles.paragraph, { color: p.text.secondary }]}>
-        Месячная прибыль считается с начала месяца по выбранную дату. Сравнение — с такими же датами прошлого месяца и
-        тем же временем дня. Если в прошлом месяце меньше дней, берётся его последний день.
-      </Text>
+      <CalculationNotes basisDetail={timeline.basisDetail} allocationDetail={timeline.allocationDetail}>
+        {detail.kind === 'timeline' && (
+          <Text style={[styles.paragraph, { color: p.text.secondary }]}>
+            Себестоимость и сдельная оплата уже в прибыли по чекам. Мотивация входит в премии и не вычитается повторно.
+          </Text>
+        )}
+        {detail.kind === 'timeline-info' && (
+          <Text style={[styles.paragraph, { color: p.text.secondary }]}>
+            Месяц — с 1-го числа по выбранную дату. Сравниваем те же даты и время прошлого месяца.
+            {timeline.footer.comparison.clamped && ' В прошлом месяце меньше дней — берём его последний день.'}
+          </Text>
+        )}
+      </CalculationNotes>
     </>
   );
 }
@@ -224,40 +217,30 @@ function ProfitDetails({ detail }: { detail: Extract<OwnerHomeDetail, { kind: 'b
     : ownerRangeLabel(profit.current.period.from, profit.current.period.through);
   return (
     <>
-      <Text style={[styles.subtitle, { color: p.text.secondary }]}>
-        {period} ·{' '}
-        {profit.current.period.partialDay
-          ? `до ${ownerClock(profit.current.period.untilExclusive, profit.timezone)}`
-          : 'по конец дня'}{' '}
-        · {profit.timezone} · по начислению
-      </Text>
-      <Text style={[styles.sectionTitle, { color: p.text.primary }]}>{profit.basisLabel}</Text>
-      <Text style={[styles.paragraph, { color: p.text.secondary }]}>{profit.basisDetail}</Text>
-      {detail.kind === 'profit' && (
-        <>
-          <View style={[styles.group, { backgroundColor: p.bg.card, borderColor: p.border.subtle }]}>
-            {accrualBreakdown(current).map((row) => (
-              <View key={row.label} style={[styles.detailRow, { borderBottomColor: p.border.subtle }]}>
-                <Text style={[styles.rowLabel, { color: p.text.primary }]}>{row.label}</Text>
-                <Text style={[styles.rowValue, { color: p.text.primary }]}>
-                  {row.contribution > 0 ? '+' : row.contribution < 0 ? '−' : ''}
-                  {formatMoney(Math.abs(row.contribution), 2)}
-                </Text>
-              </View>
-            ))}
-            <View style={styles.total}>
-              <Text style={[styles.totalLabel, { color: p.text.primary }]}>Чистая прибыль</Text>
-              <Text style={[styles.totalValue, { color: p.text.primary }]}>{formatMoney(current.netProfit, 2)}</Text>
-            </View>
-          </View>
-          <Text style={[styles.paragraph, { color: p.text.secondary, marginTop: 12 }]}>
-            Выручка: {formatMoney(current.revenue, 2)}. Себестоимость и сдельная оплата работ уже учтены в прибыли по
-            чекам. Мотивация входит в премии и не вычитается повторно.
-          </Text>
-        </>
+      <FinancialPeriod
+        period={period}
+        window={profit.current.period}
+        pointId={profit.pointId}
+        timezone={profit.timezone}
+      />
+      {detail.kind === 'profit' ? (
+        <ProfitBreakdown totals={current} />
+      ) : (
+        <ProfitFormula netProfit={current.netProfit} />
       )}
-      <Text style={[styles.sectionTitle, { color: p.text.primary }]}>Сравнение с прошлым месяцем</Text>
-      <Text style={[styles.paragraph, { color: p.text.secondary }]}>
+      <CalculationNotes basisDetail={profit.basisDetail}>
+        <Text style={[styles.paragraph, { color: p.text.secondary }]}>
+          Себестоимость и сдельная оплата уже в прибыли по чекам. Мотивация входит в премии и не вычитается повторно.
+        </Text>
+        <Text style={[styles.paragraph, { color: p.text.secondary }]}>
+          Сравниваем те же даты и время прошлого месяца.
+          {profit.comparison.clamped && ' В прошлом месяце меньше дней — берём его последний день.'}
+          {(previous.netProfit <= 0 || delta.percent === null) &&
+            ' При нулевой или отрицательной базе показываем изменение в рублях.'}
+        </Text>
+      </CalculationNotes>
+      <Text style={[styles.comparisonTitle, { color: p.text.primary }]}>Сравнение с прошлым месяцем</Text>
+      <Text style={[styles.comparisonPeriod, { color: p.text.secondary }]}>
         {day
           ? ownerDateLabel(profit.comparison.period.through, true)
           : ownerRangeLabel(profit.comparison.period.from, profit.comparison.period.through)}{' '}
@@ -265,7 +248,6 @@ function ProfitDetails({ detail }: { detail: Extract<OwnerHomeDetail, { kind: 'b
         {profit.comparison.period.partialDay
           ? `до ${ownerClock(profit.comparison.period.untilExclusive, profit.timezone)}`
           : 'по конец дня'}
-        {profit.comparison.clamped ? '. В прошлом месяце меньше дней — выбран его последний день.' : '.'}
       </Text>
       <View style={[styles.detailRow, { borderBottomColor: p.border.subtle }]}>
         <Text style={[styles.rowLabel, { color: p.text.primary }]}>Было</Text>
@@ -275,15 +257,113 @@ function ProfitDetails({ detail }: { detail: Extract<OwnerHomeDetail, { kind: 'b
         <Text style={[styles.rowLabel, { color: p.text.primary }]}>Изменение</Text>
         <Text style={[styles.rowValue, { color: p.text.primary }]}>{ownerDeltaLabel(delta, previous.netProfit)}</Text>
       </View>
-      {delta.percent === null && (
-        <Text style={[styles.paragraph, { color: p.text.secondary, marginTop: 12 }]}>
-          Процент не рассчитывается, когда результат прошлого периода равен нулю или отрицательный.
-        </Text>
-      )}
-      <Text style={[styles.paragraph, { color: p.text.secondary, marginTop: 16 }]}>
-        По начислению: результат относится к периоду работы. Остаток денег в кассе, выплаты и авансы — отдельные
-        показатели.
+    </>
+  );
+}
+
+function FinancialPeriod({
+  period,
+  window,
+  pointId,
+  timezone,
+}: {
+  period: string;
+  window: { partialDay: boolean; untilExclusive: string };
+  pointId: string | null;
+  timezone: string;
+}) {
+  const p = useColors();
+  return (
+    <>
+      <Text style={[styles.financialPeriod, { color: p.text.primary }]}>{period}</Text>
+      <Text style={[styles.financialScope, { color: p.text.secondary }]}>
+        {pointId ? 'Текущий филиал' : 'Все филиалы'} ·{' '}
+        {window.partialDay ? `до ${ownerClock(window.untilExclusive, timezone)}` : 'по конец дня'}
+        {'\n'}
+        {timezone}
       </Text>
+    </>
+  );
+}
+
+function ProfitBreakdown({ totals }: { totals: OwnerHomeAccrual }) {
+  const p = useColors();
+  return (
+    <>
+      <View style={styles.turnoverRow}>
+        <Text style={[styles.rowLabel, { color: p.text.secondary }]}>Оборот</Text>
+        <Text style={[styles.rowValue, { color: p.text.primary }]}>{formatMoney(totals.revenue, 2)}</Text>
+      </View>
+      <View style={[styles.group, { backgroundColor: p.bg.card, borderColor: p.border.subtle }]}>
+        {accrualBreakdown(totals).map((row) => (
+          <View key={row.label} style={[styles.detailRow, { borderBottomColor: p.border.subtle }]}>
+            <Text style={[styles.rowLabel, { color: p.text.primary }]}>{row.label}</Text>
+            <Text style={[styles.rowValue, { color: p.text.primary }]}>
+              {row.contribution > 0 ? '+' : row.contribution < 0 ? '−' : ''}
+              {formatMoney(Math.abs(row.contribution), 2)}
+            </Text>
+          </View>
+        ))}
+        <View style={styles.total}>
+          <Text style={[styles.totalLabel, { color: p.text.primary }]}>Чистая прибыль</Text>
+          <Text style={[styles.totalValue, { color: p.text.primary }]}>{formatMoney(totals.netProfit, 2)}</Text>
+        </View>
+      </View>
+    </>
+  );
+}
+
+function ProfitFormula({ netProfit }: { netProfit: number }) {
+  const p = useColors();
+  return (
+    <View style={[styles.group, styles.formula, { backgroundColor: p.bg.card, borderColor: p.border.subtle }]}>
+      <Text style={[styles.formulaLine, { color: p.text.primary }]}>Прибыль по чекам</Text>
+      <Text style={[styles.formulaLine, { color: p.text.secondary }]}>− Расходы и начисления</Text>
+      <View style={[styles.formulaResult, { borderTopColor: p.border.subtle }]}>
+        <Text style={[styles.totalLabel, { color: p.text.primary }]}>Чистая прибыль</Text>
+        <Text style={[styles.totalValue, { color: p.text.primary }]}>{formatMoney(netProfit, 2)}</Text>
+      </View>
+    </View>
+  );
+}
+
+function CalculationNotes({
+  basisDetail,
+  allocationDetail,
+  children,
+}: {
+  basisDetail: string;
+  allocationDetail?: string | null;
+  children?: React.ReactNode;
+}) {
+  const p = useColors();
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <>
+      <View style={styles.basisRow}>
+        <Text style={[styles.basisNote, { color: p.text.secondary }]}>По текущему плану</Text>
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel="Как считаем"
+          accessibilityState={{ expanded }}
+          activeOpacity={0.7}
+          onPress={() => setExpanded((value) => !value)}
+          style={styles.disclosure}
+        >
+          <Text style={[styles.disclosureLabel, { color: p.accent.primaryText }]}>Как считаем</Text>
+          <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={14} color={p.accent.primaryText} />
+        </TouchableOpacity>
+      </View>
+      {expanded && (
+        <View style={styles.notes}>
+          <Text style={[styles.paragraph, { color: p.text.secondary }]}>
+            По начислению: результат за период работы. Выплаты и остаток кассы считаются отдельно.
+          </Text>
+          {children}
+          <Text style={[styles.paragraph, { color: p.text.secondary }]}>{basisDetail}</Text>
+          {allocationDetail && <Text style={[styles.paragraph, { color: p.text.secondary }]}>{allocationDetail}</Text>}
+        </View>
+      )}
     </>
   );
 }
@@ -592,8 +672,50 @@ const styles = StyleSheet.create({
   close: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   content: { padding: 18 },
   subtitle: { fontSize: 13, lineHeight: 20, marginBottom: 17 },
+  financialPeriod: { fontSize: 17, lineHeight: 24, fontWeight: '600' },
+  financialScope: { fontSize: 13, lineHeight: 19, marginTop: 4, marginBottom: 18 },
+  turnoverRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    marginBottom: 12,
+  },
+  basisRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    columnGap: 12,
+    marginTop: 4,
+  },
+  basisNote: { fontSize: 13, lineHeight: 20 },
+  disclosure: {
+    minHeight: Platform.OS === 'android' ? 48 : 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 8,
+  },
+  disclosureLabel: { fontSize: 13, lineHeight: 20, fontWeight: '500' },
+  notes: { paddingTop: 6 },
+  calculationCopy: { fontSize: 14, lineHeight: 21, marginTop: 14 },
+  formula: { padding: 14 },
+  formulaLine: { fontSize: 16, lineHeight: 25 },
+  formulaResult: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    marginTop: 12,
+    paddingTop: 12,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  comparisonTitle: { fontSize: 16, lineHeight: 23, fontWeight: '600', marginTop: 18, marginBottom: 5 },
+  comparisonPeriod: { fontSize: 13, lineHeight: 20, marginBottom: 6 },
   paragraph: { fontSize: 14, lineHeight: 21, marginBottom: 14 },
-  sectionTitle: { fontSize: 16, lineHeight: 23, fontWeight: '600', marginTop: 5, marginBottom: 8 },
   group: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 14, overflow: 'hidden' },
   detailRow: {
     paddingVertical: 13,
@@ -615,7 +737,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   totalLabel: { fontSize: 16, lineHeight: 23, fontWeight: '600' },
-  totalValue: { fontSize: 19, lineHeight: 25, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  totalValue: { fontSize: 21, lineHeight: 28, fontWeight: '600', fontVariant: ['tabular-nums'] },
   clientRow: {
     flexDirection: 'row',
     alignItems: 'center',

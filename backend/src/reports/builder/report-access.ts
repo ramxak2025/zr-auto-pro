@@ -64,7 +64,7 @@ export function reportAvailability(
   def: ReportDefinition,
   activePointsCount: number,
 ): ReportAvailability {
-  if (!actor || isTenantLess(actor.tenantID)) {
+  if (!actor?.tenantID || isTenantLess(actor.tenantID)) {
     return { available: false, reason: 'Отчёты доступны внутри компании' };
   }
   const owner = isOwnerClass(actor);
