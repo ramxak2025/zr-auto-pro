@@ -11,6 +11,7 @@ const ENV_KEYS = [
   'EAS_BUILD_PROFILE',
   'EAS_BUILD_PLATFORM',
   'AUTEXA_OWNER_HOME_INTERNAL',
+  'AUTEXA_OWNER_HOME_RELEASE',
   'EXPO_PUBLIC_OWNER_HOME_PILOT',
 ];
 
@@ -30,7 +31,7 @@ function resolve(env = {}) {
   }
 }
 
-test('default, production, and preview retain their complete resolved configuration', () => {
+test('ordinary configurations without an explicit iOS release selector remain unchanged', () => {
   const defaultConfig = resolve();
   // These fields are native/update delivery boundaries, not only UI defaults.
   assert.equal(defaultConfig.version, base.version);
@@ -47,7 +48,7 @@ test('default, production, and preview retain their complete resolved configurat
   }
 });
 
-test('only the exact internal iOS profile enables the pilot', () => {
+test('the exact internal iOS profile retains its private pilot configuration', () => {
   const profile = eas.build['owner-home-internal'];
   const internal = resolve(profile.ios.env);
   const normal = resolve();
@@ -88,6 +89,62 @@ test('only the exact private profile selector can opt in, and conflicting platfo
     { EXPO_PUBLIC_OWNER_HOME_PILOT: 'true' },
   ]) {
     assert.deepEqual(resolve(env), normal);
+  }
+});
+
+test('public production iOS embeds the owner dashboard on its own ordinary runtime', () => {
+  const profile = eas.build.production;
+  assert.deepEqual(profile.ios.env, { AUTEXA_OWNER_HOME_RELEASE: 'ios-v1' });
+  const publicConfig = resolve(profile.ios.env);
+  const normal = resolve();
+  assert.equal(publicConfig.version, '3.19.0');
+  assert.equal(publicConfig.ios.runtimeVersion, '3.19.0');
+  assert.equal(publicConfig.extra.ownerHomePilot, true);
+  assert.equal(publicConfig.extra.apsEnvironment, 'production');
+  assert.deepEqual(
+    resolve({ ...profile.ios.env, EAS_BUILD_PROFILE: 'production', EAS_BUILD_PLATFORM: 'ios' }),
+    publicConfig,
+  );
+  const restored = structuredClone(publicConfig);
+  restored.version = normal.version;
+  restored.ios = normal.ios;
+  delete restored.extra.ownerHomePilot;
+  assert.deepEqual(restored, normal);
+  assert.notEqual(
+    publicConfig.ios.runtimeVersion,
+    resolve(eas.build['owner-home-internal'].ios.env).ios.runtimeVersion,
+  );
+});
+
+test('public selector cannot enable Android, preview, development or a private-profile build', () => {
+  const normal = resolve();
+  for (const env of [
+    { AUTEXA_OWNER_HOME_RELEASE: 'true' },
+    { AUTEXA_OWNER_HOME_RELEASE: 'ios-v1', EAS_BUILD_PLATFORM: 'android' },
+    { AUTEXA_OWNER_HOME_RELEASE: 'ios-v1', EAS_BUILD_PROFILE: 'preview' },
+    { AUTEXA_OWNER_HOME_RELEASE: 'ios-v1', EAS_BUILD_PROFILE: 'owner-home-internal' },
+    { AUTEXA_OWNER_HOME_RELEASE: 'ios-v1', EAS_BUILD_PROFILE: 'production-typo' },
+  ])
+    assert.deepEqual(resolve(env), normal);
+  assert.deepEqual(
+    resolve({ AUTEXA_OWNER_HOME_RELEASE: 'ios-v1', EAS_BUILD_PROFILE: 'development' }),
+    resolve({ EAS_BUILD_PROFILE: 'development' }),
+  );
+  assert.equal(eas.build.production.env?.AUTEXA_OWNER_HOME_RELEASE, undefined);
+  assert.equal(eas.build.production.android.env?.AUTEXA_OWNER_HOME_RELEASE, undefined);
+});
+
+test('ambiguous public/private selectors fail closed before producing any native configuration', () => {
+  for (const profile of [undefined, 'production', 'owner-home-internal']) {
+    assert.throws(
+      () =>
+        resolve({
+          AUTEXA_OWNER_HOME_INTERNAL: 'ios-v1',
+          AUTEXA_OWNER_HOME_RELEASE: 'ios-v1',
+          EAS_BUILD_PROFILE: profile,
+        }),
+      /OWNER_HOME_RELEASE_SELECTOR_CONFLICT/,
+    );
   }
 });
 
