@@ -33,7 +33,10 @@
         "buildType": "app-bundle"
       },
       "ios": {
-        "buildConfiguration": "Release"
+        "buildConfiguration": "Release",
+        "env": {
+          "AUTEXA_OWNER_HOME_RELEASE": "ios-v1"
+        }
       }
     },
     "owner-home-internal": {

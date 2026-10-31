@@ -93,20 +93,31 @@ function withNotificationsMode(plugins, apsEnvironment) {
 
 module.exports = ({ config }) => {
   const apsEnvironment = resolveApsEnvironment();
+  const privateSelector = process.env.AUTEXA_OWNER_HOME_INTERNAL === 'ios-v1';
+  const publicSelector = process.env.AUTEXA_OWNER_HOME_RELEASE === 'ios-v1';
+  if (privateSelector && publicSelector) {
+    throw new Error('OWNER_HOME_RELEASE_SELECTOR_CONFLICT');
+  }
   // Declared only in owner-home-internal.ios.env, which EAS also applies during
   // local config evaluation. Built-in EAS selectors exist only on the worker;
   // when available they prevent a conflicting profile/platform from opting in.
   const ownerHomePilot =
-    process.env.AUTEXA_OWNER_HOME_INTERNAL === 'ios-v1' &&
+    privateSelector &&
     (!process.env.EAS_BUILD_PROFILE || process.env.EAS_BUILD_PROFILE === 'owner-home-internal') &&
+    (!process.env.EAS_BUILD_PLATFORM || process.env.EAS_BUILD_PLATFORM === 'ios');
+  // The public iOS release embeds the accepted dashboard in the store binary.
+  // A separate runtime keeps all internal test updates isolated from store users.
+  const ownerHomeRelease =
+    publicSelector &&
+    (!process.env.EAS_BUILD_PROFILE || process.env.EAS_BUILD_PROFILE === 'production') &&
     (!process.env.EAS_BUILD_PLATFORM || process.env.EAS_BUILD_PLATFORM === 'ios');
 
   return {
     ...config,
-    ...(ownerHomePilot
+    ...(ownerHomePilot || ownerHomeRelease
       ? {
           version: '3.19.0',
-          ios: { ...config.ios, runtimeVersion: '3.19.0-owner-home-internal' },
+          ios: { ...config.ios, runtimeVersion: ownerHomePilot ? '3.19.0-owner-home-internal' : '3.19.0' },
         }
       : {}),
     plugins: withNotificationsMode(config.plugins, apsEnvironment),
@@ -115,7 +126,7 @@ module.exports = ({ config }) => {
       // Read at runtime by the «Уведомления» diagnostics block so the owner can
       // see, on the device, which APNs environment the installed build uses.
       apsEnvironment,
-      ...(ownerHomePilot ? { ownerHomePilot: true } : {}),
+      ...(ownerHomePilot || ownerHomeRelease ? { ownerHomePilot: true } : {}),
     },
   };
 };
