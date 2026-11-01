@@ -220,8 +220,7 @@ export function getSalaryAckQueue(owner: { tenantId: string; userId: string }): 
   const key = salaryAckStorageKey(owner);
   if (!singleton || singletonKey !== key) {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const AsyncStorage = require('@react-native-async-storage/async-storage')
-      .default as typeof import('@react-native-async-storage/async-storage').default;
+    const AsyncStorage = require('./environmentStorage').default as typeof import('./environmentStorage').default;
     singleton = createSalaryAckQueueCore({
       storageKey: key,
       storage: {

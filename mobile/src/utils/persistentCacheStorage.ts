@@ -1,4 +1,4 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from './environmentStorage';
 import { storageWriteFailureKind } from '../../../shared/utils/storageFailure';
 import { isPersisted, STORAGE_PREFIX } from './persistentCache.helpers';
 

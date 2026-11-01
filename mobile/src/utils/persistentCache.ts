@@ -20,7 +20,7 @@
  * it can be unit-tested under the default jest (node) environment.
  */
 import { InteractionManager } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from './environmentStorage';
 import type { QueryClient, QueryKey } from '@tanstack/react-query';
 import { authAccounts } from '../contexts/authAccountStorage';
 import { activeAccount } from '../contexts/accountRegistry';

@@ -1,3 +1,4 @@
+import { inventoryInternal } from './runtimeEnvironment';
 import { Platform } from 'react-native';
 import {
   startLiveActivity as nativeStart,
@@ -57,7 +58,7 @@ function withDefaults(state: LiveActivityState): LiveActivityState {
 
 /** Поддерживаются ли Live Activities на этом устройстве и включены ли. */
 export function liveActivitiesAvailable(): boolean {
-  if (Platform.OS !== 'ios') return false;
+  if (inventoryInternal || Platform.OS !== 'ios') return false;
   try {
     return liveActivitiesSupported();
   } catch {
@@ -73,13 +74,13 @@ export async function startLiveActivity(
   attributes: LiveActivityAttributes,
   state: LiveActivityState,
 ): Promise<string | null> {
-  if (Platform.OS !== 'ios') return null;
+  if (inventoryInternal || Platform.OS !== 'ios') return null;
   return nativeStart(JSON.stringify(attributes), JSON.stringify(withDefaults(state)));
 }
 
 /** Обновить запущенную активность по id. */
 export async function updateLiveActivity(id: string, state: LiveActivityState): Promise<void> {
-  if (Platform.OS !== 'ios' || !id) return;
+  if (inventoryInternal || Platform.OS !== 'ios' || !id) return;
   await nativeUpdate(id, JSON.stringify(withDefaults(state)));
 }
 
@@ -89,12 +90,12 @@ export async function endLiveActivity(
   finalState?: LiveActivityState,
   dismissImmediately = false,
 ): Promise<void> {
-  if (Platform.OS !== 'ios' || !id) return;
+  if (inventoryInternal || Platform.OS !== 'ios' || !id) return;
   await nativeEnd(id, finalState ? JSON.stringify(withDefaults(finalState)) : null, dismissImmediately);
 }
 
 /** Завершить все активности Autexa (например, при выходе из аккаунта). */
 export async function endAllLiveActivities(): Promise<void> {
-  if (Platform.OS !== 'ios') return;
+  if (inventoryInternal || Platform.OS !== 'ios') return;
   await nativeEndAll();
 }

@@ -1,5 +1,5 @@
 import { withIntentWrite } from '../contexts/intentWriteBarrier';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from './environmentStorage';
 import * as Crypto from 'expo-crypto';
 import { createProcurementMutex } from '../../../shared/utils/durableProcurement';
 import { createPendingNfc } from '../../../shared/utils/pendingNfc';

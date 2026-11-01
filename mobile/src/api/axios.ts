@@ -1,6 +1,11 @@
 import axios, { AxiosError, type AxiosRequestConfig, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from '../utils/environmentStorage';
 import Constants from 'expo-constants';
+import {
+  inventoryInternal,
+  INVENTORY_INTERNAL_API_HOSTS,
+  isInventoryInternalRequestUrl,
+} from '../utils/runtimeEnvironment';
 import {
   buildApiHosts,
   isBodyLimitedGatewayHost,
@@ -20,6 +25,7 @@ import { resolveImageUrl } from './imageUrl';
 
 // API URL: hardcoded production server, fallback to dev server
 function getApiBaseUrl(): string {
+  if (inventoryInternal) return INVENTORY_INTERNAL_API_HOSTS[0];
   const configUrl = Constants.expoConfig?.extra?.apiUrl;
   if (configUrl) return configUrl;
 
@@ -85,7 +91,10 @@ export const API_URL = API_BASE_URL;
 // КРИТИЧНО (инцидент 05.07): резерв без пути наследует «/api» primary —
 // «https://autexa.pw» → «https://autexa.pw/api». Уже раскатанные конфиги с
 // голым origin (embedded 36/38 + старые OTA) самолечатся этим кодом.
-const API_HOSTS: readonly string[] = buildApiHosts(API_BASE_URL, Constants.expoConfig?.extra?.apiFallbackUrls);
+const API_HOSTS: readonly string[] = buildApiHosts(
+  API_BASE_URL,
+  inventoryInternal ? INVENTORY_INTERNAL_API_HOSTS.slice(1) : Constants.expoConfig?.extra?.apiFallbackUrls,
+);
 
 /** Активная база всех последующих запросов (module state). */
 let activeBaseUrl = API_BASE_URL;
@@ -1001,6 +1010,13 @@ function staleAuthCancellation(config: InternalAxiosRequestConfig): Error {
 // request fired before AuthContext mounted).
 api.interceptors.request.use(async (config) => {
   const cfg = config as FailoverAwareConfig;
+  if (
+    inventoryInternal &&
+    (!isInventoryInternalRequestUrl(config.url) ||
+      (cfg._failoverBaseUrl !== undefined && !API_HOSTS.includes(cfg._failoverBaseUrl)))
+  ) {
+    throw new axios.CanceledError('Запрос в другую среду запрещён.');
+  }
 
   // Capture auth BEFORE the route barrier. A request created by token A must
   // not wait for Wi-Fi/VPN selection, wake after login B and silently become

@@ -1,4 +1,4 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from '../utils/environmentStorage';
 import type { captureDataSession } from './dataSession';
 type Lease = ReturnType<typeof captureDataSession>;
 interface Storage {

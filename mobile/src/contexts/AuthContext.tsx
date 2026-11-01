@@ -2,7 +2,8 @@ import { loadProductCatalog } from '../../../shared/api/productCatalog';
 import { prefetchLoginReferences } from './prefetchReferences';
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, ReactNode } from 'react';
 import { AppState, Platform } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from '../utils/environmentStorage';
+import { inventoryInternal } from '../utils/runtimeEnvironment';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { randomUUID } from 'expo-crypto';
@@ -1629,8 +1630,12 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       clearWidgetData();
       await tenantDiskClear;
       if (!isCurrent()) return;
-      ExpoImage.clearDiskCache().catch(() => {});
-      ExpoImage.clearMemoryCache().catch(() => {});
+      // Native image cache is shared by bundle. Internal URLs carry :8443;
+      // avoid evicting the public app's unrelated cached media on test logout.
+      if (!inventoryInternal) {
+        ExpoImage.clearDiskCache().catch(() => {});
+        ExpoImage.clearMemoryCache().catch(() => {});
+      }
     });
   }, [beginSessionTransition, queryClient, sessionRuntime, token, renderEpoch]);
 

@@ -1,3 +1,4 @@
+import { inventoryInternal } from './runtimeEnvironment';
 import { Platform } from 'react-native';
 import { consumePendingAppIntent as nativeConsume } from '../../modules/autexa-liquid-glass/src/index';
 
@@ -31,7 +32,7 @@ export interface PendingAppIntent {
 }
 
 export function consumePendingAppIntent(): PendingAppIntent | null {
-  if (Platform.OS !== 'ios') return null;
+  if (inventoryInternal || Platform.OS !== 'ios') return null;
   try {
     const raw = nativeConsume();
     if (!raw) return null;

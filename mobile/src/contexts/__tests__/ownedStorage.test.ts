@@ -1,3 +1,4 @@
+jest.mock('expo-constants', () => ({ __esModule: true, default: { expoConfig: { extra: {} } } }));
 jest.mock('@react-native-async-storage/async-storage', () => ({ __esModule: true, default: {} }));
 import { createOwnedStorage, OWNED_DATA_PREFIX } from '../ownedStorage';
 import { captureDataSession, setDataSession, dataOwnerKey, userDataOwner } from '../dataSession';

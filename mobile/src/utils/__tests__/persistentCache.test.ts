@@ -1,3 +1,4 @@
+jest.mock('expo-constants', () => ({ __esModule: true, default: { expoConfig: { extra: {} } } }));
 import { QueryClient } from '@tanstack/react-query';
 const A = { userId: 'a', tenantId: 'ta', pointId: 'pa' };
 const B = { userId: 'b', tenantId: 'tb', pointId: 'pb' };

@@ -95,6 +95,10 @@ module.exports = ({ config }) => {
   const apsEnvironment = resolveApsEnvironment();
   const privateSelector = process.env.AUTEXA_OWNER_HOME_INTERNAL === 'ios-v1';
   const publicSelector = process.env.AUTEXA_OWNER_HOME_RELEASE === 'ios-v1';
+  const inventorySelector = process.env.AUTEXA_INVENTORY_INTERNAL === 'ios-v1';
+  if (inventorySelector && (privateSelector || publicSelector)) {
+    throw new Error('INVENTORY_INTERNAL_SELECTOR_CONFLICT');
+  }
   if (privateSelector && publicSelector) {
     throw new Error('OWNER_HOME_RELEASE_SELECTOR_CONFLICT');
   }
@@ -112,8 +116,16 @@ module.exports = ({ config }) => {
     (!process.env.EAS_BUILD_PROFILE || process.env.EAS_BUILD_PROFILE === 'production') &&
     (!process.env.EAS_BUILD_PLATFORM || process.env.EAS_BUILD_PLATFORM === 'ios');
 
+  const inventoryInternal =
+    inventorySelector &&
+    (!process.env.EAS_BUILD_PROFILE || process.env.EAS_BUILD_PROFILE === 'inventory-internal') &&
+    (!process.env.EAS_BUILD_PLATFORM || process.env.EAS_BUILD_PLATFORM === 'ios');
+
   return {
     ...config,
+    ...(inventoryInternal
+      ? { version: '3.20.0', ios: { ...config.ios, runtimeVersion: '3.20.0-inventory-internal' } }
+      : {}),
     ...(ownerHomePilot || ownerHomeRelease
       ? {
           version: '3.19.0',
@@ -127,6 +139,16 @@ module.exports = ({ config }) => {
       // see, on the device, which APNs environment the installed build uses.
       apsEnvironment,
       ...(ownerHomePilot || ownerHomeRelease ? { ownerHomePilot: true } : {}),
+      ...(inventoryInternal
+        ? {
+            inventoryInternal: 'ios-v1',
+            ownerHomePilot: true,
+            inventoryPreview: true,
+            apiUrl: 'https://autexa.pw:8443/api',
+            apiFallbackUrls: ['https://autexa-cloud.ru:8443/api'],
+            publicWebUrl: 'https://autexa.pw:8443',
+          }
+        : {}),
     },
   };
 };

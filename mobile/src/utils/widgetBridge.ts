@@ -1,3 +1,6 @@
+// Same bundle shares the public App Group. Internal builds leave its payload
+// untouched; an already installed public widget may retain its old snapshot.
+import { inventoryInternal } from './runtimeEnvironment';
 import { Platform } from 'react-native';
 import { captureDataSession } from '../contexts/dataSession';
 import { setWidgetData } from '../../modules/autexa-liquid-glass/src/index';
@@ -62,7 +65,7 @@ export type WidgetData = MasterWidgetData | OwnerWidgetData;
  */
 export function updateWidgetData(data: WidgetData, lease: ReturnType<typeof captureDataSession>): void {
   if (!lease.owner || !lease.isCurrent()) return;
-  if (Platform.OS !== 'ios') return;
+  if (inventoryInternal || Platform.OS !== 'ios') return;
   try {
     setWidgetData(
       JSON.stringify({
@@ -86,7 +89,7 @@ export function updateWidgetData(data: WidgetData, lease: ReturnType<typeof capt
  * own dashboard overwrote the payload. Fire-and-forget, no-op on Android.
  */
 export function clearWidgetData(): void {
-  if (Platform.OS !== 'ios') return;
+  if (inventoryInternal || Platform.OS !== 'ios') return;
   try {
     setWidgetData(
       JSON.stringify({
