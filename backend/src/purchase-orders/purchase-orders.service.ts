@@ -1,3 +1,4 @@
+import { validateInvoiceUnitsTx } from '../supplier-invoices/invoice-units';
 import { lockInvoiceReceipt, linkInvoiceReceipt } from '../supplier-invoices/invoice-receipt';
 import {
   Injectable,
@@ -660,6 +661,19 @@ export class PurchaseOrdersService {
       }
       const productIds = [...deltaById.keys()].map((itemId) => byId.get(itemId)!.product_id as string);
       const products = await lockReceiptProducts(client, tenantID, productIds, pointId);
+      if (dto.invoiceDocumentId)
+        await validateInvoiceUnitsTx(
+          client,
+          tenantID,
+          dto.invoiceDocumentId,
+          dto.invoiceLineIds ?? [],
+          dto.items!.map((item) => ({
+            productId: byId.get(item.itemId)!.product_id as string,
+            quantity: item.receivedQuantity,
+            price: item.purchasePrice ?? Number(byId.get(item.itemId)!.cost_price),
+          })),
+          dto.invoiceUnits,
+        );
       const productById = new Map(products.map((p) => [p.id, p]));
       const context = await purchaseContext(client, tenantID, productIds, receivedAtIso, pointId);
       const priorById = new Map(context.map((c) => [c.productId, c.previousPurchase]));

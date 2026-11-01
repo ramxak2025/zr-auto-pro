@@ -10,6 +10,13 @@ export interface SupplierInvoiceLine {
   productId: string | null;
   suggestedProductId: string | null;
   warnings: string[];
+  quantityRaw?: string;
+  priceRaw?: string;
+  productUnit?: string;
+  unitMismatch?: boolean;
+  unitConfirmed?: boolean;
+  confirmedQuantity?: number;
+  confirmedPrice?: number;
 }
 
 export interface SupplierInvoiceDocument {
@@ -63,5 +70,7 @@ export interface ConfirmSupplierInvoice {
     price: number;
     sellPrice?: number;
     orderItemId?: string;
+    unitConfirmed?: boolean;
+    productUnit?: string;
   }>;
 }

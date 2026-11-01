@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 
 export interface InvoiceLine {
@@ -10,6 +11,13 @@ export interface InvoiceLine {
   productId: string | null;
   suggestedProductId: string | null;
   warnings: string[];
+  quantityRaw?: string;
+  priceRaw?: string;
+  productUnit?: string;
+  unitMismatch?: boolean;
+  unitConfirmed?: boolean;
+  confirmedQuantity?: number;
+  confirmedPrice?: number;
 }
 export interface InvoiceResult {
   date: string | null;
@@ -22,8 +30,12 @@ interface OcrCell {
   rowSpan?: string;
   columnSpan?: string;
   text: string;
+  rawText?: string;
+  confidence?: number;
+  warnings?: string[];
 }
 export interface OcrAnnotation {
+  warnings?: string[];
   fullText?: string;
   rotate?: string;
   tables?: Array<{ cells?: OcrCell[] }>;
@@ -41,11 +53,9 @@ export const invoiceAliasKey = (line: Pick<InvoiceLine, 'name' | 'sku'>) =>
 
 /** Parse only a complete decimal cell, never extract a plausible substring. */
 export function invoiceNumber(value: string, decimals: number, positive: boolean): number | null {
-  const normalized = value
-    .trim()
-    .replace(/[\s\u00a0\u202f]/g, '')
-    .replace(',', '.');
-  if (!new RegExp(`^\\d+(?:\\.\\d{1,${decimals}})?$`).test(normalized)) return null;
+  const raw = value.trim().replace(/[\u00a0\u202f]/g, ' ');
+  if (!new RegExp(`^(?:\\d+|\\d{1,3}(?: \\d{3})+)(?:[.,]\\d{1,${decimals}})?$`).test(raw)) return null;
+  const normalized = raw.replace(/ /g, '').replace(',', '.');
   const number = Number(normalized);
   return Number.isFinite(number) && number <= 999999999 && (positive ? number > 0 : number >= 0) ? number : null;
 }
@@ -61,12 +71,14 @@ export function parseInvoiceTables(pages: OcrAnnotation[]): InvoiceResult {
     }
     for (const table of page.tables ?? []) {
       const rows = new Map<number, Map<number, string>>();
+      const evidence = new Map<string, OcrCell>();
       for (const cell of table.cells ?? []) {
         const row = Number(cell.rowIndex),
           col = Number(cell.columnIndex);
         if (!Number.isInteger(row) || !Number.isInteger(col) || row < 0 || row > 1000 || col < 0 || col > 100) continue;
         if (!rows.has(row)) rows.set(row, new Map());
         rows.get(row)!.set(col, String(cell.text ?? '').slice(0, 2000));
+        evidence.set(`${row}:${col}`, cell);
       }
       let header: { row: number; name: number; qty: number; price: number; unit: number; sku: number } | null = null;
       for (const [row, cells] of [...rows].sort((a, b) => a[0] - b[0])) {
@@ -93,12 +105,23 @@ export function parseInvoiceTables(pages: OcrAnnotation[]): InvoiceResult {
           price,
           productId: null,
           suggestedProductId: null,
+          quantityRaw: evidence.get(`${row}:${header.qty}`)?.rawText ?? cells.get(header.qty) ?? '',
+          priceRaw: evidence.get(`${row}:${header.price}`)?.rawText ?? cells.get(header.price) ?? '',
+          unitConfirmed: false,
           warnings: [
+            ...new Set([
+              ...(evidence.get(`${row}:${header.qty}`)?.warnings ?? []),
+              ...(evidence.get(`${row}:${header.price}`)?.warnings ?? []),
+            ]),
             ...(quantity === null ? ['Проверьте количество'] : []),
             ...(price === null ? ['Проверьте закупочную цену за единицу'] : []),
           ],
         });
-        if (lines.length > 500) throw new Error('INVOICE_TOO_MANY_LINES');
+        if (lines.length > 500)
+          throw new BadRequestException({
+            code: 'INVOICE_TOO_MANY_LINES',
+            message: 'В накладной не должно быть больше 500 строк',
+          });
       }
     }
   }
@@ -106,6 +129,16 @@ export function parseInvoiceTables(pages: OcrAnnotation[]): InvoiceResult {
     date: dates.size === 1 ? [...dates][0] : null,
     lines,
     warnings: [
+      ...new Set(
+        pages.flatMap((page) =>
+          Array.isArray(page.warnings)
+            ? page.warnings
+                .filter((value) => typeof value === 'string')
+                .slice(0, 20)
+                .map((value) => value.slice(0, 200))
+            : [],
+        ),
+      ),
       ...(dates.size !== 1 ? ['Проверьте дату накладной'] : []),
       ...(!lines.length ? ['Не удалось надёжно определить таблицу товаров. Заполните поставку вручную'] : []),
       'Перед приёмкой проверьте каждую строку, количество и закупочную цену за единицу',

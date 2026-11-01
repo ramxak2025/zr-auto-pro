@@ -1,3 +1,4 @@
+import { InvoiceOcrProvider, LocalInvoiceOcr } from './invoice-ocr.provider';
 import { Module } from '@nestjs/common';
 import { UploadsModule } from '../uploads/uploads.module';
 import { SuppliersModule } from '../suppliers/suppliers.module';
@@ -9,6 +10,13 @@ import { PurchaseOrdersModule } from '../purchase-orders/purchase-orders.module'
 @Module({
   imports: [UploadsModule, SuppliersModule, PurchaseOrdersModule],
   controllers: [SupplierInvoicesController],
-  providers: [SupplierInvoicesService, YandexInvoiceOcr],
+  providers: [
+    SupplierInvoicesService,
+    {
+      provide: InvoiceOcrProvider,
+      useFactory: () =>
+        process.env.INVOICE_OCR_PROVIDER === 'yandex' ? new YandexInvoiceOcr() : new LocalInvoiceOcr(),
+    },
+  ],
 })
 export class SupplierInvoicesModule {}

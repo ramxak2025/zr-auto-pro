@@ -1,3 +1,4 @@
+import { validateInvoiceUnitsTx } from '../supplier-invoices/invoice-units';
 import { lockInvoiceReceipt, linkInvoiceReceipt } from '../supplier-invoices/invoice-receipt';
 import {
   Injectable,
@@ -646,6 +647,15 @@ export class SuppliersService {
         dto.items.map((item) => item.productId),
         pointId,
       );
+      if (dto.invoiceDocumentId)
+        await validateInvoiceUnitsTx(
+          client,
+          tenantID,
+          dto.invoiceDocumentId,
+          dto.invoiceLineIds ?? [],
+          dto.items,
+          dto.invoiceUnits,
+        );
       const byProduct = new Map(products.map((product) => [product.id, product]));
       const context = await purchaseContext(
         client,

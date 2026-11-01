@@ -1,3 +1,5 @@
+import { InvoiceOcrProvider } from './invoice-ocr.provider';
+import { normalizeInvoiceUnit } from './invoice-units';
 import { PurchaseOrdersService } from '../purchase-orders/purchase-orders.service';
 import {
   BadRequestException,
@@ -6,6 +8,7 @@ import {
   HttpException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Pool, PoolClient } from 'pg';
@@ -21,7 +24,6 @@ import { actorPointId, warehousePointFilterSql } from '../common/point-scope';
 import { LocalStorageAdapter } from '../uploads/storage.service';
 import { SuppliersService } from '../suppliers/suppliers.service';
 import { InvoiceResult, invoiceAliasKey, normalizeAlias, parseInvoiceTables } from './invoice-parser';
-import { YandexInvoiceOcr } from './yandex-invoice-ocr';
 import { ConfirmInvoiceDto, MapInvoiceLineDto } from './supplier-invoices.dto';
 
 interface DocumentRow {
@@ -50,10 +52,11 @@ interface PageRow {
 @Injectable()
 export class SupplierInvoicesService {
   private activeExtractions = 0;
+  private readonly logger = new Logger('SupplierInvoices');
   constructor(
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly storage: LocalStorageAdapter,
-    private readonly ocr: YandexInvoiceOcr,
+    private readonly ocr: InvoiceOcrProvider,
     private readonly suppliers: SuppliersService,
     private readonly orders: PurchaseOrdersService,
   ) {}
@@ -171,8 +174,7 @@ export class SupplierInvoicesService {
       await client.query('BEGIN');
       const row = await this.document(client, id, actor, true);
       this.writable(row);
-      if (row.attempts > 0)
-        throw new ConflictException('После распознавания создайте новую накладную для другого набора страниц');
+      if (row.status === 'processing') throw new ConflictException('Дождитесь завершения распознавания');
       const pages = await client.query(
         'SELECT sha256,byte_size FROM supplier_invoice_pages WHERE document_id=$1 AND tenant_id=$2',
         [id, actor.tenantID],
@@ -194,8 +196,8 @@ export class SupplierInvoicesService {
         [actor.tenantID, id, pages.rows.length, saved.storedPath, hash, saved.size],
       );
       await client.query(
-        'UPDATE supplier_invoice_documents SET version=version+1,updated_at=now() WHERE id=$1 AND tenant_id=$2',
-        [id, actor.tenantID],
+        `UPDATE supplier_invoice_documents SET status='draft',document_hash=NULL,result=$3,attempts=0,processing_at=NULL,last_error_code=NULL,version=version+1,updated_at=now() WHERE id=$1 AND tenant_id=$2`,
+        [id, actor.tenantID, JSON.stringify({ date: null, lines: [], warnings: [] })],
       );
       await client.query('COMMIT');
       storedPath = undefined;
@@ -210,6 +212,60 @@ export class SupplierInvoicesService {
     } finally {
       client.release();
     }
+  }
+
+  async deletePage(id: string, pageId: string, version: number, actor: JwtPayload) {
+    const client = await this.pool.connect();
+    let removed: string | undefined;
+    try {
+      await client.query('BEGIN');
+      const row = await this.document(client, id, actor, true);
+      this.writable(row, version);
+      if (row.status === 'processing') throw new ConflictException('Дождитесь завершения распознавания');
+      const pages = await client.query(
+        'SELECT id,page_index,stored_path FROM supplier_invoice_pages WHERE document_id=$1 AND tenant_id=$2 ORDER BY page_index',
+        [id, actor.tenantID],
+      );
+      const page = pages.rows.find((page) => page.id === pageId);
+      if (!page) throw new NotFoundException('Страница не найдена');
+      await client.query('DELETE FROM supplier_invoice_pages WHERE id=$1 AND document_id=$2 AND tenant_id=$3', [
+        pageId,
+        id,
+        actor.tenantID,
+      ]);
+      const remaining = pages.rows.filter((page) => page.id !== pageId);
+      for (const [index, page] of remaining.entries())
+        if (page.page_index !== index)
+          await client.query('UPDATE supplier_invoice_pages SET page_index=$3 WHERE id=$1 AND tenant_id=$2', [
+            page.id,
+            actor.tenantID,
+            index,
+          ]);
+      await client.query(
+        `UPDATE supplier_invoice_documents SET status='draft',document_hash=NULL,result=$3,attempts=0,processing_at=NULL,last_error_code=NULL,version=version+1,updated_at=now()
+        WHERE id=$1 AND tenant_id=$2`,
+        [id, actor.tenantID, JSON.stringify({ date: null, lines: [], warnings: [] })],
+      );
+      await client.query('COMMIT');
+      removed = page.stored_path;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+    if (removed) {
+      const path = this.storage.resolve(removed);
+      if (path)
+        try {
+          await fs.unlink(path);
+        } catch (error) {
+          // Capability/version deletion already committed; a filesystem orphan stays
+          // private and cannot be served. Never undo the user's logical deletion.
+          if ((error as { code?: string }).code !== 'ENOENT') this.logger.warn('Private invoice page cleanup deferred');
+        }
+    }
+    return this.get(id, actor);
   }
 
   async page(id: string, pageId: string, actor: JwtPayload) {
@@ -229,8 +285,11 @@ export class SupplierInvoicesService {
 
   async extract(id: string, expectedVersion: number, actor: JwtPayload) {
     this.assertActor(actor);
+    const existing = await this.document(this.pool, id, actor);
+    this.writable(existing, expectedVersion);
+    if (existing.status === 'review') return this.get(id, actor);
     this.ocr.assertConfigured();
-    if (this.activeExtractions >= 2)
+    if (this.activeExtractions >= (this.ocr.maxConcurrentDocuments ?? 1))
       throw new HttpException({ code: 'OCR_BUSY', message: 'Распознавание занято. Повторите через минуту' }, 429);
     this.activeExtractions++;
     let reserved = false;
@@ -244,7 +303,7 @@ export class SupplierInvoicesService {
         if (!path) throw new NotFoundException('Исходная страница не найдена');
         const image = await sharp(path, { limitInputPixels: 20_000_000 })
           .rotate()
-          .resize({ width: 4000, height: 4000, fit: 'inside', withoutEnlargement: true })
+          .resize({ width: 3000, height: 3000, fit: 'inside', withoutEnlargement: true })
           .jpeg({ quality: 95 })
           .toBuffer();
         annotations.push(await this.ocr.recognize(image));
@@ -317,6 +376,19 @@ export class SupplierInvoicesService {
         await client.query('COMMIT');
         return { pages: [], supplierId: row.supplier_id, attempt: 0, duplicateId: duplicate.rows[0].id };
       }
+      const contentAttempts = await client.query(
+        `SELECT count(*)::int n FROM supplier_invoice_ocr_attempts a JOIN supplier_invoice_documents d ON d.id=a.document_id AND d.tenant_id=a.tenant_id
+        WHERE a.tenant_id=$1 AND d.supplier_id=$2 AND a.content_hash=$3`,
+        [actor.tenantID, row.supplier_id, hash],
+      );
+      if (contentAttempts.rows[0].n >= 2)
+        throw new HttpException(
+          {
+            code: 'OCR_RETRY_LIMIT',
+            message: 'Лимит распознавания этих страниц исчерпан. Переснимите страницу или заполните строки вручную',
+          },
+          429,
+        );
       const budget = await client.query(
         `SELECT COALESCE(sum(pages),0)::int month_pages,count(*) FILTER(WHERE created_at>now()-interval '1 minute')::int minute_calls
         FROM supplier_invoice_ocr_attempts WHERE tenant_id=$1 AND created_at>=date_trunc('month',now())`,
@@ -331,11 +403,10 @@ export class SupplierInvoicesService {
           },
           429,
         );
-      await client.query('INSERT INTO supplier_invoice_ocr_attempts(tenant_id,document_id,pages) VALUES($1,$2,$3)', [
-        actor.tenantID,
-        id,
-        pages.length,
-      ]);
+      await client.query(
+        'INSERT INTO supplier_invoice_ocr_attempts(tenant_id,document_id,pages,content_hash) VALUES($1,$2,$3,$4)',
+        [actor.tenantID, id, pages.length, hash],
+      );
       await client.query(
         "UPDATE supplier_invoice_documents SET document_hash=$3,status='processing',processing_at=now(),attempts=attempts+1,version=version+1,updated_at=now() WHERE id=$1 AND tenant_id=$2",
         [id, actor.tenantID, hash],
@@ -355,7 +426,7 @@ export class SupplierInvoicesService {
     const point = warehousePointFilterSql('p', actorPointId(actor), params);
     const aliases = await this.pool.query(
       `SELECT a.alias_key,a.product_id FROM supplier_product_aliases a JOIN products p ON p.id=a.product_id AND p.tenant_id=a.tenant_id
-      WHERE a.tenant_id=$1 AND a.supplier_id=$2 AND a.alias_key=ANY($3::text[]) AND p.deleted_at IS NULL${point}`,
+      WHERE a.tenant_id=$1 AND a.supplier_id=$2 AND a.alias_key=ANY($3::text[]) AND p.deleted_at IS NULL AND p.assembly_id IS NULL AND NOT EXISTS(SELECT 1 FROM warehouses wu WHERE wu.id=p.warehouse_id AND wu.kind='used')${point}`,
       params,
     );
     const byKey = new Map(aliases.rows.map((row) => [row.alias_key, row.product_id]));
@@ -366,7 +437,7 @@ export class SupplierInvoicesService {
       ? (
           await this.pool.query(
             `SELECT p.id,p.article,p.barcode FROM products p
-      WHERE p.tenant_id=$1 AND (p.supplier_id IS NULL OR p.supplier_id=$2) AND p.deleted_at IS NULL
+      WHERE p.tenant_id=$1 AND (p.supplier_id IS NULL OR p.supplier_id=$2) AND p.deleted_at IS NULL AND p.assembly_id IS NULL AND NOT EXISTS(SELECT 1 FROM warehouses wu WHERE wu.id=p.warehouse_id AND wu.kind='used')
       AND (btrim(regexp_replace(replace(lower(COALESCE(p.article,'')),'ё','е'),'[^[:alnum:]]+',' ','g'))=ANY($3::text[])
         OR btrim(regexp_replace(replace(lower(COALESCE(p.barcode,'')),'ё','е'),'[^[:alnum:]]+',' ','g'))=ANY($3::text[]))${skuPoint}`,
             skuParams,
@@ -397,11 +468,23 @@ export class SupplierInvoicesService {
       const params: unknown[] = [dto.productId, actor.tenantID];
       const point = warehousePointFilterSql('p', actorPointId(actor), params);
       const product = await client.query(
-        `SELECT p.id FROM products p WHERE p.id=$1 AND p.tenant_id=$2 AND p.deleted_at IS NULL${point}`,
+        `SELECT p.id,p.unit FROM products p WHERE p.id=$1 AND p.tenant_id=$2 AND p.deleted_at IS NULL AND p.assembly_id IS NULL AND NOT EXISTS(SELECT 1 FROM warehouses wu WHERE wu.id=p.warehouse_id AND wu.kind='used')${point}`,
         params,
       );
       if (!product.rows.length) throw new BadRequestException('Товар не найден в текущем филиале');
       line.productId = dto.productId;
+      line.productUnit = product.rows[0].unit || 'шт';
+      line.unitMismatch =
+        !normalizeInvoiceUnit(line.unit) || normalizeInvoiceUnit(line.unit) !== normalizeInvoiceUnit(line.productUnit);
+      line.unitConfirmed =
+        !line.unitMismatch ||
+        (dto.unitConfirmed === true &&
+          normalizeInvoiceUnit(dto.productUnit) === normalizeInvoiceUnit(line.productUnit));
+      line.warnings = line.warnings.filter((warning) => !warning.startsWith('Единица накладной'));
+      if (line.unitMismatch)
+        line.warnings.push(
+          `Единица накладной «${line.unit || 'не распознана'}», каталог: «${line.productUnit}». Подтвердите количество и закупочную цену в единицах каталога`,
+        );
       if (dto.remember !== false)
         await client.query(
           `INSERT INTO supplier_product_aliases(tenant_id,supplier_id,alias_key,product_id,confirmed_by)
@@ -518,6 +601,7 @@ export class SupplierInvoicesService {
           invoiceDocumentDate: dto.date,
           expectedInvoiceVersion: dto.expectedVersion,
           invoiceLineIds: dto.items.map((item) => item.lineId),
+          invoiceUnits: dto.items.map((item) => ({ unitConfirmed: item.unitConfirmed, productUnit: item.productUnit })),
           items: dto.items.map((item) => ({
             itemId: item.orderItemId!,
             receivedQuantity: item.quantity,
@@ -542,6 +626,7 @@ export class SupplierInvoicesService {
         invoiceDocumentDate: dto.date,
         expectedInvoiceVersion: dto.expectedVersion,
         invoiceLineIds: dto.items.map((item) => item.lineId),
+        invoiceUnits: dto.items.map((item) => ({ unitConfirmed: item.unitConfirmed, productUnit: item.productUnit })),
         items: dto.items.map((item) => ({
           productId: item.productId,
           quantity: item.quantity,

@@ -32,14 +32,18 @@ export class InvoiceContextDto extends InvoiceVersionDto {
 export class MapInvoiceLineDto extends InvoiceVersionDto {
   @IsUUID('4') productId!: string;
   @IsOptional() @IsBoolean() remember?: boolean;
+  @IsOptional() @IsBoolean() unitConfirmed?: boolean;
+  @IsOptional() @IsString() @MaxLength(50) productUnit?: string;
 }
 export class ConfirmInvoiceLineDto extends CreateDeliveryItemDto {
+  @IsOptional() @IsBoolean() unitConfirmed?: boolean;
+  @IsOptional() @IsString() @MaxLength(50) productUnit?: string;
   @IsUUID('4') lineId!: string;
   @IsOptional() @IsUUID('4') orderItemId?: string;
 }
 export class ConfirmInvoiceDto extends InvoiceVersionDto {
   @IsUUID('4') requestId!: string;
-  @IsISO8601({ strict: true }) date!: string;
+  @Matches(/^\d{4}-\d{2}-\d{2}$/) @IsISO8601({ strict: true }) date!: string;
   /** Explicit receipt backdating only; the recognized date is the document date. */
   @IsOptional() @IsISO8601({ strict: true }) receivedAt?: string;
   @IsOptional() @IsString() @MaxLength(2000) comment?: string;

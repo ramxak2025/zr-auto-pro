@@ -1,3 +1,4 @@
+import { InvoiceOcrProvider } from './invoice-ocr.provider';
 import { HttpException, Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { OcrAnnotation } from './invoice-parser';
 
@@ -5,7 +6,8 @@ import { OcrAnnotation } from './invoice-parser';
  * https://aistudio.yandex.ru/en/docs/vision/ocr/api-ref/TextRecognition/recognize
  */
 @Injectable()
-export class YandexInvoiceOcr {
+export class YandexInvoiceOcr extends InvoiceOcrProvider {
+  readonly maxConcurrentDocuments = 2;
   assertConfigured() {
     if (process.env.INVOICE_OCR_ENABLED !== 'true' || !process.env.YC_API_KEY || !process.env.YC_FOLDER_ID) {
       throw new ServiceUnavailableException({

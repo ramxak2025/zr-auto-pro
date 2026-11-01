@@ -3,6 +3,8 @@ import {
   Body,
   Controller,
   Get,
+  Delete,
+  Header,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -83,12 +85,22 @@ export class SupplierInvoicesController {
     return this.invoices.prepare(dto.supplierId, actor, dto.orderId);
   }
   @Get(':id')
+  @Header('Cache-Control', 'no-store')
   get(@Param('id', new ParseUUIDPipe()) id: string, @CurrentUser() actor: JwtPayload) {
     return this.invoices.get(id, actor);
   }
   @Post(':id/pages')
   async upload(@Param('id', new ParseUUIDPipe()) id: string, @Req() req: Request, @CurrentUser() actor: JwtPayload) {
     return this.invoices.addPage(id, await invoiceUpload(req), actor);
+  }
+  @Delete(':id/pages/:pageId')
+  deletePage(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('pageId', new ParseUUIDPipe()) pageId: string,
+    @Body() dto: InvoiceVersionDto,
+    @CurrentUser() actor: JwtPayload,
+  ) {
+    return this.invoices.deletePage(id, pageId, dto.expectedVersion, actor);
   }
   @Get(':id/pages/:pageId')
   async page(

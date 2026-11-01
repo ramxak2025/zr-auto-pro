@@ -863,8 +863,12 @@ export function createProductsApi(api: HttpClient) {
       }>('/products/warehouse-stats'),
     getById: (id: string) => api.get<Product>(`/products/${id}`),
     create: (data: CreateProductRequest) => api.post<Product>('/products', data),
-    usedIntake: (data: Omit<CreateProductRequest, 'stock' | 'supplierId' | 'isBundle' | 'bundleItems'> & { quantity: number; requestId: string }) =>
-      api.post<{ product: Product; requestId: string }>('/products/used-intake', data),
+    usedIntake: (
+      data: Omit<CreateProductRequest, 'stock' | 'supplierId' | 'isBundle' | 'bundleItems'> & {
+        quantity: number;
+        requestId: string;
+      },
+    ) => api.post<{ product: Product; requestId: string }>('/products/used-intake', data),
     createShare: (id: string) => api.post<{ token: string; path: string }>(`/products/${id}/share`, {}),
     revokeShare: (id: string) => api.delete<{ revoked: boolean }>(`/products/${id}/share`),
     update: (id: string, data: UpdateProductRequest) => api.patch<Product>(`/products/${id}`, data),
@@ -1724,8 +1728,20 @@ export function createWarrantyApi(api: HttpClient) {
 
 export function createStockMovementsApi(api: HttpClient) {
   return {
-    history: (params?: { productId?: string; warehouseId?: string; type?: string; dateFrom?: string; dateTo?: string; includeSales?: boolean; cursor?: string; limit?: number }) =>
-      api.get<{ data: StockMovement[]; limit: number; snapshotAt: string; nextCursor: string | null }>('/stock-movements/history', { params }),
+    history: (params?: {
+      productId?: string;
+      warehouseId?: string;
+      type?: string;
+      dateFrom?: string;
+      dateTo?: string;
+      includeSales?: boolean;
+      cursor?: string;
+      limit?: number;
+    }) =>
+      api.get<{ data: StockMovement[]; limit: number; snapshotAt: string; nextCursor: string | null }>(
+        '/stock-movements/history',
+        { params },
+      ),
     list: (params?: {
       warehouseId?: string;
       productId?: string;
@@ -3208,27 +3224,52 @@ export function createDashboardApi(api: HttpClient) {
 /** Camera photos use multipart uploads; GET image URLs require the same bearer session. */
 export function createSupplierInvoicesApi(api: HttpClient) {
   return {
-    prepare: (supplierId: string, orderId?: string) => api.post<SupplierInvoiceDocument>('/supplier-invoices/prepare', {supplierId,orderId}),
+    prepare: (supplierId: string, orderId?: string) =>
+      api.post<SupplierInvoiceDocument>('/supplier-invoices/prepare', { supplierId, orderId }),
     get: (id: string) => api.get<SupplierInvoiceDocument>(`/supplier-invoices/${id}`),
-    uploadPage: (id: string, data: FormData) => api.post<SupplierInvoiceDocument>(`/supplier-invoices/${id}/pages`, data),
-    extract: (id: string, expectedVersion: number) => api.post<SupplierInvoiceDocument>(`/supplier-invoices/${id}/extract`, {expectedVersion}),
-    mapLine: (id: string, lineId: string, data: {expectedVersion: number; productId: string; remember?: boolean}) =>
-      api.patch<SupplierInvoiceDocument>(`/supplier-invoices/${id}/lines/${lineId}`, data),
-    setOrder: (id: string, expectedVersion: number, orderId: string|null) =>
-      api.patch<SupplierInvoiceDocument>(`/supplier-invoices/${id}/context`, {expectedVersion,orderId}),
-    confirm: (id: string, data: ConfirmSupplierInvoice) => api.post<{id:string}>(`/supplier-invoices/${id}/confirm`, data),
+    uploadPage: (id: string, data: FormData) =>
+      api.post<SupplierInvoiceDocument>(`/supplier-invoices/${id}/pages`, data, { timeout: 60000 }),
+    deletePage: (id: string, pageId: string, expectedVersion: number) =>
+      api.delete<SupplierInvoiceDocument>(`/supplier-invoices/${id}/pages/${pageId}`, { data: { expectedVersion } }),
+    extract: (id: string, expectedVersion: number) =>
+      api.post<SupplierInvoiceDocument>(`/supplier-invoices/${id}/extract`, { expectedVersion }, { timeout: 60000 }),
+    mapLine: (
+      id: string,
+      lineId: string,
+      data: {
+        expectedVersion: number;
+        productId: string;
+        remember?: boolean;
+        unitConfirmed?: boolean;
+        productUnit?: string;
+      },
+    ) => api.patch<SupplierInvoiceDocument>(`/supplier-invoices/${id}/lines/${lineId}`, data),
+    setOrder: (id: string, expectedVersion: number, orderId: string | null) =>
+      api.patch<SupplierInvoiceDocument>(`/supplier-invoices/${id}/context`, { expectedVersion, orderId }),
+    confirm: (id: string, data: ConfirmSupplierInvoice) =>
+      api.post<{ id: string }>(`/supplier-invoices/${id}/confirm`, data),
   };
 }
 
 export function createProductKitsApi(api: HttpClient) {
   return {
-    get: (productId:string) => api.get<PhysicalProductKit>(`/product-kits/${productId}`),
+    get: (productId: string) => api.get<PhysicalProductKit>(`/product-kits/${productId}`),
     recipes: () => api.get<KitRecipe[]>('/product-kits/recipes'),
-    createRecipe: (data:Pick<KitRecipe,'name'|'components'>) => api.post<KitRecipe>('/product-kits/recipes',data),
-    updateRecipe: (id:string,data:Pick<KitRecipe,'name'|'components'> & {expectedVersion:number}) => api.patch<KitRecipe>(`/product-kits/recipes/${id}`,data),
-    assemble: (data:AssembleKitRequest) => api.post<KitOperationResult>('/product-kits/assemble',data),
-    disassemble: (productId:string,data:{requestId:string;expectedRevision:number;quantity:number}) =>
-      api.post<{assemblyId:string;revision:number;operationId:string;sources:Array<{sourceProductId:string;productId:string;quantity:number;costPrice:number}>}>(`/product-kits/${productId}/disassemble`,data),
-    recompose: (productId:string,data:AssembleKitRequest & {expectedRevision:number}) => api.post<KitOperationResult & {previousAssemblyId:string;previousRevision:number}>(`/product-kits/${productId}/recompose`,data),
+    createRecipe: (data: Pick<KitRecipe, 'name' | 'components'>) => api.post<KitRecipe>('/product-kits/recipes', data),
+    updateRecipe: (id: string, data: Pick<KitRecipe, 'name' | 'components'> & { expectedVersion: number }) =>
+      api.patch<KitRecipe>(`/product-kits/recipes/${id}`, data),
+    assemble: (data: AssembleKitRequest) => api.post<KitOperationResult>('/product-kits/assemble', data),
+    disassemble: (productId: string, data: { requestId: string; expectedRevision: number; quantity: number }) =>
+      api.post<{
+        assemblyId: string;
+        revision: number;
+        operationId: string;
+        sources: Array<{ sourceProductId: string; productId: string; quantity: number; costPrice: number }>;
+      }>(`/product-kits/${productId}/disassemble`, data),
+    recompose: (productId: string, data: AssembleKitRequest & { expectedRevision: number }) =>
+      api.post<KitOperationResult & { previousAssemblyId: string; previousRevision: number }>(
+        `/product-kits/${productId}/recompose`,
+        data,
+      ),
   };
 }

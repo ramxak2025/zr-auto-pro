@@ -3,6 +3,7 @@ import {
   ArrayMinSize,
   ArrayMaxSize,
   IsInt,
+  IsBoolean,
   IsArray,
   IsDateString,
   IsNumber,
@@ -20,7 +21,17 @@ export class CreateDeliveryItemDto {
   @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) price!: number;
   @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) sellPrice?: number;
 }
+export class InvoiceUnitConfirmationDto {
+  @IsOptional() @IsBoolean() unitConfirmed?: boolean;
+  @IsOptional() @IsString() @MaxLength(50) productUnit?: string;
+}
 export class CreateDeliveryDto {
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(500)
+  @ValidateNested({ each: true })
+  @Type(() => InvoiceUnitConfirmationDto)
+  invoiceUnits?: InvoiceUnitConfirmationDto[];
   @IsUUID('4') supplierId!: string;
   /** Private scanned-invoice confirmation; linked atomically with this receipt. */
   @IsOptional() @IsUUID('4') invoiceDocumentId?: string;
