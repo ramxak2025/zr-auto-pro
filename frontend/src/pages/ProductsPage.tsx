@@ -488,7 +488,7 @@ function ProductsPageContents() {
       const folderPrefix = prefix ? `${prefix}/${folder.name}` : folder.name;
       const folderProducts = allProducts.filter((p) => {
         const cat = p.category || '';
-        return cat === folderPrefix || cat.startsWith(folderPrefix + '/');
+        return !p.assemblyId && (cat === folderPrefix || cat.startsWith(folderPrefix + '/'));
       });
       if (folderProducts.length === 0) {
         info.set(folder.name, { recentlyChecked: false });

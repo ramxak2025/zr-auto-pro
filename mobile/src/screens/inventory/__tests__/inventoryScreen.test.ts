@@ -4,6 +4,8 @@ import path from 'path';
 import ts from 'typescript';
 import type { Product } from '../../../../../shared/types';
 import {
+  canCountProduct,
+  PHYSICAL_KIT_STOCK_NOTICE,
   inventoryRows,
   inventorySummary,
   reconcileInventoryDrafts,
@@ -77,6 +79,8 @@ function harness(products = [a, b]) {
     setNotice: jest.fn(),
     Keyboard: { dismiss: jest.fn() },
     inventorySummary,
+    canCountProduct,
+    PHYSICAL_KIT_STOCK_NOTICE,
     reconcileInventoryDrafts,
     parseInventoryQuantity,
     inventoryError,
@@ -649,4 +653,170 @@ it('internal barcode lookup does not invent a product/count on network failure o
   h.newEpoch();
   await h.scan('AX00000001');
   expect(h.drafts.A.a.raw).toBe('1');
+});
+
+it('physical assemblies are excluded from folder/search counts while zero-stock ordinary products stay countable', () => {
+  const kit = { ...product('kit', 2, 'Комплекты'), assemblyId: 'assembly', isBundle: false };
+  const zero = product('zero', 0, 'Расходники');
+  expect(inventoryRows([kit, zero], [], '', []).map((row) => row.key)).toEqual(['folder:Расходники']);
+  expect(inventoryRows([kit, zero], [], 'barcode-kit', [])).toEqual([]);
+  expect(inventoryRows([kit, zero], ['Расходники'], '', []).map((row) => row.key)).toEqual(['zero']);
+  expect(
+    inventorySummary(
+      {
+        kit: { raw: '4', expectedStock: 2 },
+        zero: { raw: '0', expectedStock: 0 },
+      },
+      [kit, zero],
+    ),
+  ).toEqual({ counted: 1, changed: 0, invalid: 0, review: 0 });
+});
+
+it('neither typing nor a direct barcode match can count a physical assembly; zero-stock ordinary inventory still submits', async () => {
+  const kit = { ...product('kit'), assemblyId: 'assembly' };
+  const zero = product('zero', 0);
+  const h = harness([kit, zero]);
+  h.count(kit, '1');
+  expect(h.drafts.A).toBeUndefined();
+  (h.scope.scannerScope as { current: unknown }).current = { session: h.session(), warehouseId: 'A' };
+  await h.scan('barcode-kit');
+  expect(h.drafts.A).toBeUndefined();
+  expect((h.scope.Alert as { alert: jest.Mock }).alert).toHaveBeenCalledWith(
+    'Собранный комплект',
+    PHYSICAL_KIT_STOCK_NOTICE,
+  );
+  h.count(zero, '1');
+  h.apply();
+  h.buttons[1].onPress();
+  await settle();
+  expect(h.requests.map((r) => [r.id, r.body.quantity])).toEqual([['zero', 1]]);
+});
+
+it('a previously entered assembly draft does not inflate the summary or leak into the commit', async () => {
+  const kit = { ...product('kit'), assemblyId: 'assembly' };
+  const h = harness([kit, a]);
+  h.count(a, '1');
+  h.drafts.A.kit = { raw: '7', expectedStock: 2 };
+  h.apply();
+  h.buttons[1].onPress();
+  await settle();
+  expect(h.requests.map((r) => r.id)).toEqual(['a']);
+});
+
+it.each(['selectWriteoffProduct', 'selectCorrectionProduct', 'addInventoryProduct'])(
+  '%s refuses a physical assembly before opening an editable scalar form',
+  (name) => {
+    const text = fs.readFileSync(path.join(__dirname, '../../ProductsScreen.tsx'), 'utf8');
+    const alert = jest.fn();
+    const handler = callback<(p: Product) => void>(
+      name,
+      {
+        canCountProduct,
+        PHYSICAL_KIT_STOCK_NOTICE,
+        Alert: { alert },
+      },
+      text,
+    );
+    expect(() => handler({ ...a, assemblyId: 'assembly' })).not.toThrow();
+    expect(alert).toHaveBeenCalledWith('Собранный комплект', PHYSICAL_KIT_STOCK_NOTICE);
+  },
+);
+
+it('canonical scalar picker filters the full catalogue and exact matches without changing POS defaults', () => {
+  const text = fs.readFileSync(path.join(__dirname, '../../../components/ProductPickerModal.tsx'), 'utf8');
+  const kit = { ...product('kit'), assemblyId: 'assembly' };
+  const zero = product('zero', 0);
+  const scope = {
+    useMemo: (fn: () => Product[]) => fn(),
+    allProducts: [kit, zero],
+    exactMatches: undefined,
+    barcodeMatches: undefined,
+    productFilter: canCountProduct,
+    activeCategory: null,
+    productSearch: '',
+  };
+  expect(callback<Product[]>('visibleProducts', scope, text).map((p) => p.id)).toEqual(['zero']);
+  expect(callback<Product[]>('visibleProducts', { ...scope, exactMatches: [kit] }, text)).toEqual([]);
+  expect(callback<Product[]>('visibleProducts', { ...scope, productFilter: undefined }, text).map((p) => p.id)).toEqual(
+    ['kit', 'zero'],
+  );
+  expect(
+    callback<boolean>(
+      'queryResolvedEmpty',
+      { visible: true, allProducts: [kit], productFilter: canCountProduct },
+      text,
+    ),
+  ).toBe(true);
+});
+
+it('ordinary zero-stock correction remains available and physical kits do not keep a counted folder incomplete', () => {
+  const text = fs.readFileSync(path.join(__dirname, '../../ProductsScreen.tsx'), 'utf8');
+  const scope: Record<string, unknown> = {
+    canCountProduct,
+    PHYSICAL_KIT_STOCK_NOTICE,
+    Alert: { alert: jest.fn() },
+    formatQty: String,
+  };
+  for (const name of [
+    'setCorrectionProductId',
+    'setCorrectionProductName',
+    'setCorrectionProductStock',
+    'setCorrectionProductUnit',
+    'setCorrectionProductCostPrice',
+    'setCorrectionNewStock',
+    'setCorrectionReason',
+    'setShowCorrectionPicker',
+    'setShowCorrectionModal',
+  ])
+    scope[name] = jest.fn();
+  callback<(p: Product) => void>('selectCorrectionProduct', scope, text)(product('zero', 0));
+  expect(scope.setCorrectionProductStock).toHaveBeenCalledWith(0);
+  expect(scope.setShowCorrectionModal).toHaveBeenCalledWith(true);
+  const zero = product('zero', 0, 'Папка');
+  const kit = { ...product('kit', 2, 'Папка'), assemblyId: 'assembly' };
+  const fullyChecked = callback<(folder: string) => boolean>(
+    'isFolderFullyChecked24h',
+    {
+      scalarProducts: [kit, zero].filter(canCountProduct),
+      invActivePath: [],
+      lastInventoryByProduct: new Map([['zero', new Date()]]),
+    },
+    text,
+  );
+  expect(fullyChecked('Папка')).toBe(true);
+});
+
+it('canonical scalar picker rejects a direct kit barcode while keeping an ordinary zero-stock match selectable', async () => {
+  const text = fs.readFileSync(path.join(__dirname, '../../../components/ProductPickerModal.tsx'), 'utf8');
+  const kit = { ...product('kit'), assemblyId: 'assembly' };
+  const zero = product('zero', 0);
+  const lookupBarcode = jest
+    .fn()
+    .mockResolvedValueOnce({ data: { status: 'found', matches: [kit], total: 1, page: 1, limit: 100 } })
+    .mockResolvedValueOnce({ data: { status: 'found', matches: [zero], total: 1, page: 1, limit: 100 } });
+  const scope = {
+    scanBusy: { current: false },
+    scanCooldownRef: { current: 0 },
+    SCAN_COOLDOWN_MS: 500,
+    scanEpoch: { current: 0 },
+    visibleRef: { current: true },
+    captureDataSession: () => ({ isCurrent: () => true }),
+    loadProductBarcodeMatches,
+    productsApi: { lookupBarcode },
+    lookupWarehouseId: 'A',
+    productFilter: canCountProduct,
+    notice: PHYSICAL_KIT_STOCK_NOTICE,
+    setScanFeedback: jest.fn(),
+    onSelectProduct: jest.fn(),
+    haptic: jest.fn(),
+    scanAddCountRef: { current: 0 },
+  };
+  const scan = callback<(code: { data: string }) => Promise<void>>('handleBarCodeScanned', scope, text);
+  await scan({ data: 'barcode-kit' });
+  expect(scope.onSelectProduct).not.toHaveBeenCalled();
+  expect(scope.setScanFeedback).toHaveBeenCalledWith(PHYSICAL_KIT_STOCK_NOTICE);
+  scope.scanCooldownRef.current = 0;
+  await scan({ data: 'barcode-zero' });
+  expect(scope.onSelectProduct).toHaveBeenCalledWith(zero);
+  expect(lookupBarcode.mock.calls.every(([params]) => params.warehouseId === 'A')).toBe(true);
 });

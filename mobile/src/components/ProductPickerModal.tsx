@@ -86,6 +86,8 @@ export interface WarehouseSwitcherInline {
 
 interface ProductPickerModalProps {
   exactMatches?: Product[];
+  /** Optional operation restriction; the shared POS catalogue remains complete. */
+  productFilter?: (product: Product) => boolean;
   notice?: string;
   /** Explicit receiving/inventory restriction; ordinary POS lookup covers all point warehouses. */
   lookupWarehouseId?: string;
@@ -223,6 +225,7 @@ const PickerProductRow = React.memo(function PickerProductRow({
 
 export default function ProductPickerModal({
   exactMatches,
+  productFilter,
   notice,
   lookupWarehouseId,
   visible,
@@ -403,6 +406,10 @@ export default function ProductPickerModal({
         if (!lease.isCurrent() || epoch !== scanEpoch.current || !visibleRef.current) return;
         if (result.status === 'found') {
           const match = result.matches[0];
+          if (productFilter && !productFilter(match)) {
+            setScanFeedback(notice ?? 'Этот товар недоступен для выбранной операции.');
+            return;
+          }
           haptic('success');
           onSelectProduct(match);
           scanAddCountRef.current++;
@@ -426,7 +433,7 @@ export default function ProductPickerModal({
         scanBusy.current = false;
       }
     },
-    [onSelectProduct, lookupWarehouseId],
+    [onSelectProduct, lookupWarehouseId, productFilter, notice],
   );
 
   // Switching warehouse changes the product set; a category chip from the
@@ -440,7 +447,7 @@ export default function ProductPickerModal({
   // Top-level folder chips — one per first-segment category. Tapping a chip
   // filters the flat list to that folder's whole subtree; «Все» clears it.
   const categoryChips = useMemo(() => {
-    const products = Array.isArray(allProducts) ? allProducts : [];
+    const products = (Array.isArray(allProducts) ? allProducts : []).filter((p) => !productFilter || productFilter(p));
     const set = new Set<string>();
     for (const p of products) {
       const cat = productFolderPath(p.category);
@@ -449,12 +456,13 @@ export default function ProductPickerModal({
       if (top) set.add(top);
     }
     return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [allProducts]);
+  }, [allProducts, productFilter]);
 
   // Single flat product list, filtered by the active chip AND the search text
   // together. No folder drill-in/out — the whole warehouse is one list.
   const visibleProducts = useMemo(() => {
     let list = exactMatches ?? barcodeMatches ?? (Array.isArray(allProducts) ? allProducts : []);
+    if (productFilter) list = list.filter(productFilter);
     if (activeCategory) {
       list = list.filter((p) => {
         const cat = productFolderPath(p.category);
@@ -472,7 +480,7 @@ export default function ProductPickerModal({
       );
     }
     return list;
-  }, [allProducts, activeCategory, productSearch, barcodeMatches, exactMatches]);
+  }, [allProducts, activeCategory, productSearch, barcodeMatches, exactMatches, productFilter]);
 
   // Running cart — derived from the parent's truth via `getCartQty`. We only
   // have an ADD callback (`onSelectProduct`) + a qty READER (`getCartQty`),
@@ -480,7 +488,7 @@ export default function ProductPickerModal({
   // render the cart summary (count + total) and the review rows. One linear
   // pass; recomputed when the product list or the cart changes.
   const cart = useMemo(() => {
-    const products = Array.isArray(allProducts) ? allProducts : [];
+    const products = (Array.isArray(allProducts) ? allProducts : []).filter((p) => !productFilter || productFilter(p));
     const items: Array<{ product: Product; qty: number }> = [];
     let totalQty = 0;
     let totalSum = 0;
@@ -496,7 +504,7 @@ export default function ProductPickerModal({
       items.sort((a, b) => a.product.name.localeCompare(b.product.name));
     }
     return { items, totalQty, totalSum };
-  }, [allProducts, getCartQty]);
+  }, [allProducts, getCartQty, productFilter]);
 
   // Card slide-up entrance. We drive it ourselves (instead of RNModal's
   // built-in `animationType="slide"`) so the ModalBlurBackdrop stays a
@@ -572,6 +580,7 @@ export default function ProductPickerModal({
   // `ROW_TAP_DEBOUNCE_MS` (or the cart «+» button) still works.
   const handleSelect = useCallback(
     (product: Product) => {
+      if (productFilter && !productFilter(product)) return;
       const now = Date.now();
       const last = lastTapRef.current.get(product.id) ?? 0;
       if (now - last < ROW_TAP_DEBOUNCE_MS) {
@@ -584,17 +593,18 @@ export default function ProductPickerModal({
       haptic('tap');
       onSelectProduct(product);
     },
-    [onSelectProduct],
+    [onSelectProduct, productFilter],
   );
 
   // Explicit «+» in the cart review — an intentional increment, so it is NOT
   // subject to the accidental-double-tap guard (a master may bump qty quickly).
   const handleCartAdd = useCallback(
     (product: Product) => {
+      if (productFilter && !productFilter(product)) return;
       haptic('tap');
       onSelectProduct(product);
     },
-    [onSelectProduct],
+    [onSelectProduct, productFilter],
   );
 
   const handleDone = useCallback(() => {
@@ -656,7 +666,8 @@ export default function ProductPickerModal({
   // refetch failure is silent (stale-while-revalidate contract).
   const showInitialSkeleton = visible && !exactMatches && !barcodeMatches && allProducts === undefined && isLoading;
   const showErrorState = visible && !exactMatches && !barcodeMatches && allProducts === undefined && isError;
-  const queryResolvedEmpty = visible && Array.isArray(allProducts) && allProducts.length === 0;
+  const queryResolvedEmpty =
+    visible && Array.isArray(allProducts) && !allProducts.some((p) => !productFilter || productFilter(p));
   const hasActiveFilter = !!productSearch || !!activeCategory;
 
   return (
@@ -889,7 +900,7 @@ export default function ProductPickerModal({
                     <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
                   }
                   ListEmptyComponent={
-                    queryResolvedEmpty ? (
+                    queryResolvedEmpty || ((exactMatches || barcodeMatches) && visibleProducts.length === 0) ? (
                       <View style={styles.empty}>
                         <Ionicons name="cube-outline" size={40} color={palette.text.tertiary} />
                         <Text style={[styles.emptyText, { color: palette.text.tertiary }]}>{'Нет товаров'}</Text>

@@ -38,6 +38,8 @@ import { productFolderParts } from '../../../shared/utils/productFolders';
 import type { Product, Warehouse } from '../../../shared/types';
 import { TabBarFlatList } from '../components/TabBarScrollable';
 import {
+  canCountProduct,
+  PHYSICAL_KIT_STOCK_NOTICE,
   inventoryError,
   inventoryRows,
   inventorySummary,
@@ -164,7 +166,13 @@ function InventoryWorkspace() {
   const setCount = useCallback(
     (product: Product, raw: string) => {
       const scope = warehouseRef.current;
-      if (!scope || busyRef.current || !canWriteRef.current || (product.warehouseId && product.warehouseId !== scope))
+      if (
+        !scope ||
+        busyRef.current ||
+        !canWriteRef.current ||
+        !canCountProduct(product) ||
+        (product.warehouseId && product.warehouseId !== scope)
+      )
         return;
       setNotice(null);
       setScanFeedback(null);
@@ -225,6 +233,10 @@ function InventoryWorkspace() {
         (product.warehouseId && product.warehouseId !== scope.warehouseId)
       )
         return;
+      if (!canCountProduct(product)) {
+        Alert.alert('Собранный комплект', PHYSICAL_KIT_STOCK_NOTICE);
+        return;
+      }
       const old = draftsRef.current[scope.warehouseId]?.[product.id];
       if (old?.pending || old?.needsReview || (old?.raw && parseInventoryQuantity(old.raw) === null)) {
         Alert.alert('Проверьте факт', 'Сначала завершите проверку введённого количества этого товара.');
@@ -423,7 +435,8 @@ function InventoryWorkspace() {
     const entries: Entry[] = [];
     for (const [id, draft] of Object.entries(current)) {
       const actual = parseInventoryQuantity(draft.raw);
-      if (actual === null) continue;
+      const product = allProducts.find((p) => p.id === id);
+      if (actual === null || (product && !canCountProduct(product))) continue;
       entries.push({
         id,
         body:
@@ -805,6 +818,11 @@ function InventoryWorkspace() {
               Посчитано {summary.counted} · Изменено {summary.changed}
             </Text>
           </View>
+          {allProducts.some((product) => !canCountProduct(product)) ? (
+            <Text variant="caption" color={palette.text.secondary} style={styles.notice}>
+              Собранные комплекты исключены из пересчёта. {PHYSICAL_KIT_STOCK_NOTICE}
+            </Text>
+          ) : null}
           {scanFeedback ? (
             <Text variant="caption" color={palette.accent.primaryText} numberOfLines={2} style={styles.notice}>
               {scanFeedback}

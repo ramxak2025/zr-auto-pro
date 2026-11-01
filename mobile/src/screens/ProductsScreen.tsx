@@ -1,4 +1,5 @@
 import ProductKitRecipes from '../components/ProductKitRecipes';
+import { canCountProduct, PHYSICAL_KIT_STOCK_NOTICE } from './inventory/model';
 import { loadProductBarcodeMatches } from '../../../shared/utils/productBarcodeLookup';
 import ProductLabelPrint from '../components/products/ProductLabelPrint';
 import { loadProductCatalog } from '../../../shared/api/productCatalog';
@@ -1109,10 +1110,12 @@ function ProductsScreenContents() {
   // и есть «товар на складе иногда не показывается, хотя он там есть».
   const listTruncated = typeof data?.total === 'number' && data.total > allProducts.length;
 
+  const scalarProducts = useMemo(() => allProducts.filter(canCountProduct), [allProducts]);
+
   // Compute folder annotations: last inventory date per folder
   const inventoryAnnotations = useMemo(() => {
     const annotations = new Map<string, FolderAnnotation>();
-    if (!inventoryMovements || !allProducts.length) return annotations;
+    if (!inventoryMovements || !scalarProducts.length) return annotations;
 
     const inventoryMoves = inventoryMovements.filter((m) => m.type === 'inventory');
     const lastInvByProduct = new Map<string, Date>();
@@ -1123,7 +1126,7 @@ function ProductsScreenContents() {
     }
 
     const folderProducts = new Map<string, string[]>();
-    for (const p of allProducts) {
+    for (const p of scalarProducts) {
       const cat = p.category || '';
       const catParts = cat ? cat.split('/') : [];
       if (catParts.length > 0) {
@@ -1149,7 +1152,7 @@ function ProductsScreenContents() {
     }
 
     return annotations;
-  }, [inventoryMovements, allProducts]);
+  }, [inventoryMovements, scalarProducts]);
 
   // Per-product last inventory date map
   const lastInventoryByProduct = useMemo(() => {
@@ -1168,7 +1171,7 @@ function ProductsScreenContents() {
   const { invSubfolders, invCurrentProducts } = useMemo(() => {
     if (inventorySearch) {
       const filtered = smartSearch(
-        allProducts,
+        scalarProducts,
         inventorySearch,
         (p) => [p.name, p.article, p.brand, p.barcode, p.internalBarcode, p.category, p.storageCellCode],
         { typos: true },
@@ -1179,7 +1182,7 @@ function ProductsScreenContents() {
     const subs = new Map<string, { count: number }>();
     const prods: Product[] = [];
 
-    for (const p of allProducts) {
+    for (const p of scalarProducts) {
       const cat = p.category || '';
       const catParts = cat ? cat.split('/') : [];
 
@@ -1211,13 +1214,13 @@ function ProductsScreenContents() {
     }
 
     if (invActivePath.length === 0) {
-      for (const p of allProducts) {
+      for (const p of scalarProducts) {
         if (!p.category && !prods.includes(p)) prods.push(p);
       }
     }
 
     return { invSubfolders: subs, invCurrentProducts: prods };
-  }, [allProducts, invActivePath, inventorySearch, extraFolders]);
+  }, [scalarProducts, invActivePath, inventorySearch, extraFolders]);
 
   const invSortedFolders = Array.from(invSubfolders.entries()).sort((a, b) => a[0].localeCompare(b[0]));
 
@@ -1226,7 +1229,7 @@ function ProductsScreenContents() {
     const now = Date.now();
     const h24 = 24 * 60 * 60 * 1000;
     const prefix = [...invActivePath, folderName].join('/');
-    const folderProducts = allProducts.filter((p) => {
+    const folderProducts = scalarProducts.filter((p) => {
       const cat = p.category || '';
       return cat === prefix || cat.startsWith(prefix + '/');
     });
@@ -1272,7 +1275,7 @@ function ProductsScreenContents() {
     let excessAmount = 0;
     for (const item of checked) {
       const diff = (parseQtyInput(item.actualStock) ?? 0) - item.currentStock;
-      const product = allProducts.find((p) => p.id === item.productId);
+      const product = scalarProducts.find((p) => p.id === item.productId);
       const cost = product?.costPrice || 0;
       if (diff < 0) {
         shortageAmount += Math.abs(diff) * cost;
@@ -1281,7 +1284,7 @@ function ProductsScreenContents() {
       }
     }
     return { checkedCount: total.length, changedCount: checked.length, shortageAmount, excessAmount };
-  }, [inventoryItems, allProducts]);
+  }, [inventoryItems, scalarProducts]);
 
   // Stats
   const warehouseStats = useMemo(() => {
@@ -1811,7 +1814,7 @@ function ProductsScreenContents() {
     setInvActivePath([]);
     // Pre-fill all products with current stock
     setInventoryItems(
-      allProducts.map((p) => ({
+      scalarProducts.map((p) => ({
         productId: p.id,
         name: p.name,
         currentStock: p.stock,
@@ -1892,7 +1895,9 @@ function ProductsScreenContents() {
 
   const handleInventorySubmit = async () => {
     if (inventoryCommitProgress) return;
-    const changed = inventoryItems.filter((item) => String(item.currentStock) !== item.actualStock);
+    const changed = inventoryItems.filter(
+      (item) => scalarProducts.some((p) => p.id === item.productId) && String(item.currentStock) !== item.actualStock,
+    );
     if (changed.length === 0) {
       Alert.alert('Инвентаризация', 'Нет изменений в остатках');
       return;
@@ -1928,6 +1933,10 @@ function ProductsScreenContents() {
   };
 
   const selectWriteoffProduct = (p: Product) => {
+    if (!canCountProduct(p)) {
+      Alert.alert('Собранный комплект', PHYSICAL_KIT_STOCK_NOTICE);
+      return;
+    }
     setWriteoffProductId(p.id);
     setWriteoffProductName(p.name);
     setWriteoffProductStock(p.stock);
@@ -1941,6 +1950,10 @@ function ProductsScreenContents() {
   };
 
   const handleWriteoffSubmit = async () => {
+    if (allProducts.some((p) => p.id === writeoffProductId && !canCountProduct(p))) {
+      Alert.alert('Собранный комплект', PHYSICAL_KIT_STOCK_NOTICE);
+      return;
+    }
     // 120: дробное списание («0,5 м») — запятая → точка, максимум 3 знака.
     const qty = parseQtyInput(writeoffQty) ?? 0;
     if (!qty || qty <= 0) {
@@ -2002,6 +2015,10 @@ function ProductsScreenContents() {
   };
 
   const addInventoryProduct = (p: Product) => {
+    if (!canCountProduct(p)) {
+      Alert.alert('Собранный комплект', PHYSICAL_KIT_STOCK_NOTICE);
+      return;
+    }
     // Only add if not already in the list
     if (!inventoryItems.find((item) => item.productId === p.id)) {
       setInventoryItems((prev) => [
@@ -2202,6 +2219,10 @@ function ProductsScreenContents() {
   };
 
   const selectCorrectionProduct = (p: Product) => {
+    if (!canCountProduct(p)) {
+      Alert.alert('Собранный комплект', PHYSICAL_KIT_STOCK_NOTICE);
+      return;
+    }
     setCorrectionProductId(p.id);
     setCorrectionProductName(p.name);
     setCorrectionProductStock(p.stock);
@@ -2214,6 +2235,10 @@ function ProductsScreenContents() {
   };
 
   const handleCorrectionSubmit = async () => {
+    if (allProducts.some((p) => p.id === correctionProductId && !canCountProduct(p))) {
+      Alert.alert('Собранный комплект', PHYSICAL_KIT_STOCK_NOTICE);
+      return;
+    }
     // 120: дробный остаток («12,5») — запятая → точка, максимум 3 знака.
     const newQty = parseQtyInput(correctionNewStock) ?? NaN;
     if (isNaN(newQty) || newQty < 0) {
@@ -3666,6 +3691,8 @@ function ProductsScreenContents() {
       {/* Inventory Product Picker */}
       <ProductPickerModal
         visible={showInventoryPicker}
+        productFilter={canCountProduct}
+        notice={PHYSICAL_KIT_STOCK_NOTICE}
         warehouseId={activeWarehouseId}
         lookupWarehouseId={activeWarehouseId || undefined}
         onClose={handleInventoryPickerClose}
@@ -3678,6 +3705,8 @@ function ProductsScreenContents() {
       {/* Writeoff Product Picker */}
       <ProductPickerModal
         visible={showWriteoffPicker}
+        productFilter={canCountProduct}
+        notice={PHYSICAL_KIT_STOCK_NOTICE}
         warehouseId={activeWarehouseId}
         lookupWarehouseId={activeWarehouseId || undefined}
         onClose={() => setShowWriteoffPicker(false)}
@@ -3843,6 +3872,8 @@ function ProductsScreenContents() {
       {/* Correction Product Picker */}
       <ProductPickerModal
         visible={showCorrectionPicker}
+        productFilter={canCountProduct}
+        notice={PHYSICAL_KIT_STOCK_NOTICE}
         warehouseId={activeWarehouseId}
         lookupWarehouseId={activeWarehouseId || undefined}
         onClose={() => setShowCorrectionPicker(false)}

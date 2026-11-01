@@ -1172,3 +1172,121 @@ test('actual saved-composition edit creates version2 through CAS without changin
     Renderer.act(() => tree.unmount());
   }
 });
+
+test('scalar stock forms exclude physical assemblies and keep ordinary zero-stock inventory editable across filters', async () => {
+  const kit = { id: 'kit', name: 'Комплект', assemblyId: 'assembly', isBundle: false, stock: 2, costPrice: 20 };
+  const zero = { id: 'zero', name: 'Нулевой товар', stock: 0, costPrice: 10 };
+  const ordinary = { id: 'ordinary', name: 'Масло', stock: 5, costPrice: 10 };
+  const calls = [];
+  const mocks = {
+    '../VirtualList': {
+      __esModule: true,
+      default: ({ items, renderItem }) =>
+        React.createElement(
+          'div',
+          null,
+          items.map((p) => React.createElement(React.Fragment, { key: p.id }, renderItem(p))),
+        ),
+    },
+    '../SearchInput': {
+      __esModule: true,
+      default: ({ onChange, ...props }) =>
+        React.createElement('input', { ...props, 'aria-label': 'Поиск', onChange: (e) => onChange(e.target.value) }),
+    },
+    '../../ui/Button': { Button: 'button' },
+    '../../ui/Input': { Input: 'input' },
+    '../../ui/Field': { Field: 'field' },
+    '../../ui/Select': { Select: 'select' },
+    '../../ui/Money': { Money: 'money' },
+    '../../ui/Badge': { Badge: 'badge' },
+  };
+  const { GlobalInventoryForm, GlobalWriteoffForm } = load(
+    'frontend/src/components/warehouse/GlobalStockForms.tsx',
+    mocks,
+  );
+  let tree;
+  Renderer.act(() => {
+    tree = Renderer.create(
+      React.createElement(GlobalInventoryForm, {
+        products: [kit, zero, ordinary],
+        categories: [],
+        activePath: [],
+        onClose() {},
+        onSubmit: (items) => calls.push(items),
+      }),
+    );
+  });
+  try {
+    assert.match(treeText(tree.root), /Собранные комплекты исключены/);
+    assert.equal(
+      tree.root.findAllByType('input').some((node) => node.props['aria-label'] === 'Фактический остаток — Комплект'),
+      false,
+    );
+    await uiValue(tree, 'Фактический остаток — Нулевой товар', '1');
+    await uiValue(tree, 'Поиск', 'Комплект');
+    assert.match(treeText(tree.root), /Товары не найдены/);
+    assert.match(treeText(tree.root), /Посчитано: 0 \/ 0 товаров/);
+    await uiValue(tree, 'Поиск', 'Нулевой');
+    assert.match(treeText(tree.root), /Посчитано: 1 \/ 1 товар/);
+    await uiClick(tree, 'Провести инвентаризацию');
+    assert.deepEqual(calls, [[{ productId: 'zero', actual: 1, reason: 'Инвентаризация' }]]);
+  } finally {
+    Renderer.act(() => tree.unmount());
+  }
+  Renderer.act(() => {
+    tree = Renderer.create(
+      React.createElement(GlobalWriteoffForm, { products: [kit, ordinary], onSubmit: (items) => calls.push(items) }),
+    );
+  });
+  try {
+    assert.equal(
+      tree.root.findAllByType('input').some((node) => node.props['aria-label'] === 'Количество к списанию — Комплект'),
+      false,
+    );
+    await uiValue(tree, 'Количество к списанию — Масло', '1');
+    await uiClick(tree, 'Списать');
+    assert.deepEqual(calls[1], [{ productId: 'ordinary', quantity: 1, reason: 'Списание' }]);
+  } finally {
+    Renderer.act(() => tree.unmount());
+  }
+});
+
+test('single physical kit inventory and writeoff show a readonly explanation without mutation controls', () => {
+  const { InventoryModal, WriteoffModal } = load('frontend/src/components/warehouse/StockOperationModals.tsx', {
+    '../Modal': {
+      __esModule: true,
+      default: ({ children, footer }) => React.createElement('div', null, children, footer),
+    },
+    '../../ui/Button': { Button: 'button' },
+    '../../ui/Field': { Field: 'field' },
+    '../../ui/Input': { Input: 'input' },
+    '../../ui/Textarea': { Textarea: 'textarea' },
+    '../../ui/RadioGroup': { RadioGroup: 'radio' },
+    '../../ui/SegmentedControl': { SegmentedControl: 'segmented' },
+    '../../ui/Money': { Money: 'money' },
+  });
+  for (const Component of [InventoryModal, WriteoffModal]) {
+    let tree;
+    Renderer.act(() => {
+      tree = Renderer.create(
+        React.createElement(Component, {
+          isOpen: true,
+          onClose() {},
+          onSubmit() {
+            assert.fail('physical kit scalar mutation');
+          },
+          product: { id: 'kit', assemblyId: 'assembly', name: 'Комплект', stock: 2, costPrice: 20 },
+          isLoading: false,
+        }),
+      );
+    });
+    try {
+      assert.match(treeText(tree.root), /Остаток собранного комплекта меняется через действия комплекта/);
+      assert.equal(tree.root.findAllByType('input').length, 0);
+      assert.equal(tree.root.findAllByType('form').length, 0);
+      assert.equal(treeText(tree.root.findByType('button')), 'Закрыть');
+    } finally {
+      Renderer.act(() => tree.unmount());
+    }
+  }
+});
