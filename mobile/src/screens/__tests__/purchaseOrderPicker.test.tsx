@@ -23,6 +23,8 @@ const mockCreate = jest.fn(async (payload: unknown) => ({ data: { id: 'saved', p
 const mockUpdate = jest.fn(async (_id: string, payload: unknown) => ({ data: { id: 'saved', payload } }));
 const mockNavigate = jest.fn();
 const mockBack = jest.fn();
+const mockPop = jest.fn();
+let mockPickerPath: string[] = [];
 const mockInvalidate = jest.fn();
 const mockMutate = jest.fn();
 const mockOrder = {
@@ -129,8 +131,8 @@ jest.mock('react-native', () => ({
 }));
 jest.mock('@react-navigation/native', () => ({
   useIsFocused: () => mockPickerFocused,
-  useRoute: () => (mockStore !== mockStores.picker ? mockRoute : { params: {} }),
-  useNavigation: () => ({ navigate: mockNavigate, goBack: mockBack, pop: jest.fn(), push: jest.fn() }),
+  useRoute: () => (mockStore !== mockStores.picker ? mockRoute : { params: { folderPath: mockPickerPath } }),
+  useNavigation: () => ({ navigate: mockNavigate, goBack: mockBack, pop: mockPop, push: jest.fn() }),
 }));
 jest.mock('@tanstack/react-query', () => ({
   useQueryClient: () => ({ invalidateQueries: mockInvalidate }),
@@ -268,6 +270,8 @@ beforeEach(() => {
   mockRoute = { params: { supplierId: 'supplier' } };
   mockPickerFocused = true;
   mockCatalogueAvailable = true;
+  mockPickerPath = [];
+  mockPop.mockClear();
   mockContextError = false;
   mockMutate.mockClear();
   mockOwned = true;
@@ -412,6 +416,47 @@ test('native catalog search finds all words across fields, compact article and k
   } finally {
     Object.assign(mockProduct, original);
     delete mockProduct.article;
+    jest.useRealTimers();
+  }
+});
+
+test('single invoice selection closes the focused picker and every folder level; stale ineligible rows cannot add', () => {
+  jest.useFakeTimers();
+  const add = jest.fn();
+  let allowed = true;
+  const bridge = {
+    current: {
+      productLines: [],
+      addProduct: add,
+      decrementProduct: jest.fn(),
+      showCostPrice: false,
+      warrantyNames: new Set<string>(),
+      warehouseId: null,
+      setWarehouseId: jest.fn(),
+      warehouses: [],
+      closeOnSelect: true,
+      filterProduct: () => allowed,
+    } as ProductPickerBridge,
+  };
+  try {
+    claimProductPickerSession(bridge);
+    mockPickerPath = ['Масла', 'Фильтры'];
+    const search = nodes(render('picker')).find(
+      (node) => node.type === 'TextInput' && node.props.returnKeyType === 'search',
+    )!;
+    (search.props.onChangeText as (value: string) => void)('Шланг');
+    jest.advanceTimersByTime(250);
+    const selected = row(render('picker'));
+    allowed = false;
+    selected.props.onPress(mockProduct);
+    expect(add).not.toHaveBeenCalled();
+    expect(mockPop).not.toHaveBeenCalled();
+    allowed = true;
+    selected.props.onPress(mockProduct);
+    expect(add).toHaveBeenCalledWith(mockProduct);
+    expect(mockPop).toHaveBeenCalledWith(3);
+  } finally {
+    releaseProductPickerSession(bridge);
     jest.useRealTimers();
   }
 });

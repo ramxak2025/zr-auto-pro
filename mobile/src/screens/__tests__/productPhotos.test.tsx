@@ -35,6 +35,7 @@ const mockProduct = {
   id: 'product-A',
   name: 'Фильтр',
   photo: '/uploads/old.jpg',
+  assemblyId: null,
   photos: ['/uploads/old.jpg'],
   category: 'Масла',
   costPrice: 100,
@@ -279,6 +280,7 @@ jest.doMock('../../components/TabBarScrollable', () => ({
 jest.doMock('../TrashScreen', () => ({ __esModule: true, default: 'TrashScreen' }));
 jest.doMock('../../components/ProductPhotoGallery', () => ({ __esModule: true, default: 'ProductPhotoGallery' }));
 jest.doMock('../../components/ProductShareButton', () => ({ __esModule: true, default: 'ProductShareButton' }));
+jest.doMock('../../components/ProductKitPanel', () => ({ __esModule: true, default: 'ProductKitPanel' }));
 
 jest.doMock('../../components/ProductMovementHistoryModal', () => ({
   __esModule: true,

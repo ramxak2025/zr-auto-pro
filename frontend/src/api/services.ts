@@ -3,6 +3,8 @@ import api from './axios';
 import { assertPurchaseOrderId } from '../utils/purchaseOrderIdentity';
 import {
   createAuthApi,
+  createSupplierInvoicesApi,
+  createProductKitsApi,
   createVinApi,
   createReportBuilderApi,
   createStorageCellsApi,
@@ -251,3 +253,5 @@ export const uploadsApi = {
 export const starterCatalogsApi = createStarterCatalogsApi(api);
 
 export const dashboardApi = createDashboardApi(api);
+export const supplierInvoicesApi = createSupplierInvoicesApi(api);
+export const productKitsApi = createProductKitsApi(api);

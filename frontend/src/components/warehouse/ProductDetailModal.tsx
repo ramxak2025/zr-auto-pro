@@ -28,6 +28,8 @@ import { formatDayTime } from './format';
 import StorageCellBadge from './StorageCellBadge';
 import ProductGallery from './ProductGallery';
 import ProductShareButton from './ProductShareButton';
+import ProductKitPanel from './ProductKitPanel';
+import { formatKitUnitCost } from '../../../../shared/utils/productKitDraft';
 import { productPhotoUrls } from '../../../../shared/utils/productPhotos';
 import { formatDateShort, formatDayKey } from '../../../../shared/utils/formatters';
 import { useTenantTimezone } from '../../hooks/useTenantTimezone';
@@ -50,6 +52,8 @@ const MOVEMENT_LABELS: Record<string, { label: string; tone: Tone }> = {
   sale_annulment: { label: 'Отмена продажи', tone: 'warn' },
   sale_restore: { label: 'Восстановление продажи', tone: 'accent' },
   legacy_baseline: { label: 'Из истории чека', tone: 'neutral' },
+  kit_assembly: { label: 'Сборка комплекта', tone: 'accent' },
+  kit_disassembly: { label: 'Разборка комплекта', tone: 'info' },
 };
 
 interface ProductDetailModalProps {
@@ -65,6 +69,7 @@ interface ProductDetailModalProps {
   onChangeCell?: () => void;
   /** Owner-class or warehouse_manage. Gates cost-price + all manage actions. */
   canManage?: boolean;
+  onProductChanged?: (product: Product) => void;
 }
 
 function ListSkeleton() {
@@ -92,10 +97,12 @@ export default function ProductDetailModal({
   canTransfer,
   onChangeCell,
   canManage,
+  onProductChanged,
 }: ProductDetailModalProps) {
   // Non-managers can only ever see the Info tab (cost + price history leak
   // costPrice, so those tabs are hidden entirely for them).
   const [tab, setTab] = useState<DetailTab>('info');
+  const [kitOverlay, setKitOverlay] = useState(false);
   const isLow = product.stock <= product.minStock;
   const uLabel = unitLabel(product.unit);
   const navigate = useNavigate();
@@ -156,7 +163,15 @@ export default function ProductDetailModal({
   );
 
   return (
-    <Modal isOpen onClose={onClose} title={product.name} description={product.category || 'Без папки'} size="lg">
+    <Modal
+      isOpen
+      onClose={() => {
+        if (!kitOverlay) onClose();
+      }}
+      title={product.name}
+      description={product.category || 'Без папки'}
+      size="lg"
+    >
       <div className="space-y-4">
         <Tabs<DetailTab>
           variant="pills"
@@ -175,6 +190,15 @@ export default function ProductDetailModal({
         <TabPanel idPrefix="product-detail" tabKey="info" active={tab === 'info'} className="space-y-4">
           <ProductGallery photos={productPhotoUrls(product)} name={product.name} />
           {canManage && <ProductShareButton id={product.id} name={product.name} />}
+          {product.assemblyId && (
+            <ProductKitPanel
+              key={product.id}
+              product={product}
+              canManage={!!canManage}
+              onChanged={onProductChanged}
+              onOverlayChange={setKitOverlay}
+            />
+          )}
           <section className="space-y-2" aria-label="Последние движения">
             <p className="text-sm font-medium text-ink-2">Последние движения</p>
             {movementsQuery.isPending ? (
@@ -222,7 +246,11 @@ export default function ProductDetailModal({
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-1.5">
                 {product.category && <Badge outline>{product.category}</Badge>}
-                {product.isBundle && <Badge tone="accent">Комплект</Badge>}
+                {product.isBundle && (
+                  <Badge tone="accent">
+                    {product.assemblyId ? 'Собранный комплект' : 'Набор позиций · без сборки'}
+                  </Badge>
+                )}
                 {product.barcode && <Badge tone="neutral">Штрихкод {product.barcode}</Badge>}
                 {product.storageCellCode && (
                   <StorageCellBadge code={product.storageCellCode} name={product.storageCellName} size="md" withLabel />
@@ -240,7 +268,7 @@ export default function ProductDetailModal({
             </div>
           </div>
 
-          {product.isBundle && product.bundleItems && product.bundleItems.length > 0 && (
+          {!product.assemblyId && product.isBundle && product.bundleItems && product.bundleItems.length > 0 && (
             <div className="rounded-xl border border-accent/30 bg-accent-soft/50 p-3">
               <p className="mb-2 text-sm font-medium text-ink">Состав комплекта</p>
               <ul className="space-y-1.5 text-sm">
@@ -263,7 +291,11 @@ export default function ProductDetailModal({
             {canManage &&
               infoTile(
                 product.costPriceIsPlaceholder ? 'Закупочная цена · заготовка' : 'Закупочная цена',
-                <Money value={product.costPrice} />,
+                product.assemblyId ? (
+                  formatKitUnitCost(product.assemblyExactCost ?? product.costPrice)
+                ) : (
+                  <Money value={product.costPrice} />
+                ),
               )}
             {infoTile(
               product.sellPriceIsPlaceholder ? 'Продажная цена · заготовка' : 'Продажная цена',
@@ -282,17 +314,21 @@ export default function ProductDetailModal({
                 <Button variant="secondary" icon={Pencil} onClick={onEdit}>
                   Редактировать
                 </Button>
-                {canTransfer && onTransfer && (
+                {!product.assemblyId && canTransfer && onTransfer && (
                   <Button variant="secondary" icon={ArrowLeftRight} onClick={onTransfer}>
                     В брак / Б/У
                   </Button>
                 )}
-                <Button variant="secondary" icon={PackageMinus} onClick={onWriteoff}>
-                  Списание
-                </Button>
-                <Button variant="secondary" icon={ClipboardCheck} onClick={onInventory}>
-                  Инвентаризация
-                </Button>
+                {!product.assemblyId && (
+                  <Button variant="secondary" icon={PackageMinus} onClick={onWriteoff}>
+                    Списание
+                  </Button>
+                )}
+                {!product.assemblyId && (
+                  <Button variant="secondary" icon={ClipboardCheck} onClick={onInventory}>
+                    Инвентаризация
+                  </Button>
+                )}
               </div>
               {onChangeCell && (
                 <Button variant="secondary" fullWidth icon={MapPin} onClick={onChangeCell}>
@@ -405,7 +441,11 @@ export default function ProductDetailModal({
           <div className="grid grid-cols-2 gap-3">
             {infoTile(
               product.costPriceIsPlaceholder ? 'Закупочная · заготовка' : 'Закупочная',
-              <Money value={product.costPrice} />,
+              product.assemblyId ? (
+                formatKitUnitCost(product.assemblyExactCost ?? product.costPrice)
+              ) : (
+                <Money value={product.costPrice} />
+              ),
             )}
             {infoTile(
               product.sellPriceIsPlaceholder ? 'Продажная · заготовка' : 'Продажная',

@@ -85,7 +85,7 @@ export default function ProductFormModal({
   const [brand, setBrand] = useState(product?.brand ?? '');
   const [article, setArticle] = useState(product?.article ?? '');
   const [packaging, setPackaging] = useState(product?.packaging ?? '');
-  const [costPrice, setCostPrice] = useState(product?.costPrice?.toString() || '0');
+  const [costPrice, setCostPrice] = useState((product?.assemblyExactCost ?? product?.costPrice)?.toString() || '0');
   const [sellPrice, setSellPrice] = useState(product?.sellPrice?.toString() || '0');
   const [stock, setStock] = useState(product?.stock?.toString() || '0');
   const [minStock, setMinStock] = useState(product?.minStock?.toString() || '0');
@@ -273,6 +273,7 @@ export default function ProductFormModal({
             <Field label="Закупочная цена, ₽" htmlFor="product-cost">
               <Input
                 id="product-cost"
+                disabled={!!product?.assemblyId}
                 inputMode="decimal"
                 value={costPrice}
                 onChange={(e) => setCostPrice(e.target.value)}
@@ -304,6 +305,7 @@ export default function ProductFormModal({
           <Field label={usedIntake ? 'Количество к приёмке' : 'Остаток'} htmlFor="product-stock" hint={unitHint}>
             <Input
               id="product-stock"
+              disabled={!!product?.assemblyId}
               inputMode="decimal"
               value={stock}
               onChange={(e) => setStock(e.target.value)}
@@ -330,16 +332,21 @@ export default function ProductFormModal({
           currentCell={currentCell}
         />
 
-        {!usedIntake && (
+        {product?.assemblyId && (
+          <p className="text-sm text-ink-2">
+            Остаток, себестоимость и состав меняются через сборку и разборку комплекта.
+          </p>
+        )}
+        {!usedIntake && !product?.assemblyId && (
           <div className="flex items-center gap-3">
-            <Switch id="product-bundle" checked={isBundle} onChange={setIsBundle} label="Комплект (набор товаров)" />
+            <Switch id="product-bundle" checked={isBundle} onChange={setIsBundle} label="Набор позиций · без сборки" />
             <label htmlFor="product-bundle" className="cursor-pointer text-sm font-medium text-ink-2">
-              Комплект (набор товаров)
+              Набор позиций · без сборки
             </label>
           </div>
         )}
 
-        {isBundle && (
+        {isBundle && !product?.assemblyId && (
           <div className="space-y-3 rounded-xl border border-accent/30 bg-accent-soft/50 p-3">
             <p className="text-sm font-medium text-ink">Состав комплекта</p>
             {bundleItems.length > 0 && (

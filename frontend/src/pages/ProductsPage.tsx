@@ -1,6 +1,7 @@
 import LowStockView from './LowStockPage';
 import { smartSearch } from '../../../shared/utils/smartSearch';
 import { newUuid } from '../utils/uuid';
+import ProductKitComposer from '../components/warehouse/ProductKitComposer';
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -206,6 +207,7 @@ function ProductsPageContents() {
   );
   const activeWarehouseKind = activeWarehouse?.kind ?? null;
   const usedRequestId = useRef<string | null>(null);
+  const [kitComposerOpen, setKitComposerOpen] = useState(false);
 
   // Ячейки активного склада. Пока их нет (`hasCells === false`), страница выглядит как раньше.
   const {
@@ -812,7 +814,7 @@ function ProductsPageContents() {
 
   async function openEdit(product: Product) {
     let complete = product;
-    if (!Array.isArray(product.photos)) {
+    if (!Array.isArray(product.photos) || product.assemblyId === undefined) {
       try {
         complete = (await productsApi.getById(product.id)).data;
       } catch {
@@ -834,10 +836,14 @@ function ProductsPageContents() {
       // stock_movements.
       const { costPrice, sellPrice, stock, minStock, ...rest } = data;
       const patch: UpdateProductRequest = { ...rest };
-      if (costPrice !== editingProduct.costPrice) patch.costPrice = costPrice;
+      if (!editingProduct.assemblyId && costPrice !== editingProduct.costPrice) patch.costPrice = costPrice;
       if (sellPrice !== editingProduct.sellPrice) patch.sellPrice = sellPrice;
-      if (stock !== editingProduct.stock) patch.stock = stock;
+      if (!editingProduct.assemblyId && stock !== editingProduct.stock) patch.stock = stock;
       if (minStock !== editingProduct.minStock) patch.minStock = minStock;
+      if (editingProduct.assemblyId) {
+        delete patch.isBundle;
+        delete patch.bundleItems;
+      }
       updateMutation.mutate({ id: editingProduct.id, data: patch });
     } else {
       // Auto-fill category from current folder path
@@ -1225,6 +1231,9 @@ function ProductsPageContents() {
               </Button>
               <Button icon={Plus} onClick={openCreate}>
                 {activeWarehouseKind === 'used' ? 'Добавить Б/У' : 'Добавить товар'}
+              </Button>
+              <Button variant="secondary" onClick={() => setKitComposerOpen(true)}>
+                Собрать комплект
               </Button>
               <input
                 ref={fileInputRef}
@@ -1659,6 +1668,9 @@ function ProductsPageContents() {
           // конечные точки, дальше — списание или возврат поставщику).
           canTransfer={activeWarehouseKind === 'main'}
           canManage={canManageWarehouse}
+          onProductChanged={(product) =>
+            setDetailTarget((current) => (current?.id === detailTarget.id ? product : current))
+          }
           onTransfer={() => {
             setTransferTarget(detailTarget);
             setDetailTarget(null);
@@ -1679,6 +1691,16 @@ function ProductsPageContents() {
       )}
 
       {/* Modals */}
+      {kitComposerOpen && (
+        <ProductKitComposer
+          warehouseId={activeWarehouseId}
+          onClose={() => setKitComposerOpen(false)}
+          onCompleted={(id) => {
+            setKitComposerOpen(false);
+            void productsApi.getById(id).then((response) => setDetailTarget(response.data));
+          }}
+        />
+      )}
       {formOpen && (
         <ProductFormModal
           key={editingProduct?.id || 'new'}

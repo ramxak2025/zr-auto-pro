@@ -31,6 +31,7 @@ import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator,
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
+import { isReceivableProduct } from '../../../shared/utils/supplierInvoiceReview';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { KeyboardAwareScroll } from '../components/KeyboardAware';
 import {
@@ -250,7 +251,8 @@ export default function PurchaseOrderCreateScreen() {
     warrantyNames: new Set<string>(),
     warehouseId: pickerWarehouseId,
     setWarehouseId: setPickerWarehouseId,
-    warehouses: warehouses ?? [],
+    warehouses: (warehouses ?? []).filter((warehouse) => warehouse.kind !== 'used'),
+    filterProduct: (product) => isReceivableProduct(product, warehouses ?? []),
   };
   const pickerBridgeRef = useRef<ProductPickerBridge>(pickerBridge);
   pickerBridgeRef.current = pickerBridge;

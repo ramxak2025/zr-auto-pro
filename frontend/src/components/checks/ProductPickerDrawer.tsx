@@ -176,7 +176,7 @@ export default function ProductPickerDrawer({
               <span className="truncate text-sm font-medium text-ink">{product.name}</span>
               {product.isBundle && (
                 <Badge tone="accent" size="sm">
-                  Комплект
+                  {product.assemblyId ? 'Собранный комплект' : 'Набор позиций · без сборки'}
                 </Badge>
               )}
             </span>

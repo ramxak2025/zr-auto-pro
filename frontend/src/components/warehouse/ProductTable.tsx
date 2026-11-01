@@ -8,6 +8,7 @@ import { Money } from '../../ui/Money';
 import { Badge } from '../../ui/Badge';
 import { formatQty, unitLabel } from '../../utils/units';
 import StorageCellBadge from './StorageCellBadge';
+import { formatKitUnitCost } from '../../../../shared/utils/productKitDraft';
 
 type SortKey = 'name' | 'stock' | 'costPrice' | 'sellPrice';
 interface SortState {
@@ -194,7 +195,7 @@ export default function ProductTable({
                   {showFolder && <span className="truncate">{p.category || 'Без папки'}</span>}
                   {p.isBundle && (
                     <Badge tone="accent" size="sm">
-                      Комплект
+                      {p.assemblyId ? 'Собранный комплект' : 'Набор позиций · без сборки'}
                     </Badge>
                   )}
                   {p.storageCellCode && (
@@ -212,7 +213,7 @@ export default function ProductTable({
         </td>
         {showCost && (
           <td className="num hidden text-ink-3 md:table-cell">
-            <Money value={p.costPrice} />
+            {p.assemblyId ? formatKitUnitCost(p.assemblyExactCost ?? p.costPrice) : <Money value={p.costPrice} />}
           </td>
         )}
         <td className="num font-medium text-ink">

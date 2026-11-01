@@ -1,3 +1,4 @@
+import { formatKitUnitCost } from '../../../shared/utils/productKitDraft';
 import ProductPhotoGallery from '../components/ProductPhotoGallery';
 import { randomUUID } from 'expo-crypto';
 import { productPhotoUrls, productPhotoPatch, uploadProductPhotos } from '../../../shared/utils/productPhotos';
@@ -350,6 +351,11 @@ const ProductRow = React.memo(function ProductRow({
           <Text style={[styles.productName, { color: textPrimary }]} numberOfLines={2}>
             {item.name}
           </Text>
+          {item.assemblyId ? (
+            <Text style={{ fontSize: 12, color: accentColor }}>Собранный комплект</Text>
+          ) : item.isBundle ? (
+            <Text style={{ fontSize: 12, color: textTertiary }}>Набор позиций · без сборки</Text>
+          ) : null}
           <View style={styles.productPrices}>
             {missingSellPrice ? (
               <TouchableOpacity
@@ -380,7 +386,12 @@ const ProductRow = React.memo(function ProductRow({
             {hideCategory ? (
               canSeeCostPrice ? (
                 <Text style={[styles.productCostPrice, { color: textTertiary }]} numberOfLines={1}>
-                  с/с {item.costPriceIsPlaceholder ? 'не подтверждена' : formatMoney(item.costPrice)}
+                  с/с{' '}
+                  {item.costPriceIsPlaceholder
+                    ? 'не подтверждена'
+                    : item.assemblyId
+                      ? formatKitUnitCost(item.assemblyExactCost ?? item.costPrice)
+                      : formatMoney(item.costPrice)}
                 </Text>
               ) : null
             ) : item.category ? (
@@ -1546,7 +1557,7 @@ function ProductsScreenContents() {
   const openEdit = useCallback(
     async (p: Product) => {
       const lease = captureDataSession();
-      if (!Array.isArray(p.photos)) {
+      if (!Array.isArray(p.photos) || p.assemblyId === undefined) {
         try {
           p = (await productsApi.getById(p.id)).data;
         } catch {
@@ -1562,7 +1573,7 @@ function ProductsScreenContents() {
       setCategory(p.category || '');
       // null-безопасно: у товара б/у-склада цена продажи может прийти пустой,
       // а String(null) = 'null' сделал бы поле невалидным при сохранении.
-      setCostPrice(p.costPrice != null ? String(p.costPrice) : '');
+      setCostPrice((p.assemblyExactCost ?? p.costPrice) != null ? String(p.assemblyExactCost ?? p.costPrice) : '');
       setSellPrice(p.sellPrice != null ? String(p.sellPrice) : '');
       setStock(p.stock != null ? String(p.stock) : '');
       setMinStock(p.minStock != null ? String(p.minStock) : '');
@@ -1679,7 +1690,7 @@ function ProductsScreenContents() {
     // клавиатуры iOS — полноценный разделитель («1250,50» = 1250.5). Раньше
     // здесь стоял `Number(costPrice) || 0`, и такой ввод молча превращался в 0.
     // Мусор (null) НЕ отправляем нулём — показываем ошибку поля.
-    const parsedCost = readNumericField(costPrice, 'money');
+    const parsedCost = editingProduct?.assemblyId ? editingProduct.costPrice : readNumericField(costPrice, 'money');
     const parsedSell = readNumericField(sellPrice, 'money');
     const parsedStock = readNumericField(stock, 'qty');
     const parsedMinStock = readNumericField(minStock, 'qty');
@@ -1719,12 +1730,13 @@ function ProductsScreenContents() {
       // Заодно не плодим лишние записи в price_history / stock_movements.
       if (
         canSeeCostPrice &&
+        !editingProduct.assemblyId &&
         (parsedCost !== editingProduct.costPrice || (confirmStarterPrices && editingProduct?.costPriceIsPlaceholder))
       )
         payload.costPrice = parsedCost;
       if (parsedSell !== editingProduct.sellPrice || (confirmStarterPrices && editingProduct?.sellPriceIsPlaceholder))
         payload.sellPrice = parsedSell;
-      if (parsedStock !== editingProduct.stock) payload.stock = parsedStock;
+      if (!editingProduct.assemblyId && parsedStock !== editingProduct.stock) payload.stock = parsedStock;
       if (parsedMinStock !== editingProduct.minStock) payload.minStock = parsedMinStock;
       // Ячейка хранения: PATCH принимает uuid / null (снять адрес) / отсутствие поля.
       // Шлём только при реальной смене — как числовые поля выше.
@@ -2729,6 +2741,7 @@ function ProductsScreenContents() {
             </Text>
             <TextInput
               value={costPrice}
+              editable={!editingProduct?.assemblyId}
               accessibilityLabel="Себестоимость товара"
               onChangeText={setCostPrice}
               style={[styles.formInput, formInputThemed]}
@@ -2799,6 +2812,7 @@ function ProductsScreenContents() {
             </Text>
             <TextInput
               value={stock}
+              editable={!editingProduct?.assemblyId}
               accessibilityLabel="Количество товара"
               onChangeText={setStock}
               style={[styles.formInput, formInputThemed]}
@@ -2976,6 +2990,27 @@ function ProductsScreenContents() {
         }
         heightRatio={0.82}
       >
+        {canManageWarehouse && activeWarehouseId ? (
+          <TouchableOpacity
+            style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
+            accessibilityRole="button"
+            onPress={() => {
+              setShowOpsModal(false);
+              navigation.navigate('ProductKitComposer', { warehouseId: activeWarehouseId });
+            }}
+          >
+            <View style={[styles.opsIcon, { backgroundColor: palette.bg.muted }]}>
+              <Ionicons name="layers-outline" size={22} color={palette.accent.primaryText} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>Собрать комплект</Text>
+              <Text style={[styles.opsItemDesc, { color: palette.text.secondary }]}>
+                Выбрать компоненты из каталога
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+          </TouchableOpacity>
+        ) : null}
         <TouchableOpacity
           style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
           onPress={() => {

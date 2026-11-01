@@ -116,10 +116,11 @@ export default function SupplierDetailScreen() {
     }),
     [palette],
   );
-  const { id, openDefectReturn, openDeliveryReturnId } = (route.params ?? {}) as {
+  const { id, openDefectReturn, openDeliveryReturnId, openDeliveryId } = (route.params ?? {}) as {
     id: string;
     openDefectReturn?: boolean;
     openDeliveryReturnId?: string;
+    openDeliveryId?: string;
   };
   const recovery = useProcurementRecovery({ contextId: id });
   // Плавающий таб-бар: iOS — contentInset, Android — paddingBottom (см.
@@ -236,6 +237,12 @@ export default function SupplierDetailScreen() {
     setNormalReturnTarget(openDeliveryReturnId);
     navigation.setParams({ openDeliveryReturnId: undefined });
   }, [openDeliveryReturnId, canManageSuppliers, supplier, navigation]);
+  useEffect(() => {
+    if (!openDeliveryId || !supplier) return;
+    setTab('deliveries');
+    setExpandedDelivery(openDeliveryId);
+    navigation.setParams({ openDeliveryId: undefined });
+  }, [openDeliveryId, supplier, navigation]);
 
   const { data: normalReturns } = useQuery<SupplierReturn[]>({
     queryKey: ['supplier-financial-returns', id],

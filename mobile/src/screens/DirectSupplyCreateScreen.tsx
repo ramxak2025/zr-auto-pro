@@ -31,6 +31,7 @@ import {
 } from '../utils/productPickerSession';
 import type { Product, PurchaseReceiptContext } from '../../../shared/types';
 import type { CreateDeliveryRequest } from '../../../shared/api/types';
+import { isReceivableProduct } from '../../../shared/utils/supplierInvoiceReview';
 import { spacing, colors, borderRadius } from '../theme';
 
 interface Line {
@@ -148,7 +149,8 @@ export default function DirectSupplyCreateScreen() {
     warrantyNames: new Set(),
     warehouseId,
     setWarehouseId,
-    warehouses,
+    warehouses: warehouses.filter((warehouse) => warehouse.kind !== 'used'),
+    filterProduct: (product) => isReceivableProduct(product, warehouses),
   };
   const bridgeRef = useRef(bridge);
   bridgeRef.current = bridge;
@@ -266,6 +268,13 @@ export default function DirectSupplyCreateScreen() {
       <IosScreenHeader title="Поставка без заказа" subtitle={supplierName} onBack={() => navigation.goBack()} />
       <KeyboardAwareScroll contentContainerStyle={styles.content}>
         <ProcurementRecoveryPanel recovery={recovery} onRecovered={recovered} />
+        <TouchableOpacity
+          accessibilityRole="button"
+          disabled={blocked}
+          onPress={() => navigation.navigate('SupplierInvoiceReview', { supplierId, supplierName })}
+        >
+          <Text style={styles.link}>Сканировать накладную</Text>
+        </TouchableOpacity>
         <Text style={{ color: palette.text.secondary }}>
           Остатки увеличатся после приёмки. Сумма поставки добавится в долг поставщику.
           {'\n'}Новая розница: пусто — сохранить текущую цену, 0 — установить ноль.

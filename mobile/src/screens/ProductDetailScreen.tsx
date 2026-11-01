@@ -1,5 +1,7 @@
+import { formatKitUnitCost } from '../../../shared/utils/productKitDraft';
 import ProductPhotoGallery from '../components/ProductPhotoGallery';
 import ProductShareButton from '../components/ProductShareButton';
+import ProductKitPanel from '../components/ProductKitPanel';
 import { captureDataSession } from '../contexts/dataSession';
 import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
 import { movementAmount, movementDocumentDate } from '../components/ProductMovementHistoryModal';
@@ -291,7 +293,7 @@ export default function ProductDetailScreen() {
       setConfirmStarterPrices(false);
       setName(p.name);
       setCategory(p.category || '');
-      setCostPrice(p.costPrice != null ? String(p.costPrice) : '');
+      setCostPrice((p.assemblyExactCost ?? p.costPrice) != null ? String(p.assemblyExactCost ?? p.costPrice) : '');
       setSellPrice(p.sellPrice != null ? String(p.sellPrice) : '');
       setStock(p.stock != null ? String(p.stock) : '');
       setMinStock(p.minStock != null ? String(p.minStock) : '');
@@ -315,7 +317,7 @@ export default function ProductDetailScreen() {
     if (!product) return;
     const lease = captureDataSession();
     let complete = product;
-    if (!Array.isArray(product.photos)) {
+    if (!Array.isArray(product.photos) || product.assemblyId === undefined) {
       try {
         complete = (await productsApi.getById(product.id)).data;
       } catch {
@@ -449,7 +451,7 @@ export default function ProductDetailScreen() {
     // клавиатуры iOS — полноценный разделитель («1250,50» = 1250.5), тогда как
     // прежний `Number(costPrice) || 0` молча превращал такой ввод в 0. Мусор
     // (null) не отправляем нулём — показываем ошибку поля.
-    const parsedCost = readNumericField(costPrice, 'money');
+    const parsedCost = product?.assemblyId ? product.costPrice : readNumericField(costPrice, 'money');
     const parsedSell = readNumericField(sellPrice, 'money');
     const parsedStock = readNumericField(stock, 'qty');
     const parsedMinStock = readNumericField(minStock, 'qty');
@@ -480,12 +482,13 @@ export default function ProductDetailScreen() {
     // Masters never see cost — don't let a hidden field zero it out.
     if (
       canSeeCostPrice &&
+      !product?.assemblyId &&
       (parsedCost !== product?.costPrice || (confirmStarterPrices && product?.costPriceIsPlaceholder))
     )
       payload.costPrice = parsedCost;
     if (parsedSell !== product?.sellPrice || (confirmStarterPrices && product?.sellPriceIsPlaceholder))
       payload.sellPrice = parsedSell;
-    if (parsedStock !== product?.stock) payload.stock = parsedStock;
+    if (!product?.assemblyId && parsedStock !== product?.stock) payload.stock = parsedStock;
     if (parsedMinStock !== product?.minStock) payload.minStock = parsedMinStock;
     // Адрес хранения (2026-09-30) — тоже только если поменяли: uuid ячейки либо null («снять»).
     // Не тронутое поле не уходит, чтобы форма не затирала адрес, выставленный с другого экрана.
@@ -550,8 +553,13 @@ export default function ProductDetailScreen() {
   // early terminal-state return below fires before the main JSX reads these.
   const lowStock = !!product && product.stock <= product.minStock && product.minStock > 0;
   const margin =
-    product && !product.costPriceIsPlaceholder && !product.sellPriceIsPlaceholder && product.costPrice > 0
-      ? ((product.sellPrice - product.costPrice) / product.costPrice) * 100
+    product &&
+    !product.costPriceIsPlaceholder &&
+    !product.sellPriceIsPlaceholder &&
+    (product.assemblyExactCost ?? product.costPrice) > 0
+      ? ((product.sellPrice - (product.assemblyExactCost ?? product.costPrice)) /
+          (product.assemblyExactCost ?? product.costPrice)) *
+        100
       : null;
   const categoryLabel = product?.category ? product.category.split('/').pop() : undefined;
 
@@ -732,6 +740,7 @@ export default function ProductDetailScreen() {
                 <EditField label="Себестоимость" palette={palette} style={{ flex: 1 }}>
                   <TextInput
                     value={costPrice}
+                    editable={!product?.assemblyId}
                     onChangeText={setCostPrice}
                     style={[styles.input, inputThemed]}
                     keyboardType="decimal-pad"
@@ -761,6 +770,7 @@ export default function ProductDetailScreen() {
               >
                 <TextInput
                   value={stock}
+                  editable={!product?.assemblyId}
                   onChangeText={setStock}
                   style={[styles.input, inputThemed]}
                   keyboardType="decimal-pad"
@@ -925,6 +935,11 @@ export default function ProductDetailScreen() {
         >
           <ProductPhotoGallery photos={productPhotoUrls(product)} />
           {canManageWarehouse ? <ProductShareButton id={product.id} name={product.name} /> : null}
+          {product.assemblyId ? (
+            <ProductKitPanel product={product} canManage={canManageWarehouse} />
+          ) : product.isBundle ? (
+            <Text color={palette.text.secondary}>Набор позиций · без сборки</Text>
+          ) : null}
           {/* NAME + category + low-stock pill */}
           <View style={styles.titleBlock}>
             <Text variant="title1" color={palette.text.primary} style={styles.name}>
@@ -979,7 +994,9 @@ export default function ProductDetailScreen() {
                   value={
                     product.costPriceIsPlaceholder
                       ? 'Заготовка · ' + formatMoney(product.costPrice)
-                      : formatMoney(product.costPrice)
+                      : product.assemblyId
+                        ? formatKitUnitCost(product.assemblyExactCost ?? product.costPrice)
+                        : formatMoney(product.costPrice)
                   }
                   accent={colors.orange[500]}
                   palette={palette}

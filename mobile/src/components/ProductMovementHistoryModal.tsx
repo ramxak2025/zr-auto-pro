@@ -84,6 +84,8 @@ const MOVEMENT_VISUALS: Record<StockMovementType, MovementVisual> = {
   sale_annulment: { icon: 'arrow-undo-circle', color: colors.amber[600], label: 'Отмена продажи', sign: '+' },
   sale_restore: { icon: 'refresh-circle', color: colors.indigo[600], label: 'Восстановление продажи', sign: '−' },
   legacy_baseline: { icon: 'document-text-outline', color: colors.gray[500], label: 'Из истории чека', sign: '' },
+  kit_assembly: { icon: 'cube-outline', color: colors.blue[600], label: 'Сборка комплекта', sign: '' },
+  kit_disassembly: { icon: 'layers-outline', color: colors.teal[600], label: 'Разборка комплекта', sign: '' },
 };
 
 // Fallback на случай, если бэк пришлёт неизвестный (будущий) тип — не падаем,
