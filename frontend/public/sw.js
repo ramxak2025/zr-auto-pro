@@ -126,6 +126,9 @@ self.addEventListener('fetch', (event) => {
       /^\/api\/suppliers\/deliveries\/[^/]+\/returns$/.test(url.pathname)
     )) return;
 
+    // Physical-kit checkouts require a confirmed response; keep the live cart on failure.
+    if (request.headers.get('X-Autexa-Require-Online') === '1') return;
+
     // Mutations: network with offline queue
     if (request.method !== 'GET') {
       event.respondWith(networkWithOfflineQueue(request));

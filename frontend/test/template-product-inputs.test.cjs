@@ -40,7 +40,7 @@ function expression(name, context) {
   }).outputText;
   return new Function(...Object.keys(context), `${js}\nreturn result;`)(...Object.values(context));
 }
-test('web template apply, edited check input and SaveTemplate retain each server cost source', () => {
+test('web template apply, edited check input and SaveTemplate retain each server cost source', async () => {
   const refs = [
     { templateId: 'a', productIndex: 0, version: '12' },
     { templateId: 'b', productIndex: 4, version: '13' },
@@ -54,13 +54,14 @@ test('web template apply, edited check input and SaveTemplate retain each server
     toCheckTemplateServiceInput,
     legacyQuantity: () => undefined,
     setServiceLines() {},
+    setKitSplits() {},
     setShowTemplatesPicker() {},
     setProductLines: (lines) => {
       productLines = lines;
     },
     toast: { success() {} },
   };
-  expression(
+  await expression(
     'applyTemplate',
     context,
   )({

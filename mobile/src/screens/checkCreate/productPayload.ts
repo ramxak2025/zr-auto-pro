@@ -12,6 +12,7 @@ export function checkProductPayload(
 ): CreateCheckRequest['products'][number] {
   return {
     ...(line.id && originalIds.has(line.id) ? { id: line.id } : {}),
+    kitSource: line.kitSource,
     sourceTemplateProduct: line.sourceTemplateProduct,
     productId: line.productId,
     name: line.name,

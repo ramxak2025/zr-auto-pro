@@ -1,3 +1,7 @@
+import { ordinaryProductIndex, splitKitCartLine, usedKitSplits, KIT_SPLIT_NOTE } from '../../../shared/utils/kitCart';
+import type { KitSplitIntent } from '../../../shared/api/productKits';
+import { createProductKitsApi } from '../../../shared/api/createServices';
+import api from '../api/axios';
 import { checkDateParts, checkDateInstant } from '../../../shared/utils/checkDateTime';
 import { useState, useEffect, useRef, useCallback, useMemo, type FormEvent, type KeyboardEvent } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -182,7 +186,9 @@ const legacyQuantity = (line: { quantity?: number | null }): number | undefined 
 };
 
 interface ProductLineForm {
+  assemblyId?: string | null;
   id?: string;
+  kitSource?: CheckProductLine['kitSource'];
   sourceTemplateProduct?: CheckProductLine['sourceTemplateProduct'];
   productId: string;
   name: string;
@@ -334,6 +340,10 @@ export default function CheckCreatePage() {
   // Ключ идемпотентности текущего логического сабмита (create-режим).
   // Живёт от первой попытки до успеха: ретрай после ошибки шлёт ТОТ ЖЕ id,
   // и сервер не создаст дубль чека. Сбрасывается в onSuccess.
+  const [kitSplits, setKitSplits] = useState<KitSplitIntent[]>([]);
+  const kitSourceQuantityLimits = useRef(new Map<string, number>());
+  const savedKitIntentIds = useRef<Set<string>>(new Set());
+  const [splittingKit, setSplittingKit] = useState(false);
   const clientRequestIdRef = useRef<string | null>(null);
 
   // «Сегодня» — по календарю АВТОСЕРВИСА (157), а не браузера: дату чека в
@@ -638,6 +648,17 @@ export default function CheckCreatePage() {
   useEffect(() => {
     if (!existingCheck || editLoaded) return;
     setEditLoaded(true);
+    kitSourceQuantityLimits.current = new Map(
+      (existingCheck.products ?? []).flatMap((line) =>
+        line.kitSource
+          ? [[`${line.kitSource.intentId}:${line.kitSource.sourceProductId}`, line.quantity] as const]
+          : [],
+      ),
+    );
+    setKitSplits(existingCheck.kitSplits ?? []);
+    savedKitIntentIds.current = new Set(
+      existingCheck.isDeferred ? [] : (existingCheck.kitSplits ?? []).map((intent) => intent.intentId),
+    );
 
     if (existingCheck.client) {
       setSelectedClient(existingCheck.client);
@@ -686,6 +707,8 @@ export default function CheckCreatePage() {
       setProductLines(
         existingCheck.products.map((p: CheckProductLine) => ({
           id: p.id,
+          kitSource: p.kitSource,
+          sourceTemplateProduct: p.sourceTemplateProduct,
           productId: p.productId || '',
           name: p.name,
           sellPrice: p.sellPrice,
@@ -745,7 +768,10 @@ export default function CheckCreatePage() {
 
   // Mutation
   const createMutation = useMutation({
-    mutationFn: (data: any) => checksApi.create(data),
+    mutationFn: (data: CreateCheckRequest) =>
+      requiresKitOnline
+        ? api.post('/checks', data, { headers: { 'X-Autexa-Require-Online': '1' } })
+        : checksApi.create(data),
     onSuccess: (res: any) => {
       if (isQueuedOffline(res)) {
         // SW-офлайн: сервер чек ещё НЕ создал. clientRequestIdRef НЕ сбрасываем —
@@ -764,7 +790,11 @@ export default function CheckCreatePage() {
     onError: (err: any) => {
       const msg = err?.response?.data?.message;
       if (err?.code === 'ERR_NETWORK' || !err?.response) {
-        toast.error('Сервер недоступен. Проверьте подключение.');
+        toast.error(
+          requiresKitOnline
+            ? 'Комплект ещё не подтверждён. Корзина на экране — подключитесь и повторите сохранение.'
+            : 'Сервер недоступен. Проверьте подключение.',
+        );
       } else if (err?.response?.status === 403) {
         toast.error(msg || 'Нет прав для создания чека');
       } else {
@@ -775,7 +805,10 @@ export default function CheckCreatePage() {
 
   // Update mutation (edit mode)
   const updateMutation = useMutation({
-    mutationFn: (data: any) => checksApi.update(editCheckId!, data),
+    mutationFn: (data: CreateCheckRequest) =>
+      requiresKitOnline
+        ? api.patch(`/checks/${editCheckId!}`, data, { headers: { 'X-Autexa-Require-Online': '1' } })
+        : checksApi.update(editCheckId!, data),
     onSuccess: (res: any) => {
       if (isQueuedOffline(res)) {
         toast('Нет сети — изменения поставлены в очередь и отправятся автоматически', { icon: '📡', duration: 5000 });
@@ -790,7 +823,11 @@ export default function CheckCreatePage() {
     onError: (err: any) => {
       const msg = err?.response?.data?.message;
       if (err?.code === 'ERR_NETWORK' || !err?.response) {
-        toast.error('Сервер недоступен. Проверьте подключение.');
+        toast.error(
+          requiresKitOnline
+            ? 'Комплект ещё не подтверждён. Корзина на экране — подключитесь и повторите сохранение.'
+            : 'Сервер недоступен. Проверьте подключение.',
+        );
       } else if (err?.response?.status === 403) {
         toast.error(msg || 'Нет прав для редактирования чека');
       } else {
@@ -1031,14 +1068,23 @@ export default function CheckCreatePage() {
 
   // Product line handlers
   const handleProductSelected = useCallback(
-    (product: Product) => {
+    async (product: Product) => {
+      // Older cached projections omitted physical-assembly metadata.
+      if (product.isBundle && product.assemblyId === undefined) {
+        try {
+          product = (await productsApi.getById(product.id)).data;
+        } catch {
+          toast.error('Не удалось проверить комплект. Подключитесь к сети и повторите.');
+          return;
+        }
+      }
       // If it's a bundle, add each component product
-      if (product.isBundle && product.bundleItems && product.bundleItems.length > 0) {
+      if (!product.assemblyId && product.isBundle && product.bundleItems && product.bundleItems.length > 0) {
         setProductLines((prev) => {
           let updated = [...prev];
           for (const bi of product.bundleItems!) {
             const matchProduct = (allProducts ?? []).find((p) => p.id === bi.productId);
-            const existing = updated.findIndex((l) => l.productId === bi.productId);
+            const existing = ordinaryProductIndex(updated, bi.productId);
             if (existing !== -1) {
               updated = updated.map((line, i) =>
                 i === existing ? { ...line, quantity: roundQty(line.quantity + bi.quantity) } : line,
@@ -1063,7 +1109,7 @@ export default function CheckCreatePage() {
         // 120: русские метки единиц ('шт'…) + legacy-коды ('pcs') — сравниваем
         // через unitLabel. Дробный шаг 0.5 — только у МЕРНЫХ единиц (м/кг/л).
         const step = METERED_UNITS.has(unitLabel(product.unit)) ? 0.5 : 1;
-        const existing = prev.findIndex((l) => l.productId === product.id);
+        const existing = ordinaryProductIndex(prev, product.id);
         if (existing !== -1) {
           return prev.map((line, i) => (i === existing ? { ...line, quantity: roundQty(line.quantity + step) } : line));
         }
@@ -1071,9 +1117,10 @@ export default function CheckCreatePage() {
           ...prev,
           {
             productId: product.id,
+            assemblyId: product.assemblyId,
             name: product.name,
             sellPrice: product.sellPrice,
-            costPrice: product.costPrice,
+            costPrice: product.assemblyExactCost ?? product.costPrice,
             quantity: step,
             unit: product.unit || DEFAULT_UNIT,
           },
@@ -1084,16 +1131,77 @@ export default function CheckCreatePage() {
   );
 
   const updateProductLine = (index: number, field: keyof ProductLineForm, value: any) => {
-    setProductLines((prev) => prev.map((line, i) => (i === index ? { ...line, [field]: value } : line)));
+    setProductLines((prev) =>
+      prev.map((line, i) => {
+        if (i !== index) return line;
+        const maximum = line.kitSource
+          ? (kitSourceQuantityLimits.current.get(`${line.kitSource.intentId}:${line.kitSource.sourceProductId}`) ??
+            line.quantity)
+          : Infinity;
+        return { ...line, [field]: field === 'quantity' ? Math.min(Number(value), maximum) : value };
+      }),
+    );
   };
 
   const removeProductLine = (index: number) => {
     setProductLines((prev) => prev.filter((_, i) => i !== index));
   };
 
+  const splitProductLine = async (index: number) => {
+    const line = productLines[index];
+    if (!line?.productId || splittingKit) return;
+    setSplittingKit(true);
+    try {
+      const { data: kit } = await createProductKitsApi(api).get(line.productId);
+      const catalog = await Promise.all(
+        kit.components.map(async (component) => (await productsApi.getById(component.productId)).data),
+      );
+      const split = splitKitCartLine(kit, line.quantity, newUuid(), catalog);
+      setProductLines((prev) =>
+        prev[index] === line
+          ? [
+              ...prev.slice(0, index),
+              ...split.lines.map((item) => ({ ...item, productId: item.productId || '' })),
+              ...prev.slice(index + 1),
+            ]
+          : prev,
+      );
+      for (const item of split.lines) {
+        if (item.kitSource)
+          kitSourceQuantityLimits.current.set(
+            `${item.kitSource.intentId}:${item.kitSource.sourceProductId}`,
+            item.quantity,
+          );
+      }
+      setKitSplits((prev) => [...prev, split.intent]);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Не удалось разделить комплект. Обновите и повторите.');
+    } finally {
+      setSplittingKit(false);
+    }
+  };
+
   // ── Шаблоны чеков ─────────────────────────────────────────────────────
   // Применение ЗАМЕЩАЕТ строки формы (semantics mobile applyTemplate).
-  const applyTemplate = (template: CheckTemplate) => {
+  const applyTemplate = async (template: CheckTemplate) => {
+    let templateCatalog: Product[];
+    try {
+      templateCatalog = await Promise.all(
+        template.products.flatMap((line) => {
+          if (!line.productId) return [];
+          const cached = (allProducts ?? []).find((product) => product.id === line.productId);
+          return [
+            cached?.assemblyId !== undefined
+              ? Promise.resolve(cached)
+              : productsApi.getById(line.productId).then((response) => response.data),
+          ];
+        }),
+      );
+    } catch {
+      toast.error('Не удалось проверить товары шаблона. Подключитесь к сети и повторите.');
+      return;
+    }
+    setKitSplits([]);
     setServiceLines(
       // Старый шаблон с «×2» раскладываем в две строки; неразвёрнутые (дробное количество, > 100) остаются legacy «×N».
       expandServiceQuantities(template.services).map((s) => ({
@@ -1106,15 +1214,18 @@ export default function CheckCreatePage() {
     );
     setProductLines(
       template.products.map((p) => {
-        const catalogProduct = (allProducts ?? []).find((ap) => ap.id === p.productId);
+        const catalogProduct = templateCatalog.find((ap) => ap.id === p.productId);
         return {
           productId: p.productId || '',
           name: p.name,
-          sellPrice: p.sellPrice,
-          costPrice: p.costPrice ?? 0,
+          sellPrice: catalogProduct?.assemblyId ? catalogProduct.sellPrice : p.sellPrice,
+          costPrice: catalogProduct?.assemblyId
+            ? (catalogProduct.assemblyExactCost ?? catalogProduct.costPrice)
+            : (p.costPrice ?? 0),
           sourceTemplateProduct: p.sourceTemplateProduct,
           quantity: p.quantity,
           unit: catalogProduct?.unit || DEFAULT_UNIT,
+          assemblyId: catalogProduct?.assemblyId,
         };
       }),
     );
@@ -1144,10 +1255,23 @@ export default function CheckCreatePage() {
   );
   const canSaveTemplate = templateServices.length + templateProducts.length > 0;
 
+  const requiresKitOnline =
+    kitSplits.length > 0 ||
+    productLines.some(
+      (line) =>
+        !!line.kitSource ||
+        !!line.assemblyId ||
+        allProducts?.some((product) => product.id === line.productId && !!product.assemblyId),
+    );
+
   // Submit
   // doSubmit — фактическое проведение чека. handleSubmit (ниже) может
   // перехватить сабмит наджимом «забыли клиента» (Round 12 #7).
   const doSubmit = () => {
+    if (requiresKitOnline && !navigator.onLine) {
+      toast.error('Для сохранения комплекта подключитесь к сети. Корзина сохранена на экране.');
+      return;
+    }
     if (
       missingReferencedServiceIds.length > 0 &&
       (referencedServicesQuery.isLoading || referencedServicesQuery.isError)
@@ -1186,6 +1310,7 @@ export default function CheckCreatePage() {
 
     const products: CheckProductLine[] = productLines.map((l) => ({
       id: l.id,
+      kitSource: l.kitSource,
       sourceTemplateProduct: l.sourceTemplateProduct,
       productId: l.productId || undefined,
       name: l.name,
@@ -1247,6 +1372,7 @@ export default function CheckCreatePage() {
       mileage: mileage ? Number(mileage) : undefined,
       services,
       products,
+      kitSplits: usedKitSplits(kitSplits, productLines, savedKitIntentIds.current),
       // Скидка действует только на товары — кламп выравнивает сохранённое с применённым.
       discount: Math.min(discount, productTotal),
       paymentMethod,
@@ -1866,6 +1992,7 @@ export default function CheckCreatePage() {
               }
             />
             <CardBody className="space-y-2" padding="sm">
+              {productLines.some((line) => line.kitSource) && <p className="text-xs text-ink-3">{KIT_SPLIT_NOTE}</p>}
               {productLines.length === 0 ? (
                 <p className="py-4 text-center text-sm text-ink-3">Товаров нет — выберите со склада</p>
               ) : (
@@ -1876,6 +2003,23 @@ export default function CheckCreatePage() {
                   >
                     <div className="min-w-0 flex-1 basis-40">
                       <p className="truncate text-sm font-medium text-ink">{line.name}</p>
+                      {line.kitSource ? (
+                        <span className="text-xs text-ink-3">Из комплекта · для замены удалите и добавьте товар</span>
+                      ) : (
+                        (line.assemblyId || allProducts?.some((p) => p.id === line.productId && p.assemblyId)) && (
+                          <>
+                            <Badge>Собранный комплект</Badge>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={splittingKit}
+                              onClick={() => void splitProductLine(index)}
+                            >
+                              Разделить на товары
+                            </Button>
+                          </>
+                        )
+                      )}
                       <p className="text-xs tabular-nums text-ink-3">
                         {formatMoney(line.sellPrice)} / {unitLabel(line.unit)}
                       </p>
@@ -1902,6 +2046,13 @@ export default function CheckCreatePage() {
                         icon={Plus}
                         size="sm"
                         variant="secondary"
+                        disabled={
+                          !!line.kitSource &&
+                          line.quantity >=
+                            (kitSourceQuantityLimits.current.get(
+                              `${line.kitSource.intentId}:${line.kitSource.sourceProductId}`,
+                            ) ?? line.quantity)
+                        }
                         onClick={() => updateProductLine(index, 'quantity', roundQty(line.quantity + 1))}
                       />
                     </div>
