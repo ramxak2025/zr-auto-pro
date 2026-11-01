@@ -644,6 +644,7 @@ test('actual native template editor stores a physical selection as a recipe bind
   const ctx = {
     haptic() {},
     canSeeCost: true,
+    canReadKitRecipes: true,
     Alert: {
       alert() {
         assert.fail('valid kit selection failed');
@@ -672,6 +673,8 @@ test('actual native template composition upgrade is explicit; cancellation keeps
   let lines = [original],
     choices;
   const ctx = {
+    canReadKitRecipes: true,
+    viewOnly: false,
     productKitsApi: {
       recipe: async () => ({
         data: { id: 'recipe', version: 2, name: 'ТО новый', components: [{ productId: 'filter', quantity: 3 }] },
@@ -723,4 +726,82 @@ test('a late template fetch cannot replace a cart after its data session changed
     assert.deepEqual(ctx.services, ['old-service']);
     assert.deepEqual(ctx.splits, ['old-split']);
   }
+});
+
+test('cashier without warehouse access can add and save a physical kit by productId without private kit reads or invented costs', async () => {
+  const file = path.join(__dirname, '../../mobile/src/screens/TemplateEditorScreen.tsx');
+  let lines = [],
+    created;
+  const ctx = {
+    canReadKitRecipes: false,
+    canSeeCost: false,
+    haptic() {},
+    productsApi: {
+      getById() {
+        assert.fail('known physical product does not need another catalogue read');
+      },
+    },
+    productKitsApi: {
+      get() {
+        assert.fail('warehouse-gated get must not be called');
+      },
+    },
+    Alert: {
+      alert() {
+        assert.fail('permitted personal template must not show a 403/404 error');
+      },
+    },
+    setProductLines: (updater) => {
+      lines = updater(lines);
+    },
+  };
+  await action(
+    file,
+    'addProduct',
+    ctx,
+  )({ id: 'physical-sku', assemblyId: 'assembly', name: 'Комплект ТО', sellPrice: 999, costPrice: 555 });
+  assert.equal(lines[0].productId, 'physical-sku');
+  assert.equal(lines[0].quantity, 1);
+  assert.equal(lines[0].sellPrice, undefined);
+  assert.equal(lines[0].costPrice, undefined);
+  await action(file, 'save', {
+    ...ctx,
+    canSave: true,
+    name: 'Мой шаблон',
+    serviceIdsInLines: [],
+    serviceLines: [],
+    servicePoliciesQuery: { data: [] },
+    productLines: lines,
+    setSaving() {},
+    isEditing: false,
+    templateId: undefined,
+    folderId: null,
+    shared: false,
+    checkTemplatesApi: {
+      create: async (body) => {
+        created = JSON.parse(JSON.stringify(body));
+      },
+    },
+    queryClient: { invalidateQueries() {} },
+    navigation: { goBack() {} },
+  })();
+  assert.deepEqual(created.products, [{ productId: 'physical-sku', name: 'Комплект ТО', quantity: 1 }]);
+});
+
+test('private recipe upgrade handler does nothing for a cashier without warehouse access', async () => {
+  const file = path.join(__dirname, '../../mobile/src/screens/TemplateEditorScreen.tsx');
+  await action(file, 'replaceRecipeVersion', {
+    canReadKitRecipes: false,
+    viewOnly: false,
+    productKitsApi: {
+      recipe() {
+        assert.fail('must not call warehouse API');
+      },
+    },
+    Alert: {
+      alert() {
+        assert.fail('must not show a forbidden-request error');
+      },
+    },
+  })(0, { kind: 'kitRecipe', kitRecipeId: 'recipe', kitRecipeVersion: 1, quantity: 1 });
 });

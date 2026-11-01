@@ -466,7 +466,7 @@ function reviewHarness() {
                       id: queryKey[1],
                       version: queryKey[2] ?? 2,
                       name: 'Старый состав',
-                      components: [{ productId: product.id, quantity: 1.5 }],
+                      components: state.recipeComponents ?? [{ productId: product.id, quantity: 1.5 }],
                     }
                   : queryKey[0] === 'product-kit'
                     ? kit
@@ -1168,6 +1168,141 @@ test('actual saved-composition edit creates version2 through CAS without changin
     assert.equal(h.logs.assemble.length, 0);
     assert.equal(h.logs.recompose.length, 0);
     assert.equal(h.logs.disassemble.length, 0);
+  } finally {
+    Renderer.act(() => tree.unmount());
+  }
+});
+
+test('recipe preview without warehouse access shows only its version and never calls the gated API', async () => {
+  const h = reviewHarness();
+  let query,
+    reads = 0;
+  h.api.productKitsApi.recipe = async () => {
+    reads++;
+    throw new Error('403 should never be requested');
+  };
+  const Preview = load(
+    'frontend/src/components/warehouse/ProductKitRecipes.tsx',
+    {
+      ...h.mocks,
+      '../../contexts/AuthContext': { useAuth: () => ({ hasPermission: () => false }) },
+      '@tanstack/react-query': {
+        ...h.mocks['@tanstack/react-query'],
+        useQuery: (options) => {
+          query = options;
+          return { data: [{ product: { name: 'private source' }, quantity: 99 }], isError: true, isPending: false };
+        },
+      },
+    },
+    h.globals,
+  ).KitRecipeComposition;
+  let tree;
+  await Renderer.act(async () => {
+    tree = Renderer.create(React.createElement(Preview, { recipeId: 'recipe', version: 1 }));
+  });
+  try {
+    assert.equal(query.enabled, false);
+    assert.deepEqual(await query.queryFn(), []);
+    assert.equal(reads, 0);
+    assert.ok(treeText(tree.root).includes('Состав версии 1'));
+    assert.equal(treeText(tree.root).includes('private source'), false);
+    assert.equal(treeText(tree.root).includes('Не удалось'), false);
+  } finally {
+    Renderer.act(() => tree.unmount());
+  }
+});
+
+test('recipe composer preserves a missing source row and other components; explicit replacement saves v2 without stock mutation', async () => {
+  const h = reviewHarness();
+  h.state.recipeComponents = [
+    { productId: 'missing', quantity: 2 },
+    { productId: 'kept', quantity: 1.5 },
+  ];
+  h.api.productsApi.getById = async (id) => {
+    if (id === 'missing') throw { response: { status: 404 } };
+    return { data: { ...h.product, id, name: 'Сохранённый компонент' } };
+  };
+  const Composer = load('frontend/src/components/warehouse/ProductKitComposer.tsx', h.mocks, h.globals).default;
+  let tree;
+  await Renderer.act(async () => {
+    tree = Renderer.create(
+      React.createElement(Composer, {
+        warehouseId: 'main',
+        recipeId: 'recipe',
+        recipeVersion: 1,
+        recipeEdit: true,
+        onCompleted() {
+          assert.fail('must not assemble');
+        },
+        onRecipeSaved() {},
+        onClose() {},
+      }),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+  });
+  try {
+    assert.ok(treeText(tree.root).includes('Товар недоступен'));
+    assert.ok(treeText(tree.root).includes('Сохранённый компонент'));
+    const fields = tree.root
+      .findAllByType('input')
+      .filter((node) => String(node.props['aria-label']).startsWith('Количество компонента'));
+    assert.deepEqual(
+      fields.map((node) => node.props.value),
+      ['2', '1.5'],
+    );
+    await uiClick(tree, 'Проверить состав');
+    assert.equal(h.logs.updateRecipe.length, 0);
+    assert.ok(treeText(tree.root).includes('В составе есть недоступный товар'));
+    await uiClick(tree, 'Убрать');
+    await uiClick(tree, 'Добавить компонент');
+    await Renderer.act(async () => tree.root.findByType('picker').props.onSelectProduct(h.product));
+    await uiClick(tree, 'Проверить состав');
+    assert.equal(treeText(tree.root).includes('В составе есть недоступный товар'), false);
+    await uiClick(tree, 'Сохранить новую версию');
+    assert.deepEqual(h.logs.updateRecipe[0], {
+      id: 'recipe',
+      body: {
+        name: 'Старый состав',
+        expectedVersion: 1,
+        components: [
+          { productId: 'kept', quantity: 1.5 },
+          { productId: h.product.id, quantity: 1 },
+        ],
+      },
+    });
+    assert.equal(h.logs.assemble.length, 0);
+    assert.equal(h.logs.recompose.length, 0);
+    assert.equal(h.logs.disassemble.length, 0);
+  } finally {
+    Renderer.act(() => tree.unmount());
+  }
+});
+
+test('rebuild of an unchanged recipe with an unavailable source is blocked before any stock command', async () => {
+  const h = reviewHarness();
+  h.state.recipeComponents = [{ productId: 'missing', quantity: 1 }];
+  h.api.productsApi.getById = async () => {
+    throw { response: { status: 404 } };
+  };
+  const Composer = load('frontend/src/components/warehouse/ProductKitComposer.tsx', h.mocks, h.globals).default;
+  let tree;
+  await Renderer.act(async () => {
+    tree = Renderer.create(
+      React.createElement(Composer, {
+        warehouseId: 'main',
+        recipeId: 'recipe',
+        recipeVersion: 1,
+        onCompleted() {},
+        onClose() {},
+      }),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+  });
+  try {
+    await uiValue(tree, 'Цена комплекта', '100');
+    await uiClick(tree, 'Проверить сборку');
+    assert.equal(h.logs.assemble.length, 0);
+    assert.ok(treeText(tree.root).includes('В составе есть недоступный товар'));
   } finally {
     Renderer.act(() => tree.unmount());
   }

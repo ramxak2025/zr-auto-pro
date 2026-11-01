@@ -784,11 +784,12 @@ export function TemplatePickerModal({ isOpen, onClose, onApply, applying = false
                           ? 'Нужно выбрать партии при применении'
                           : 'Нет достаточной собранной партии · состав сохранён'}
                     </p>
-                    {(!isSharedTemplate(viewTemplate) || canManageShared) && (
+                    {hasPermission('warehouse_access') && (!isSharedTemplate(viewTemplate) || canManageShared) && (
                       <Button
                         variant="secondary"
                         size="sm"
                         onClick={async () => {
+                          if (!hasPermission('warehouse_access')) return;
                           try {
                             if (!line.kitRecipeId) return;
                             const latest = (await productKitsApi.recipe(line.kitRecipeId)).data;

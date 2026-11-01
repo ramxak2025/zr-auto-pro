@@ -1,3 +1,4 @@
+import { useAuth } from '../../contexts/AuthContext';
 import ProductKitComposer from './ProductKitComposer';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -115,15 +116,19 @@ export default function ProductKitRecipes({
 }
 
 export function KitRecipeComposition({ recipeId, version }: { recipeId: string; version: number }) {
+  const canRead = useAuth().hasPermission('warehouse_access');
   const detail = useQuery({
     queryKey: ['kit-recipe-composition', recipeId, version],
+    enabled: canRead,
     queryFn: async () => {
+      if (!canRead) return [];
       const recipe = (await productKitsApi.recipe(recipeId, version)).data;
       return Promise.all(
         recipe.components.map(async (line) => ({ ...line, product: (await productsApi.getById(line.productId)).data })),
       );
     },
   });
+  if (!canRead) return <p className="mt-2 text-sm text-ink-2">Состав версии {version}</p>;
   return (
     <div className="mt-2 text-sm text-ink-2">
       <p>Состав версии {version}</p>

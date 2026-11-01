@@ -6,7 +6,12 @@ import { productKitsApi, productsApi, warehousesApi } from '../../api/services';
 import { readStoredToken } from '../../utils/sessionToken';
 import { newUuid } from '../../utils/uuid';
 import { loadProductCatalog } from '../../../../shared/api/productCatalog';
-import { kitComponents, kitDraftPayload, type KitDraftLine } from '../../../../shared/utils/productKitDraft';
+import {
+  loadKitDraftLines,
+  kitComponents,
+  kitDraftPayload,
+  type KitDraftLine,
+} from '../../../../shared/utils/productKitDraft';
 import type { AssembleKitRequest } from '../../../../shared/api/productKits';
 import ProductPickerDrawer from '../checks/ProductPickerDrawer';
 import Modal from '../Modal';
@@ -165,12 +170,7 @@ export default function ProductKitComposer({
     if (!recipe || seeded.current || restoredKey !== key) return;
     let canceled = false;
     const token = readStoredToken();
-    void Promise.all(
-      recipe.components.map(async (component) => {
-        const product = (await productsApi.getById(component.productId)).data;
-        return { productId: product.id, name: product.name, quantity: String(component.quantity) };
-      }),
-    )
+    void loadKitDraftLines(recipe.components, async (id) => (await productsApi.getById(id)).data)
       .then((items) => {
         if (canceled || !mounted.current || seeded.current || token !== readStoredToken()) return;
         setName(recipe.name);
@@ -207,6 +207,7 @@ export default function ProductKitComposer({
     }
   }, [key, restoredKey, name, quantity, sellPrice, lines, requestId, pending, recipePending, targetWarehouse]);
   const prepare = () => {
+    setError('');
     try {
       if (recipeId && (!recipe || !seeded.current)) throw new Error('Дождитесь загрузки выбранной версии состава.');
       if (productId && !kit) throw new Error('Дождитесь загрузки актуального состава.');
@@ -455,7 +456,14 @@ export default function ProductKitComposer({
           {!lines.length && <p className="text-sm text-ink-3">Выберите существующие товары через каталог кассы.</p>}
           {lines.map((line) => (
             <div key={line.productId} className="flex items-center gap-2 border-b border-line py-2">
-              <span className="min-w-0 flex-1 text-sm text-ink">{line.name}</span>
+              <span className="min-w-0 flex-1 text-sm text-ink">
+                {line.name}
+                {line.unavailable && (
+                  <span className="block text-xs text-bad-text">
+                    Недоступен · удалите и выберите замену в новой версии состава
+                  </span>
+                )}
+              </span>
               <Input
                 aria-label={`Количество компонента — ${line.name}`}
                 inputMode="decimal"

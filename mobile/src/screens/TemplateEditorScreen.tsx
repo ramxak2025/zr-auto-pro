@@ -64,6 +64,7 @@ interface EditorServiceLine {
 }
 
 interface EditorProductLine {
+  pendingKitBinding?: boolean;
   kind?: 'kitRecipe';
   kitRecipeId?: string;
   kitRecipeVersion?: number;
@@ -88,6 +89,7 @@ export default function TemplateEditorScreen() {
   const { user, hasPermission } = useAuth();
   const catalogOwner = user?.role === 'director' || user?.role === 'superadmin';
   const canManageShared = hasPermission('templates_shared_manage');
+  const canReadKitRecipes = hasPermission('warehouse_access');
 
   const templateId: string | undefined = route.params?.templateId;
   const isEditing = !!templateId;
@@ -240,7 +242,7 @@ export default function TemplateEditorScreen() {
   const addProduct = async (selected: Product) => {
     try {
       const p = selected.assemblyId === undefined ? (await productsApi.getById(selected.id)).data : selected;
-      if (p.assemblyId) {
+      if (p.assemblyId && canReadKitRecipes) {
         const kit = (await productKitsApi.get(p.id)).data;
         setProductLines((lines) => {
           const index = lines.findIndex(
@@ -284,9 +286,10 @@ export default function TemplateEditorScreen() {
                 {
                   productId: p.id,
                   name: p.name,
-                  sellPrice: p.sellPrice,
-                  costPrice: canSeeCost ? p.costPrice : undefined,
-                  costStatus: canSeeCost ? 'known' : undefined,
+                  sellPrice: p.assemblyId ? undefined : p.sellPrice,
+                  costPrice: !p.assemblyId && canSeeCost ? p.costPrice : undefined,
+                  costStatus: p.assemblyId ? 'unknown' : canSeeCost ? 'known' : undefined,
+                  ...(p.assemblyId ? { pendingKitBinding: true } : {}),
                   quantity: 1,
                 },
               ]
@@ -300,6 +303,7 @@ export default function TemplateEditorScreen() {
   };
 
   const replaceRecipeVersion = async (index: number, line: EditorProductLine) => {
+    if (!canReadKitRecipes || viewOnly) return;
     try {
       const latest = (await productKitsApi.recipe(line.kitRecipeId!)).data;
       if (latest.version === line.kitRecipeVersion) {
@@ -854,11 +858,14 @@ export default function TemplateEditorScreen() {
                     </TouchableOpacity>
                   )}
                 </View>
+                {line.pendingKitBinding && (
+                  <Text style={{ color: palette.text.secondary }}>Комплект · состав сохранится в шаблоне</Text>
+                )}
                 {line.kind === 'kitRecipe' && (
                   <View style={{ gap: 8 }}>
                     <KitRecipeComposition recipeId={line.kitRecipeId!} version={line.kitRecipeVersion!} />
                     <Text style={{ color: palette.text.secondary }}>Партия выбирается при применении.</Text>
-                    {!viewOnly && (
+                    {!viewOnly && canReadKitRecipes && (
                       <TouchableOpacity
                         accessibilityRole="button"
                         onPress={() => void replaceRecipeVersion(idx, line)}

@@ -38,6 +38,10 @@ const mockWarehouses = [
   { id: 'main', name: 'Основной', kind: 'main' },
   { id: 'used', name: 'Б/У', kind: 'used' },
 ];
+let mockWarehouseAccess = true;
+let mockRecipeComponents: { productId: string; quantity: number }[] | undefined;
+const mockQueryCalls: { queryKey: unknown[]; enabled?: boolean; queryFn?: () => Promise<unknown> }[] = [];
+const mockProductGet = jest.fn();
 let mockDocument: SupplierInvoiceDocument;
 const makeDocument = (): SupplierInvoiceDocument => ({
   id: '11111111-1111-4111-8111-111111111111',
@@ -142,26 +146,30 @@ jest.mock('react-native-safe-area-context', () => ({ SafeAreaView: 'SafeAreaView
 jest.mock('../../components/TabBarScrollable', () => ({ TabBarScrollView: 'ScrollView' }));
 jest.mock('@tanstack/react-query', () => ({
   useQueryClient: () => ({ invalidateQueries: mockInvalidate }),
-  useQuery: ({ queryKey, enabled }: { queryKey: string[]; enabled?: boolean }) => ({
-    data:
-      enabled === false
-        ? undefined
-        : queryKey[0] === 'products'
-          ? [mockProduct]
-          : queryKey[0] === 'kit-recipe'
-            ? {
-                id: 'recipe',
-                version: 1,
-                name: 'Старый состав',
-                components: [{ productId: mockProduct.id, quantity: 1.5 }],
-              }
-            : queryKey[0] === 'warehouses'
-              ? mockWarehouses
-              : [],
-    isPending: false,
-    isError: false,
-    refetch: jest.fn(),
-  }),
+  useQuery: (options: { queryKey: unknown[]; enabled?: boolean; queryFn?: () => Promise<unknown> }) => {
+    mockQueryCalls.push(options);
+    const { queryKey, enabled } = options;
+    return {
+      data:
+        enabled === false
+          ? undefined
+          : queryKey[0] === 'products'
+            ? [mockProduct]
+            : queryKey[0] === 'kit-recipe'
+              ? {
+                  id: 'recipe',
+                  version: 1,
+                  name: 'Старый состав',
+                  components: mockRecipeComponents ?? [{ productId: mockProduct.id, quantity: 1.5 }],
+                }
+              : queryKey[0] === 'warehouses'
+                ? mockWarehouses
+                : [],
+      isPending: false,
+      isError: false,
+      refetch: jest.fn(),
+    };
+  },
 }));
 jest.mock('../../api/services', () => ({
   supplierInvoicesApi: {
@@ -177,7 +185,7 @@ jest.mock('../../api/services', () => ({
     setOrder: jest.fn(),
   },
   productKitsApi: { updateRecipe: mockUpdateRecipe, assemble: mockAssemble, recompose: mockRecompose, get: jest.fn() },
-  productsApi: { getById: async () => ({ data: mockProduct }) },
+  productsApi: { getById: mockProductGet },
   purchaseOrdersApi: {},
   warehousesApi: {},
 }));
@@ -185,7 +193,11 @@ jest.mock('../../api/axios', () => ({
   captureAuthSession: () => ({ token: 'fixture-token' }),
   getImageUrl: (path: string) => `https://api.stage.example${path}`,
 }));
-jest.mock('../../contexts/AuthContext', () => ({ useAuth: () => ({ hasPermission: () => true }) }));
+jest.mock('../../contexts/AuthContext', () => ({
+  useAuth: () => ({
+    hasPermission: (permission: string) => (permission === 'warehouse_access' ? mockWarehouseAccess : true),
+  }),
+}));
 jest.mock('../../contexts/TenantTimezoneContext', () => ({ useTenantTimezone: () => 'Europe/Moscow' }));
 jest.mock('../../contexts/ThemeContext', () => ({
   useColors: () => ({
@@ -198,6 +210,7 @@ jest.mock('../../contexts/ThemeContext', () => ({
 jest.mock('../../platform/Typography', () => ({ Text: 'Text' }));
 jest.mock('../../components/IosScreenHeader', () => ({ __esModule: true, default: 'Header' }));
 jest.mock('../../components/KeyboardAware', () => ({ KeyboardAwareScroll: 'Scroll' }));
+jest.mock('../../components/Modal', () => ({ __esModule: true, default: 'Modal' }));
 jest.mock('../../components/BottomSheet', () => ({ BottomSheet: 'BottomSheet' }));
 jest.mock('../../components/DateTimePickerModal', () => ({ __esModule: true, default: 'DatePicker' }));
 jest.mock('../../components/ConfirmDialog', () => ({ __esModule: true, default: 'ConfirmDialog' }));
@@ -205,6 +218,9 @@ jest.mock('../../components/Button', () => ({ Button: 'Button' }));
 
 const InvoiceScreen = jest.requireActual<{ default: () => React.ReactNode }>('../SupplierInvoiceScreen').default;
 const KitScreen = jest.requireActual<{ default: () => React.ReactNode }>('../ProductKitComposerScreen').default;
+const RecipePreview = jest.requireActual<{
+  KitRecipeComposition: (props: { recipeId: string; version: number }) => React.ReactNode;
+}>('../../components/ProductKitRecipes').KitRecipeComposition;
 type Element = React.ReactElement<{ children?: React.ReactNode; [key: string]: unknown }>;
 const nodes = (node: React.ReactNode): Element[] =>
   Array.isArray(node)
@@ -262,6 +278,10 @@ beforeEach(() => {
   mockParams = { supplierId: 'supplier', supplierName: 'Поставщик', warehouseId: 'main' };
   mockDocument = makeDocument();
   mockManualFailure = false;
+  mockWarehouseAccess = true;
+  mockRecipeComponents = undefined;
+  mockQueryCalls.length = 0;
+  mockProductGet.mockImplementation(async () => ({ data: mockProduct }));
   setDataSession({ tenantId: 'tenant', userId: 'owner', pointId: 'point' });
   mockPermission.mockResolvedValue({ granted: true });
   mockCamera.mockResolvedValue({ canceled: false, assets: [{ uri: 'file:///invoice.jpg', mimeType: 'image/jpeg' }] });
@@ -575,6 +595,58 @@ it('native saved recipe edit creates a new version only on confirmation and neve
     name: 'Старый состав',
     expectedVersion: 1,
     components: [{ productId: mockProduct.id, quantity: 2.5 }],
+  });
+  expect(mockAssemble).not.toHaveBeenCalled();
+  expect(mockRecompose).not.toHaveBeenCalled();
+});
+
+it('native recipe preview without warehouse access never queries private recipe data or reports a forbidden error', async () => {
+  mockWarehouseAccess = false;
+  const tree = render(() => RecipePreview({ recipeId: 'recipe', version: 1 }));
+  const query = mockQueryCalls.find((options) => options.queryKey[0] === 'kit-recipe-composition')!;
+  expect(query.enabled).toBe(false);
+  expect(await query.queryFn!()).toEqual([]);
+  expect(JSON.stringify(tree)).toContain('Состав версии');
+  expect(JSON.stringify(tree)).not.toContain('Не удалось');
+  expect(mockProductGet).not.toHaveBeenCalled();
+});
+
+it('native recipe editor keeps a 404 source at its original position and saves only an explicit replacement as v2', async () => {
+  mockParams = { warehouseId: 'main', recipeId: 'recipe', recipeVersion: 1, recipeEdit: true };
+  mockRecipeComponents = [
+    { productId: 'missing', quantity: 2 },
+    { productId: 'kept', quantity: 1.5 },
+  ];
+  mockProductGet.mockImplementation(async (id) => {
+    if (id === 'missing') throw { response: { status: 404 } };
+    return { data: { ...mockProduct, id, name: 'Сохранённый компонент' } };
+  });
+  mockUpdateRecipe.mockResolvedValue({ data: { id: 'recipe', version: 2 } });
+  render(KitScreen);
+  await flush();
+  render(KitScreen);
+  await flush();
+  const original = nodes(render(KitScreen)).filter((node) =>
+    String(node.props.accessibilityLabel).startsWith('Количество компонента'),
+  );
+  expect(original.map((node) => node.props.value)).toEqual(['2', '1.5']);
+  expect(JSON.stringify(render(KitScreen))).toContain('Товар недоступен');
+  await press(KitScreen, 'Проверить состав');
+  expect(mockUpdateRecipe).not.toHaveBeenCalled();
+  const remove = nodes(render(KitScreen)).find((node) => node.props.accessibilityLabel === 'Убрать Товар недоступен')!;
+  (remove.props.onPress as () => void)();
+  await press(KitScreen, 'Добавить компонент');
+  getProductPickerSession()!.addProduct(mockProduct);
+  await flush();
+  await press(KitScreen, 'Проверить состав');
+  await confirm(KitScreen);
+  expect(mockUpdateRecipe).toHaveBeenCalledWith('recipe', {
+    name: 'Старый состав',
+    expectedVersion: 1,
+    components: [
+      { productId: 'kept', quantity: 1.5 },
+      { productId: mockProduct.id, quantity: 1 },
+    ],
   });
   expect(mockAssemble).not.toHaveBeenCalled();
   expect(mockRecompose).not.toHaveBeenCalled();

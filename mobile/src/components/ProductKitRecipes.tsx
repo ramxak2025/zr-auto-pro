@@ -1,3 +1,4 @@
+import { useAuth } from '../contexts/AuthContext';
 import React, { useState } from 'react';
 import { View, Pressable } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
@@ -94,9 +95,12 @@ export default function ProductKitRecipes({
 }
 
 export function KitRecipeComposition({ recipeId, version }: { recipeId: string; version: number }) {
+  const canRead = useAuth().hasPermission('warehouse_access');
   const detail = useQuery({
     queryKey: ['kit-recipe-composition', recipeId, version],
+    enabled: canRead,
     queryFn: async () => {
+      if (!canRead) return [];
       const recipe = (await productKitsApi.recipe(recipeId, version)).data;
       return Promise.all(
         recipe.components.map(async (line) => ({ ...line, product: (await productsApi.getById(line.productId)).data })),
@@ -104,6 +108,7 @@ export function KitRecipeComposition({ recipeId, version }: { recipeId: string; 
     },
   });
   const palette = useColors();
+  if (!canRead) return <Text color={palette.text.secondary}>Состав версии {version}</Text>;
   return (
     <View style={{ gap: 4 }}>
       <Text color={palette.text.secondary}>Состав версии {version}</Text>

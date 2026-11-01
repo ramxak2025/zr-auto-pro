@@ -10,7 +10,12 @@ import type { RouteProp } from '@react-navigation/native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import type { AssembleKitRequest } from '../../../shared/api/productKits';
-import { kitComponents, kitDraftPayload, type KitDraftLine } from '../../../shared/utils/productKitDraft';
+import {
+  loadKitDraftLines,
+  kitComponents,
+  kitDraftPayload,
+  type KitDraftLine,
+} from '../../../shared/utils/productKitDraft';
 import { parsePurchaseOrderQuantity } from '../../../shared/utils/purchaseOrderInput';
 import { productKitsApi, productsApi, warehousesApi } from '../api/services';
 import { captureDataSession } from '../contexts/dataSession';
@@ -157,12 +162,7 @@ export default function ProductKitComposerScreen() {
   useEffect(() => {
     if (!recipe || seeded.current || restoredKey !== storageKey) return;
     const lease = captureDataSession();
-    void Promise.all(
-      recipe.components.map(async (component) => {
-        const product = (await productsApi.getById(component.productId)).data;
-        return { productId: product.id, name: product.name, quantity: String(component.quantity) };
-      }),
-    )
+    void loadKitDraftLines(recipe.components, async (id) => (await productsApi.getById(id)).data)
       .then((items) => {
         if (!lease.isCurrent() || !mounted.current || seeded.current) return;
         setName(recipe.name);
@@ -237,6 +237,7 @@ export default function ProductKitComposerScreen() {
     notifyProductPickerSession(bridgeRef);
   }, [lines, sourceWarehouse, warehouses, pending]);
   const prepare = () => {
+    setError('');
     try {
       if (recipeId && (!recipe || !seeded.current)) throw new Error('Дождитесь загрузки выбранной версии состава.');
       if (productId && !kit) throw new Error('Дождитесь загрузки актуального состава.');
@@ -459,6 +460,7 @@ export default function ProductKitComposerScreen() {
             <View key={line.productId} style={[styles.component, { borderBottomColor: palette.border.subtle }]}>
               <Text color={palette.text.primary} style={{ flex: 1 }}>
                 {line.name}
+                {line.unavailable ? ' · Недоступен: удалите и выберите замену в новой версии состава' : ''}
               </Text>
               <TextInput
                 accessibilityLabel={`Количество компонента — ${line.name}`}
