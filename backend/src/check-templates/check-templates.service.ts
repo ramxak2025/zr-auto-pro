@@ -1,3 +1,4 @@
+import { exactKitLineCost } from '../product-kits/kit-stock';
 import { Injectable, Inject, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
@@ -64,7 +65,7 @@ export class CheckTemplatesService {
     const products = productIds.length
       ? (
           await db.query(
-            `SELECT id, sell_price${canSeeCost ? ', COALESCE(assembly_exact_cost,cost_price) AS cost_price, cost_price_is_placeholder' : ''} FROM products WHERE tenant_id=$1 AND id=ANY($2::uuid[]) AND deleted_at IS NULL
+            `SELECT id, sell_price${canSeeCost ? ', COALESCE(assembly_exact_cost,cost_price) AS cost_price, assembly_exact_cost, cost_price_is_placeholder' : ''} FROM products WHERE tenant_id=$1 AND id=ANY($2::uuid[]) AND deleted_at IS NULL
              AND ($3::uuid IS NULL OR EXISTS (SELECT 1 FROM warehouses w WHERE w.id=products.warehouse_id AND w.point_id=$3::uuid))`,
             [tenantId, productIds, actorPointId(actor)],
           )
@@ -72,6 +73,7 @@ export class CheckTemplatesService {
       : [];
     const serviceMap = new Map(services.map((row) => [row.id, row]));
     const productMap = new Map(products.map((row) => [row.id, row]));
+    const exactCosts = new WeakMap<object, string>();
     const projected = rows.map((row) => {
       const productLines = (Array.isArray(row.products) ? row.products : []).flatMap(
         (value: unknown, productIndex: number) => {
@@ -85,19 +87,20 @@ export class CheckTemplatesService {
               ? null
               : Number(current.cost_price);
           const knownCost = cost !== null && Number.isFinite(cost) && cost >= 0;
-          return [
-            {
-              ...(typeof line.productId === 'string' ? { productId: line.productId } : {}),
-              name: line.name,
-              quantity: line.quantity,
-              sellPrice: current ? Number(current.sell_price) : line.sellPrice,
-              catalogStatus: current ? 'current' : manual ? 'manual' : 'unavailable',
-              sourceTemplateProduct: { templateId: row.id, productIndex, version: row.product_version },
-              ...(canSeeCost
-                ? { costStatus: knownCost ? 'known' : 'unknown', ...(knownCost ? { costPrice: cost } : {}) }
-                : {}),
-            },
-          ];
+          const projectedLine = {
+            ...(typeof line.productId === 'string' ? { productId: line.productId } : {}),
+            name: line.name,
+            quantity: line.quantity,
+            sellPrice: current ? Number(current.sell_price) : line.sellPrice,
+            catalogStatus: current ? 'current' : manual ? 'manual' : 'unavailable',
+            sourceTemplateProduct: { templateId: row.id, productIndex, version: row.product_version },
+            ...(canSeeCost
+              ? { costStatus: knownCost ? 'known' : 'unknown', ...(knownCost ? { costPrice: cost } : {}) }
+              : {}),
+          };
+          if (canSeeCost && !manual && current?.assembly_exact_cost != null)
+            exactCosts.set(projectedLine, String(current.assembly_exact_cost));
+          return [projectedLine];
         },
       );
       const costKnown = productLines.every(
@@ -138,10 +141,15 @@ export class CheckTemplatesService {
               ...(costKnown
                 ? {
                     productCostTotal: round2(
-                      productLines.reduce(
-                        (sum, line) => sum + round2(Number(line.costPrice) * Number(line.quantity)),
-                        0,
-                      ),
+                      productLines.reduce((sum, line) => {
+                        const exact = exactCosts.get(line);
+                        return (
+                          sum +
+                          (exact != null
+                            ? exactKitLineCost(exact, Number(line.quantity))
+                            : round2(Number(line.costPrice) * Number(line.quantity)))
+                        );
+                      }, 0),
                     ),
                   }
                 : {}),

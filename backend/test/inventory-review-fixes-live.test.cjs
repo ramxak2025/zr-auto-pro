@@ -199,6 +199,18 @@ test('template displayed unit/total and CSV export retain49.995 rather than mult
     const row = csv.split('\n').find((line) => line.startsWith('Exact kit;'));
     assert.equal(Number(row.split(';')[4]), 49.995);
     assert.equal(Number(row.split(';')[4]) * Number(row.split(';')[5]), 49995);
+    const fine = await kit(f, 20.15, 0.5, 1);
+    const fineTemplate = await f.run(() =>
+      templates.create(f.tenant, f.actor, {
+        name: 'Exact half-cent template',
+        services: [],
+        products: [
+          { productId: fine.assembled.productId, name: 'Fine kit', quantity: 1, sellPrice: 25, costPrice: 10.08 },
+        ],
+      }),
+    );
+    assert.equal(fineTemplate.products[0].costPrice, 10.075);
+    assert.equal(fineTemplate.productCostTotal, 10.08);
   }),
 );
 
