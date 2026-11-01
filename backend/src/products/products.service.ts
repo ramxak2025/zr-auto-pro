@@ -110,6 +110,7 @@ export class ProductsService {
       warehouseId: row.warehouse_id ?? null,
       warrantyDays: row.warranty_days !== null && row.warranty_days !== undefined ? parseInt(row.warranty_days) : null,
       barcode: row.barcode ?? null,
+      internalBarcode: row.internal_barcode ?? null,
       // 172 — адрес хранения; код/подпись приходят из JOIN'а (см. CELL_COLUMNS_SQL).
       storageCellId: row.storage_cell_id ?? null,
       storageCellCode: row.storage_cell_code ?? null,
@@ -120,6 +121,12 @@ export class ProductsService {
       p.supplier = { id: row.supplier_id, name: row.supplier_name };
     }
     return p;
+  }
+
+  /** Internal read projection for exact barcode queries. The caller must scope
+   * its SQL to the authenticated tenant/point; cost visibility fails closed. */
+  projectProductForActor(row: Record<string, unknown>, actor?: ProductActor) {
+    return this.mapProduct(row, this.canSeeCost(actor));
   }
 
   /**

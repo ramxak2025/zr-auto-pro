@@ -862,6 +862,20 @@ export function createProductsApi(api: HttpClient) {
         lastMonthProductCost: number;
       }>('/products/warehouse-stats'),
     getById: (id: string) => api.get<Product>(`/products/${id}`),
+    internalBarcode: (id: string) =>
+      api.post<{ id: string; internalBarcode: string }>(`/products/${id}/internal-barcode`, {}),
+    internalBarcodes: (productIds: string[]) =>
+      api.post<{ products: Array<{ id: string; internalBarcode: string }> }>('/products/internal-barcodes', {
+        productIds,
+      }),
+    lookupBarcode: (params: { barcode: string; warehouseId?: string; page?: number; limit?: number }) =>
+      api.get<{
+        status: 'found' | 'ambiguous' | 'not_found';
+        matches: Product[];
+        total: number;
+        page: number;
+        limit: number;
+      }>('/products/lookup-barcode', { params }),
     create: (data: CreateProductRequest) => api.post<Product>('/products', data),
     usedIntake: (
       data: Omit<CreateProductRequest, 'stock' | 'supplierId' | 'isBundle' | 'bundleItems'> & {

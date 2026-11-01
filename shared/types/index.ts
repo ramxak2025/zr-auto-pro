@@ -1921,6 +1921,8 @@ export interface Product {
   warrantyDays: number | null;
   /** EAN-13 / QR / custom barcode. Null if not set. */
   barcode?: string | null;
+  /** Immutable server-assigned Code128 label code; factory barcode stays separate. */
+  internalBarcode?: string | null;
   /**
    * 172 (2026-09-30) — адрес хранения: ячейка склада, в которой лежит товар
    * ({@link StorageCell}). Один товар — одна ячейка; ячейка принадлежит тому же
