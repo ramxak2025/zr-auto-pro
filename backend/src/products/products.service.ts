@@ -1,6 +1,7 @@
 import { rethrowBarcodeReservationError } from './barcode-reservation-policy';
 import { CreateProductDto } from './dto/create-product.dto';
 import { decimal, stockUnits } from '../suppliers/procurement-money';
+import { searchPage } from '../common/smart-search';
 import { kitConflict } from '../product-kits/kit-stock';
 import { productPhotos, validateProductPhotos } from './product-photos';
 import { lockMotivation } from '../motivation/motivation-rules';
@@ -212,7 +213,7 @@ export class ProductsService {
 
   async getAll(tenantID: string, query: any, actor?: ProductActor) {
     const canSeeCost = this.canSeeCost(actor);
-    const page = parseInt(query.page) || 1;
+    const page = Math.max(1, parseInt(query.page) || 1);
     // Cap 10 000 (not lower): the mobile warehouse picker legitimately fetches
     // the full catalogue today — see cap-limit.ts.
     const limit = capLimit(query.limit, 100, 10000);
@@ -224,13 +225,6 @@ export class ProductsService {
       where += ' AND p.min_stock > 0 AND p.stock <= p.min_stock';
     const params: any[] = [tenantID];
     let idx = 2;
-
-    if (search) {
-      // 172 — поиск находит и по коду ячейки («A-01-03» → всё, что лежит на этой полке).
-      where += ` AND (p.name ILIKE $${idx} OR p.barcode ILIKE $${idx} OR sc.code ILIKE $${idx})`;
-      params.push(`%${search}%`);
-      idx++;
-    }
 
     // 172 — «содержимое ячейки»: uuid ячейки либо 'none' (товары без адреса). Всё
     // остальное — мусор от битых клиентов ('undefined', ' '): фильтр не применяем,
@@ -265,23 +259,18 @@ export class ProductsService {
     // ФИЛИАЛА сессии: устаревший id склада другого филиала даёт пустоту, а не
     // чужой товар.
     where += warehousePointFilterSql('p', pointId, params);
-    idx = params.length + 1;
 
-    // JOIN ячеек нужен и счётчику: `where` может ссылаться на sc.code (поиск).
-    const countResult = await this.pool.query(
-      `SELECT COUNT(*) as total FROM products p ${CELL_JOIN_SQL} WHERE ${where}`,
+    const { rows, total } = await searchPage(this.pool, {
+      select: `p.*, s.name AS supplier_name, ${CELL_COLUMNS_SQL}`,
+      from: `FROM products p LEFT JOIN suppliers s ON s.id=p.supplier_id AND s.tenant_id=p.tenant_id ${CELL_JOIN_SQL}`,
+      where,
       params,
-    );
-    const total = parseInt(countResult.rows[0].total);
-
-    params.push(limit, offset);
-    const { rows } = await this.pool.query(
-      `SELECT p.*, s.name as supplier_name, ${CELL_COLUMNS_SQL}
-       FROM products p LEFT JOIN suppliers s ON s.id = p.supplier_id
-       ${CELL_JOIN_SQL}
-       WHERE ${where} ORDER BY p.name, p.id LIMIT $${idx} OFFSET $${idx + 1}`,
-      params,
-    );
+      query: search,
+      fields: ['p.name', 'p.brand', 'p.article', 'p.barcode', 'p.internal_barcode', 'sc.code', 'sc.name'],
+      order: 'name, id',
+      limit,
+      offset,
+    });
 
     // Slim payload for list responses unless explicit fields were requested.
     // `description` and `notes` are not on the products table today, but

@@ -1,3 +1,4 @@
+import { prepareSearch, searchPage } from '../common/smart-search';
 import { Injectable, Inject, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
@@ -141,74 +142,40 @@ export class ClientsService {
   }
 
   async getAll(tenantID: string, query: any, actorPoint?: string | null) {
-    const page = parseInt(query.page) || 1;
+    const page = Math.max(1, parseInt(query.page) || 1);
     const limit = capLimit(query.limit, 50, 1000);
     const offset = (page - 1) * limit;
     const search = query.search || '';
+    prepareSearch(search);
 
     let where = 'c.tenant_id = $1';
     const params: any[] = [tenantID];
 
+    const ors: string[] = [];
     if (search) {
-      // Build the OR-group dynamically so the phone branch can be omitted when
-      // the query has no digits (otherwise a `LIKE '%%'` would match every
-      // client). Param indices key off params.length, so they never drift.
-      const ors: string[] = [];
-
-      params.push(`%${search}%`);
-      ors.push(`c.full_name ILIKE $${params.length}`);
-
-      // Phone: normalise BOTH the query and the stored value to their last-10
-      // national digits, then substring-match — so «9884444485», «89884444485»,
-      // «+79884444485» and «8 (988) 444-44-85» all find the same client (#64).
-      // This is also the fix for #57 BUG A: masters typing a customer's phone in
-      // a different format than it was saved used to get zero results.
-      //
-      // TRUNK-PREFIX VARIANT (round 7 item 8c): a PARTIAL query that still
-      // carries the trunk digit — «8988», «8(988)», «7-988», «+7 988» — reduces
-      // to a key starting with 8/7 («8988»), which is NOT a substring of the
-      // stored national key («9884444485»): the leading trunk digit breaks
-      // containment, so live narrowing found nothing until the number was long
-      // enough for last-10 to shed it. Match BOTH the raw key and the key with
-      // a single leading 7/8 stripped. A fragment genuinely starting with 8/7
-      // («8444» mid-number) still matches via the raw variant — the OR only
-      // widens results.
-      // LETTER GUARD (round 7 item 8a root cause): a query with LETTERS is a
-      // plate or a name, never a phone. Without this, «Х8» extracted digit '8'
-      // and the phone branch LIKE '%8%' matched nearly every client — the
-      // 20-row page filled with phone noise and the real Х8… plate matches
-      // never reached the client, so plate suggestions "didn't work" until the
-      // query got long enough to be selective. Digits-only queries keep the
-      // full phone behaviour.
-      const hasLetters = /[a-zа-яё]/i.test(search);
-      const phoneKey = hasLetters ? '' : phoneSearchKey(search);
+      // Preserve national phone / trunk-prefix behavior. Mixed name+phone queries
+      // use ordinary all-token matching, rather than broadening to any digit.
+      const phoneKey = /[\p{L}]/u.test(search) ? '' : phoneSearchKey(search);
       if (phoneKey) {
-        const phoneVariants = new Set<string>([phoneKey]);
-        if (phoneKey.length >= 2 && (phoneKey[0] === '7' || phoneKey[0] === '8')) {
-          phoneVariants.add(phoneKey.slice(1));
-        }
-        for (const variant of phoneVariants) {
-          params.push(`%${variant}%`);
-          ors.push(`${PHONE_KEY_SQL} LIKE $${params.length}`);
+        const variants = new Set([phoneKey]);
+        if (phoneKey.length >= 2 && /^[78]/.test(phoneKey)) variants.add(phoneKey.slice(1));
+        for (const variant of variants) {
+          params.push(variant);
+          ors.push(`position($${params.length} IN right(regexp_replace(c.phone, '[^0-9]', '', 'g'),10))>0`);
         }
       }
-
-      // Plate: stored compactly (no spaces); match with spaces stripped.
-      params.push(`%${search.replace(/\s+/g, '')}%`);
+      // Identity searches remain literal; punctuation cannot act as a wildcard.
+      params.push(String(search).replace(/\s+/g, ''));
       ors.push(
-        `EXISTS (SELECT 1 FROM cars ca WHERE ca.client_id = c.id AND REPLACE(ca.plate_number, ' ', '') ILIKE $${params.length})`,
+        `EXISTS (SELECT 1 FROM cars ca WHERE ca.client_id=c.id AND ca.tenant_id=c.tenant_id AND position(lower($${params.length}) IN lower(replace(ca.plate_number,' ','')))>0)`,
       );
-
-      // 171 — VIN машин клиента: полное совпадение или подстрока ≥ 4 символов
-      // после normalizeVin (кириллица → латиница, регистр не важен) — ТОЛЬКО
-      // при включённой опции тенанта; иначе запрос дословно прежний.
       const vinFragment = normalizeVin(search);
       if (vinFragment.length >= 4 && (await this.vin.isEnabled(tenantID))) {
-        params.push(`%${vinFragment}%`);
-        ors.push(`EXISTS (SELECT 1 FROM cars ca WHERE ca.client_id = c.id AND ca.vin ILIKE $${params.length})`);
+        params.push(vinFragment);
+        ors.push(
+          `EXISTS (SELECT 1 FROM cars ca WHERE ca.client_id=c.id AND ca.tenant_id=c.tenant_id AND position($${params.length} IN ca.vin)>0)`,
+        );
       }
-
-      where += ` AND (${ors.join(' OR ')})`;
     }
 
     // 156 — раздельная база клиентов по точкам: клиенты СВОЕЙ точки + общие/
@@ -216,19 +183,26 @@ export class ClientsService {
     // база (дефолт) — фильтра нет, поведение прежнее.
     where += this.separatePointWhere('c', await this.separatePointFor(tenantID, actorPoint), params);
 
-    const countResult = await this.pool.query(`SELECT COUNT(*) as total FROM clients c WHERE ${where}`, params);
-    const total = parseInt(countResult.rows[0].total);
-
-    const limitIdx = params.length + 1;
-    params.push(limit, offset);
-    const { rows } = await this.pool.query(
-      // Retail client pinned to the top so the cash screen always shows it
-      // first; the rest are newest-first as before.
-      `SELECT c.* FROM clients c WHERE ${where}
-       ORDER BY c.is_retail DESC NULLS LAST, c.created_at DESC
-       LIMIT $${limitIdx} OFFSET $${limitIdx + 1}`,
+    const { rows, total } = await searchPage(this.pool, {
+      select: 'c.*',
+      from: 'FROM clients c',
+      where,
       params,
-    );
+      query: search,
+      fields: [
+        'c.full_name',
+        'c.phone',
+        "right(regexp_replace(c.phone, '[^0-9]', '', 'g'),10)",
+        "'7' || right(regexp_replace(c.phone, '[^0-9]', '', 'g'),10)",
+        "'8' || right(regexp_replace(c.phone, '[^0-9]', '', 'g'),10)",
+        // Name + phone tokens may match across fields. Plate/VIN stay on their
+        // existing dedicated branches above, so fuzzy never guesses identities.
+      ],
+      extraMatch: ors.length ? `(${ors.join(' OR ')})` : undefined,
+      order: 'is_retail DESC NULLS LAST, created_at DESC, id',
+      limit,
+      offset,
+    });
 
     const clients = rows.map(this.mapClient);
 

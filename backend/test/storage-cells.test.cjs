@@ -797,10 +797,15 @@ test('ProductsService.create: ячейка другого склада — 400 �
 
 test('ProductsService.getAll: поиск ищет и по коду ячейки, JOIN есть и в счётчике', async () => {
   const pool = makePool((sql) => {
-    if (/^SELECT COUNT/.test(sql)) return { rows: [{ total: '1' }] };
-    if (/^SELECT p\.\*/.test(sql)) {
-      return { rows: [productRow({ storage_cell_id: CA, storage_cell_code: 'A-1', storage_cell_name: 'Верх' })] };
-    }
+    if (/^WITH scoped/.test(sql))
+      return {
+        rows: [
+          {
+            total: 1,
+            data: [productRow({ storage_cell_id: CA, storage_cell_code: 'A-1', storage_cell_name: 'Верх' })],
+          },
+        ],
+      };
   });
   const service = new ProductsService(pool, null);
 
@@ -812,15 +817,16 @@ test('ProductsService.getAll: поиск ищет и по коду ячейки,
   assert.equal(result.data[0].storageCellId, CA);
   for (const q of pool.log) {
     assert.match(q.sql, /LEFT JOIN storage_cells sc ON sc\.id = p\.storage_cell_id/);
-    assert.match(q.sql, /OR sc\.code ILIKE \$2\)/);
-    assert.equal(q.params[1], '%a-1%');
+    assert.match(q.sql, /autexa_search_normalize\(sc\.code\)/);
+    assert.match(q.sql, /SELECT count\(\*\) FROM matched/);
+    assert.deepEqual(q.params[1][0], 'a 1');
   }
-  assert.match(pool.log[1].sql, /sc\.code AS storage_cell_code, sc\.name AS storage_cell_name/);
+  assert.match(pool.log[0].sql, /sc\.code AS storage_cell_code, sc\.name AS storage_cell_name/);
 });
 
 test('ProductsService.getAll: фильтр storageCellId — uuid | none; мусор игнорируется (не 22P02)', async () => {
   const run = async (query) => {
-    const pool = makePool((sql) => (/^SELECT COUNT/.test(sql) ? { rows: [{ total: '0' }] } : undefined));
+    const pool = makePool((sql) => (/^WITH scoped/.test(sql) ? { rows: [{ total: 0, data: [] }] } : undefined));
     await new ProductsService(pool, null).getAll(T, query, undefined);
     return pool.log[0];
   };
@@ -830,13 +836,13 @@ test('ProductsService.getAll: фильтр storageCellId — uuid | none; мус
   assert.equal(byCell.params[1], CA.toUpperCase());
 
   const withSearch = await run({ search: 'x', storageCellId: CA });
-  assert.match(withSearch.sql, /sc\.code ILIKE \$2\)/);
-  assert.match(withSearch.sql, /AND p\.storage_cell_id = \$3/);
-  assert.deepEqual(withSearch.params.slice(0, 3), [T, '%x%', CA]);
+  assert.match(withSearch.sql, /autexa_search_normalize\(sc\.code\)/);
+  assert.match(withSearch.sql, /AND p\.storage_cell_id = \$2/);
+  assert.deepEqual(withSearch.params.slice(0, 3), [T, CA, ['x']]);
 
   const none = await run({ storageCellId: 'none' });
   assert.match(none.sql, /AND p\.storage_cell_id IS NULL/);
-  assert.equal(none.params.length, 1, 'none — без параметра');
+  assert.deepEqual(none.params.slice(0, 2), [T, []], 'none — без параметра ячейки');
 
   for (const junk of ['undefined', ' ', 'null', 'A-1', 42, undefined]) {
     const q = await run({ storageCellId: junk });
