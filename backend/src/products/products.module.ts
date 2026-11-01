@@ -1,3 +1,5 @@
+import { ProductBarcodesController } from './product-barcodes.controller';
+import { ProductBarcodesService } from './product-barcodes.service';
 import { PublicProductsController } from './public-products.controller';
 import { ProductSharingService } from './product-sharing.service';
 import { UsedIntakeService } from './used-intake.service';
@@ -13,8 +15,8 @@ import { WarehouseModule } from '../warehouse/warehouse.module';
   // WarehouseModule is imported so ProductsService can reuse
   // WarehouseService.softDeleteCategories in the bulk-delete transaction.
   imports: [WarehouseModule, StockMovementsModule, WarehousesModule, UploadsModule],
-  controllers: [ProductsController, PublicProductsController],
-  providers: [ProductsService, ProductSharingService, UsedIntakeService],
+  controllers: [ProductBarcodesController, ProductsController, PublicProductsController],
+  providers: [ProductBarcodesService, ProductsService, ProductSharingService, UsedIntakeService],
   exports: [ProductsService],
 })
 export class ProductsModule {}
