@@ -119,7 +119,7 @@ export async function prepareKitCheckProducts<T extends KitCheckLine>(
       return line;
     });
   }
-  let intents = intentsFrom(rawIntents === undefined ? saved : rawIntents);
+  const intents = intentsFrom(rawIntents === undefined ? saved : rawIntents);
   if (checkId) {
     const applied = await client.query(
       "SELECT response FROM kit_operations WHERE tenant_id=$1 AND check_id=$2 AND kind='split'",
