@@ -1,3 +1,4 @@
+import { rethrowBarcodeReservationError } from './barcode-reservation-policy';
 import { BadRequestException, ConflictException, Inject, Injectable } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { validateSync } from 'class-validator';
@@ -101,6 +102,7 @@ export class UsedIntakeService {
       return response;
     } catch (error) {
       await client.query('ROLLBACK');
+      rethrowBarcodeReservationError(error);
       throw error;
     } finally {
       client.release();

@@ -75,7 +75,7 @@ export class ProductsController {
   @RequirePermission('warehouse_manage')
   @Post('import-csv')
   importCsv(@CurrentUser() user: JwtPayload, @Body() dto: { items: any[] }) {
-    return this.productsService.importCsv(user.tenantID, dto.items, actorPointId(user));
+    return this.productsService.importCsv(user.tenantID, dto.items, actorPointId(user), user.userID);
   }
 
   // Mass sell-price change (raise / lower by a percent, optional rounding).
@@ -178,7 +178,7 @@ export class ProductsController {
   @RequirePermission('warehouse_manage')
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateProductDto) {
-    return this.productsService.create(user.tenantID, dto, actorPointId(user));
+    return this.productsService.create(user.tenantID, dto, actorPointId(user), undefined, user.userID);
   }
 
   @Get(':id/movements')

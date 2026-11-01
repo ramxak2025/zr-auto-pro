@@ -1009,6 +1009,12 @@ function importPool({ existing = [], cells = {} } = {}) {
   return makePool((sql, params) => {
     if (/^SELECT \(SELECT/.test(sql)) return { rows: [{ id: W1 }] };
     if (/^SELECT id, name(?:, assembly_id)? FROM products/.test(sql)) return { rows: existing };
+    if (/^SELECT id,stock,warehouse_id FROM products/.test(sql))
+      return {
+        rows: existing
+          .filter((row) => params[1].includes(row.id))
+          .map((row) => ({ id: row.id, stock: row.stock ?? '0', warehouse_id: W1 })),
+      };
     if (/^SELECT u\.code AS requested, sc\.id/.test(sql)) {
       return { rows: params[1].filter((code) => cells[code]).map((code) => ({ requested: code, id: cells[code] })) };
     }

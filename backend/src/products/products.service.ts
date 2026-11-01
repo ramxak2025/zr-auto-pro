@@ -1,3 +1,6 @@
+import { rethrowBarcodeReservationError } from './barcode-reservation-policy';
+import { CreateProductDto } from './dto/create-product.dto';
+import { decimal, stockUnits } from '../suppliers/procurement-money';
 import { kitConflict } from '../product-kits/kit-stock';
 import { productPhotos, validateProductPhotos } from './product-photos';
 import { lockMotivation } from '../motivation/motivation-rules';
@@ -414,8 +417,36 @@ export class ProductsService {
     return this.mapProduct(rows[0], this.canSeeCost(actor));
   }
 
-  async create(tenantID: string, dto: any, pointId: string | null = null, transaction?: PoolClient) {
-    const db = transaction ?? this.pool;
+  async create(
+    tenantID: string,
+    dto: any,
+    pointId: string | null = null,
+    transaction?: PoolClient,
+    userId: string | null = null,
+  ) {
+    if (transaction) return this.createProductTx(tenantID, dto, pointId, transaction, userId);
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await this.createProductTx(tenantID, dto, pointId, client, userId);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      rethrowBarcodeReservationError(error);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async createProductTx(
+    tenantID: string,
+    dto: CreateProductDto,
+    pointId: string | null,
+    db: PoolClient,
+    userId: string | null,
+  ) {
     // If a supplier is referenced, it must belong to the caller's tenant.
     if (dto.supplierId) {
       await this.assertSupplierInTenant(dto.supplierId, tenantID, db);
@@ -454,11 +485,43 @@ export class ProductsService {
         JSON.stringify(photos),
       ],
     );
+    await this.recordInventoryEffectTx(db, tenantID, userId, rows[0], 0, 'Начальный остаток', true);
     return this.mapProduct({
       ...rows[0],
       storage_cell_code: cell?.code ?? null,
       storage_cell_name: cell?.name ?? null,
     });
+  }
+
+  /** Writes only the effect that actually committed; no debt, expense or legacy backfill. */
+  private async recordInventoryEffectTx(
+    client: PoolClient,
+    tenantId: string,
+    userId: string | null,
+    product: { id: string; stock: string | number; warehouse_id: string | null },
+    beforeStock: string | number | null,
+    reason: string,
+    opening = false,
+  ) {
+    const after = stockUnits(product.stock ?? 0),
+      before = beforeStock === null ? null : stockUnits(beforeStock);
+    if (before !== null && before === after) return;
+    const delta = before === null ? after : after - before;
+    await client.query(
+      `INSERT INTO stock_movements(product_id,type,quantity,stock_before,stock_after,reason,tenant_id,user_id,warehouse_id)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [
+        product.id,
+        opening && delta > 0n ? 'income' : 'inventory',
+        decimal(after, 3),
+        before === null ? null : decimal(before, 3),
+        decimal(after, 3),
+        reason,
+        tenantId,
+        userId,
+        product.warehouse_id,
+      ],
+    );
   }
 
   /**
@@ -674,14 +737,19 @@ export class ProductsService {
       vals.push(id, tenantID);
       // 172 — CTE вместо голого UPDATE ... RETURNING *: тем же запросом подтягиваем код
       // и подпись ячейки, чтобы ответ PATCH не расходился с GET (без лишнего круга в БД).
-      const { rows } = await db.query(
-        `WITH upd AS (
+      const { rows } = await db
+        .query(
+          `WITH upd AS (
            UPDATE products SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx} RETURNING *
          )
          SELECT upd.*, sc.code AS storage_cell_code, sc.name AS storage_cell_name
            FROM upd LEFT JOIN storage_cells sc ON sc.id = upd.storage_cell_id`,
-        vals,
-      );
+          vals,
+        )
+        .catch((error: unknown) => {
+          rethrowBarcodeReservationError(error);
+          throw error;
+        });
       if (rows.length === 0) throw new NotFoundException({ message: 'Товар не найден' });
       mainRow = rows[0];
 
@@ -1452,7 +1520,7 @@ export class ProductsService {
     return [header, ...lines].join('\n');
   }
 
-  async importCsv(tenantID: string, items: unknown, pointId: string | null = null) {
+  async importCsv(tenantID: string, items: unknown, pointId: string | null = null, userId: string | null = null) {
     this.logger.log(`[importCsv] received ${Array.isArray(items) ? items.length : 0} items for tenant ${tenantID}`);
 
     // Top-level try/catch so we always return a meaningful error instead of 500.
@@ -1601,6 +1669,17 @@ export class ProductsService {
           for (const row of cellRows) cellIdByCode.set(row.requested, row.id);
         }
 
+        const existingIds = [...new Set(existingMap.values())].sort();
+        const lockedExisting = existingIds.length
+          ? (
+              await client.query(
+                'SELECT id,stock,warehouse_id FROM products WHERE tenant_id=$1 AND id=ANY($2::uuid[]) AND warehouse_id IS NOT DISTINCT FROM $3::uuid AND deleted_at IS NULL ORDER BY id FOR UPDATE',
+                [tenantID, existingIds, importWarehouseId],
+              )
+            ).rows
+          : [];
+        const existingBefore = new Map(lockedExisting.map((row) => [row.id, row]));
+
         // Batch INSERT new items — chunk by 100 to stay under param limit (65535/10 ≈ 6.5k max).
         const newItems = normalized.filter((r) => !existingMap.has(r.name));
         for (let i = 0; i < newItems.length; i += 100) {
@@ -1626,10 +1705,12 @@ export class ProductsService {
             );
           });
           try {
-            await client.query(
-              `INSERT INTO products (name, category, cost_price, sell_price, stock, min_stock, unit, tenant_id, warehouse_id, storage_cell_id) VALUES ${placeholders.join(', ')}`,
+            const inserted = await client.query(
+              `INSERT INTO products (name, category, cost_price, sell_price, stock, min_stock, unit, tenant_id, warehouse_id, storage_cell_id) VALUES ${placeholders.join(', ')} RETURNING id,stock,warehouse_id`,
               values,
             );
+            for (const row of inserted.rows)
+              await this.recordInventoryEffectTx(client, tenantID, userId, row, 0, 'Импорт товаров', true);
             created += chunk.length;
           } catch (err) {
             // Full driver error goes to the server log only — raw DB error
@@ -1639,6 +1720,9 @@ export class ProductsService {
             this.logger.error(`[importCsv] batch INSERT failed at chunk ${i}-${i + chunk.length}: ${msg}`);
             skipped += chunk.length;
             if (errors.length < 5) errors.push(`Строки ${i + 1}–${i + chunk.length}: не удалось создать товары`);
+            // A failed SQL statement aborts PostgreSQL's transaction: never return
+            // invented partial-success counts or a product without its opening.
+            throw err;
           }
         }
 
@@ -1646,14 +1730,20 @@ export class ProductsService {
         const updateItems = normalized.filter((r) => existingMap.has(r.name));
         for (const it of updateItems) {
           const existingId = existingMap.get(it.name);
+          const before = existingBefore.get(existingId);
+          if (!before) {
+            skipped++;
+            if (errors.length < 5) errors.push(`«${it.name}»: товар перемещён или удалён, повторите импорт`);
+            continue;
+          }
           try {
             // 172 — пустая колонка «Ячейка» адрес не меняет (COALESCE держит прежний).
-            await client.query(
+            const changed = await client.query(
               `UPDATE products SET category=$3, cost_price=CASE WHEN $10 THEN $4 ELSE cost_price END, sell_price=CASE WHEN $11 THEN $5 ELSE sell_price END,
                       cost_price_is_placeholder=CASE WHEN $10 THEN false ELSE cost_price_is_placeholder END,
                       sell_price_is_placeholder=CASE WHEN $11 THEN false ELSE sell_price_is_placeholder END, stock=$6, min_stock=$7, unit=$8,
                       storage_cell_id=COALESCE($9::uuid, storage_cell_id)
-                WHERE id=$1 AND tenant_id=$2`,
+                WHERE id=$1 AND tenant_id=$2 RETURNING id,stock,warehouse_id`,
               [
                 existingId,
                 tenantID,
@@ -1668,6 +1758,15 @@ export class ProductsService {
                 it.hasSellPrice,
               ],
             );
+            if (changed.rows[0])
+              await this.recordInventoryEffectTx(
+                client,
+                tenantID,
+                userId,
+                changed.rows[0],
+                before.stock,
+                'Импорт товаров',
+              );
             updated++;
           } catch (err) {
             // Same rule as above: log the raw error, return a sanitized one.
@@ -1675,12 +1774,14 @@ export class ProductsService {
             this.logger.error(`[importCsv] UPDATE failed for "${it.name}": ${msg}`);
             skipped++;
             if (errors.length < 5) errors.push(`«${it.name}»: не удалось обновить товар`);
+            throw err;
           }
         }
 
         await client.query('COMMIT');
       } catch (err) {
         await client.query('ROLLBACK');
+        rethrowBarcodeReservationError(err);
         throw err;
       } finally {
         client.release();
@@ -1689,7 +1790,7 @@ export class ProductsService {
       this.logger.log(`[importCsv] done: ${created} created, ${updated} updated, ${skipped} skipped`);
       return { created, updated, skipped, total: created + updated, errors };
     } catch (err) {
-      if (err instanceof BadRequestException) throw err;
+      if (err instanceof BadRequestException || err instanceof ConflictException) throw err;
       // Raw DB/driver error text stays in the server log; the client gets a
       // generic message (no schema/constraint internals leak).
       const msg = err instanceof Error ? err.message : 'неизвестная ошибка';
