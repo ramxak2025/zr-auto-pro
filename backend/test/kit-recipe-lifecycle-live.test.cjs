@@ -122,3 +122,23 @@ test('exhausted physical batches leave low-stock alerts while ordinary zero-stoc
  const ids=(await f.run(()=>f.products.getLowStock(f.tenant,f.actor))).map(p=>p.id);assert.ok(!ids.includes(a.productId));assert.ok(ids.includes(ordinary.id));
  assert.equal((await f.run(()=>x.kits.get(a.productId,f.actor))).quantity,0);
 },1));
+
+
+test('paid template edit credits only its own persisted exact batch quantities; shortages, other batches and drafts get no borrowed stock',options,()=>fixture(async f=>{
+ const x=await setup(f),a=await x.assemble({quantity:2});await x.save(a);const line=(await x.read())[0].products[0];
+ const sale=await x.sale(line),old=sale.products[0];
+ assert.equal(Number((await f.q('SELECT stock FROM products WHERE id=$1',[a.productId]))[0].stock),1);
+ await assert.rejects(f.run(()=>x.checks.update(sale.id,f.tenant,'director',{products:[old,{...line,quantity:2}]},f.owner,f.actor)),e=>e.getResponse().code==='TEMPLATE_KIT_BATCH_CHANGED');
+ const b=await x.assemble({quantity:1,recipeId:a.recipeId,recipeVersion:1});
+ const selection=(await x.read())[0].products[0],pickB=selection.kitResolution.candidates.find(c=>c.productId===b.productId);
+ const newB={...selection,productId:b.productId,quantity:2,sellPrice:pickB.sellPrice,sourceTemplateProduct:{...selection.sourceTemplateProduct,expectedAssemblyRevision:pickB.revision}};
+ await assert.rejects(f.run(()=>x.checks.update(sale.id,f.tenant,'director',{products:[old,newB]},f.owner,f.actor)),e=>e.getResponse().code==='TEMPLATE_KIT_BATCH_CHANGED');
+ assert.equal(Number((await f.q('SELECT stock FROM products WHERE id=$1',[b.productId]))[0].stock),1);
+ const edited=await f.run(()=>x.checks.update(sale.id,f.tenant,'director',{products:[old,line]},f.owner,f.actor));
+ assert.equal(edited.products.reduce((sum,p)=>sum+p.quantity,0),2);assert.equal(edited.productCostTotal,100);
+ assert.equal(Number((await f.q('SELECT stock FROM products WHERE id=$1',[a.productId]))[0].stock),0);
+ const fresh=(await x.read())[0].products[0];assert.equal(fresh.productId,b.productId);
+ const draft=await x.sale(fresh,{isDeferred:true});
+ await assert.rejects(f.run(()=>x.checks.update(draft.id,f.tenant,'director',{products:[draft.products[0],fresh]},f.owner,f.actor)),e=>e.getResponse().code==='TEMPLATE_KIT_BATCH_CHANGED');
+ assert.equal(Number((await f.q('SELECT stock FROM products WHERE id=$1',[b.productId]))[0].stock),1);
+},1));

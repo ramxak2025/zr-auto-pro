@@ -58,9 +58,28 @@ export async function resolveConfirmedProductCosts(
         [tenantId, selected.map((line) => line.productId)],
       )
     ).rows;
+    // A paid edit replaces this same locked check's footprint. Its persisted
+    // old stock is restored later in the transaction, so credit exactly that
+    // product/batch here. Drafts, returned/deleted and other checks earn no credit.
+    const credits = priorCheckId
+      ? (
+          await client.query(
+            `SELECT l.product_id,p.assembly_id,SUM(l.quantity) AS quantity
+      FROM check_product_lines l JOIN checks c ON c.id=l.check_id AND c.tenant_id=$2
+      JOIN products p ON p.id=l.product_id AND p.tenant_id=c.tenant_id
+      WHERE l.check_id=$1 AND c.is_deferred=false AND c.deleted_at IS NULL AND COALESCE(c.is_returned,false)=false
+        AND l.product_id=ANY($3::uuid[]) GROUP BY l.product_id,p.assembly_id`,
+            [priorCheckId, tenantId, selected.map((line) => line.productId)],
+          )
+        ).rows
+      : [];
     for (const line of selected) {
       const expected = templateKitBatch(line)!,
         batch = batches.find((row) => row.id === line.productId);
+      const credit = Number(
+        credits.find((row) => row.product_id === line.productId && row.assembly_id === expected.assemblyId)?.quantity ??
+          0,
+      );
       const quantity = lines
         .filter((item) => item.productId === line.productId)
         .reduce((sum, item) => sum + Number(item.quantity ?? 1), 0);
@@ -73,7 +92,7 @@ export async function resolveConfirmedProductCosts(
         batch.assembly_revision !== expected.expectedRevision ||
         batch.warehouse_id !== expected.warehouseId ||
         (expected.pointId !== null && batch.point_id !== expected.pointId) ||
-        Number(batch.stock) < quantity
+        Number(batch.stock) + credit < quantity
       )
         throw new ConflictException({
           code: 'TEMPLATE_KIT_BATCH_CHANGED',
