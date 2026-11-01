@@ -95,7 +95,7 @@ export async function loadAnalysis(
     warehouseTiers = `, 'warehouse_tiers', (SELECT COALESCE(jsonb_agg(w ORDER BY tier), '[]'::jsonb) FROM (
       SELECT *, CASE WHEN SUM(value) OVER () > 0 THEN value / SUM(value) OVER () * 100 ELSE 0 END AS pct FROM (
         SELECT COALESCE(c.tier, 'C') AS tier, COUNT(*)::int AS count,
-               COALESCE(SUM(p.stock * p.cost_price), 0) AS value
+               COALESCE(SUM(p.stock * COALESCE(p.assembly_exact_cost,p.cost_price)), 0) AS value
           FROM products p LEFT JOIN classified c ON c.entity_id = p.id::text
          WHERE p.tenant_id = $1 AND p.id = ANY(${productIds})
          GROUP BY COALESCE(c.tier, 'C')

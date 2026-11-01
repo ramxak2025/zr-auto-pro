@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import { cents, decimal, positiveQuantity, stockUnits } from '../suppliers/procurement-money';
 
 export interface KitProduct {
+  assembly_exact_cost?: string | null;
   id: string;
   name: string;
   unit: string | null;
@@ -26,6 +27,16 @@ export interface KitProduct {
   barcode: string | null;
   warranty_days: number | null;
   supplier_id: string | null;
+}
+/** Exact basis is server-only proof; currency rounds once after line quantity. */
+export const KIT_EXACT_UNIT_COST = Symbol('exact kit unit cost');
+export function exactKitLineCost(unitCost: string, quantity: number): number {
+  if (!/^\d+(?:\.\d{1,5})?$/.test(unitCost)) throw new BadRequestException('Некорректная себестоимость комплекта');
+  const [whole, fraction = ''] = unitCost.split('.');
+  const unit = BigInt(whole) * 100000n + BigInt(fraction.padEnd(5, '0'));
+  const amount = unit * positiveQuantity(quantity);
+  // 5dp unit basis × 3dp quantity -> 8dp RUB -> 2dp posted currency, half up.
+  return Number(decimal((amount + 500000n) / 1000000n, 2));
 }
 export interface AssemblyComponent {
   source_product_id: string;

@@ -235,15 +235,10 @@ export class ProductKitsService {
       );
       costMilliCents += cents(product.cost_price) * positiveQuantity(component.quantity);
     }
-    if (costMilliCents % 1000n !== 0n)
-      throw new ConflictException({
-        code: 'KIT_COST_PRECISION',
-        exactCost: decimal(costMilliCents, 5),
-        message:
-          'Сборка состава с долей копейки в себестоимости пока недоступна. Количество компонентов менять не требуется',
-      });
-    const unitCost = Number(decimal(costMilliCents / 1000n, 2));
-    cents(unitCost);
+    const exactUnitCost = decimal(costMilliCents, 5);
+    const unitCost = Number(exactUnitCost);
+    const legacyCost = Number(decimal((costMilliCents + 500n) / 1000n, 2));
+    cents(legacyCost);
     await kitWrite(client);
     const product = await this.products.create(
       actor.tenantID,
@@ -252,7 +247,7 @@ export class ProductKitsService {
         warehouseId: dto.warehouseId,
         category: dto.category,
         storageCellId: dto.storageCellId,
-        costPrice: unitCost,
+        costPrice: legacyCost,
         sellPrice: dto.sellPrice,
         stock: 0,
         isBundle: true,
@@ -279,11 +274,10 @@ export class ProductKitsService {
         actor.userID,
       ],
     );
-    await client.query('UPDATE products SET assembly_id=$3,assembly_revision=1 WHERE id=$1 AND tenant_id=$2', [
-      product.id,
-      actor.tenantID,
-      assemblyId,
-    ]);
+    await client.query(
+      'UPDATE products SET assembly_id=$3,assembly_revision=1,assembly_exact_cost=$4 WHERE id=$1 AND tenant_id=$2',
+      [product.id, actor.tenantID, assemblyId, exactUnitCost],
+    );
     for (const component of dto.components) {
       const source = sources.get(component.productId)!;
       await client.query(

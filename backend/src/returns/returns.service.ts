@@ -129,7 +129,7 @@ export class ReturnsService {
       // drives the default refund for partial scope (money-audit M6), the cost
       // side drives the COGS reversal for warehouse returns (money-audit C1).
       const allProductLines = await client.query(
-        `SELECT id, product_id, quantity, sell_price, cost_price, total_sell, total_cost, kit_source
+        `SELECT id, product_id, quantity, sell_price, cost_price, total_sell, total_cost, kit_source, kit_exact_unit_cost
            FROM check_product_lines WHERE check_id = $1`,
         [checkId],
       );
@@ -442,10 +442,10 @@ export class ReturnsService {
             defectAfter = mv.quantity;
             const { rows: insRows } = await client.query(
               `INSERT INTO products (name, category, photo, photos, cost_price, sell_price, stock, min_stock, unit,
-                                     is_bundle, bundle_items, supplier_id, tenant_id, warehouse_id, warranty_days, barcode, assembly_id, assembly_revision,
+                                     is_bundle, bundle_items, supplier_id, tenant_id, warehouse_id, warranty_days, barcode, assembly_id, assembly_revision, assembly_exact_cost,
                                      brand, article, packaging, source_url, sell_price_is_placeholder, cost_price_is_placeholder)
                SELECT name, category, photo, photos, cost_price, sell_price, $3, 0, unit,
-                      is_bundle, bundle_items, supplier_id, tenant_id, $4, warranty_days, barcode, assembly_id, assembly_revision,
+                      is_bundle, bundle_items, supplier_id, tenant_id, $4, warranty_days, barcode, assembly_id, assembly_revision, assembly_exact_cost,
                       brand, article, packaging, source_url, sell_price_is_placeholder, cost_price_is_placeholder
                  FROM products WHERE id=$1 AND tenant_id=$2
                RETURNING id`,

@@ -104,6 +104,7 @@ export class ProductsService {
       isBundle: row.is_bundle || false,
       assemblyId: row.assembly_id ?? null,
       assemblyRevision: row.assembly_revision ?? 0,
+      assemblyExactCost: canSeeCost && row.assembly_exact_cost != null ? Number(row.assembly_exact_cost) : undefined,
       bundleItems: row.bundle_items || [],
       supplierId: row.supplier_id,
       warehouseId: row.warehouse_id ?? null,
@@ -351,7 +352,7 @@ export class ProductsService {
     const stockPointFilter = warehousePointFilterSql('p', pointId, stockParams);
     const { rows } = await this.pool.query(
       `SELECT
-         COALESCE(SUM(p.cost_price * p.stock), 0) as total_cost_value,
+         COALESCE(SUM(COALESCE(p.assembly_exact_cost,p.cost_price) * p.stock), 0) as total_cost_value,
          COALESCE(SUM(p.sell_price * p.stock), 0) as total_sell_value,
          COALESCE(SUM(p.stock), 0) as total_items
        FROM products p WHERE p.tenant_id = $1 AND p.deleted_at IS NULL${stockPointFilter}`,

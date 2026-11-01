@@ -1909,6 +1909,8 @@ export interface Product {
   /** Non-null only for physical, snapshotted assemblies; legacy isBundle remains metadata. */
   assemblyId?: string | null;
   assemblyRevision?: number;
+  /** Exact kit-only stock basis, manager-visible; ordinary costPrice stays two-decimal compatible. */
+  assemblyExactCost?: number;
   isBundle?: boolean;
   bundleItems?: BundleItem[];
   supplierId?: string;
@@ -2146,6 +2148,7 @@ export interface TemplateProductSource {
 }
 
 export interface CheckProductLine {
+  kitExactUnitCost?: number;
   kitSource?: { intentId: string; sourceProductId: string };
   sourceTemplateProduct?: TemplateProductSource;
   id?: string;

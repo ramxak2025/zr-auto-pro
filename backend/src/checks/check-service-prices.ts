@@ -433,6 +433,7 @@ export async function hydrateOmittedCheckLines(
       quantity: string;
       total_sell: string;
       total_cost: string;
+      kit_exact_unit_cost?: string | null;
     }>(
       `SELECT pl.* FROM check_product_lines pl JOIN checks ch ON ch.id=pl.check_id AND ch.tenant_id=$2
         WHERE pl.check_id=$1 ORDER BY pl.id`,
@@ -443,7 +444,7 @@ export async function hydrateOmittedCheckLines(
       productId: row.product_id,
       name: row.name,
       sellPrice: Number(row.sell_price),
-      costPrice: Number(row.cost_price),
+      costPrice: Number(row.kit_exact_unit_cost ?? row.cost_price),
       quantity: Number(row.quantity),
       totalSell: Number(row.total_sell),
       totalCost: Number(row.total_cost),

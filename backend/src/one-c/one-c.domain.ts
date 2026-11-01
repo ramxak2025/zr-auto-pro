@@ -23,7 +23,7 @@ import { digest, uuid } from './one-c.rules';
 
 // Only this fixed registry is interpolated into SQL. Neither bridge identifiers
 // nor metadata from a 1C database are SQL table/column names.
-const PRODUCT_FIELDS = `'name',d.name,'category',d.category,'barcode',d.barcode,'unit',d.unit,'costPrice',d.cost_price,
+const PRODUCT_FIELDS = `'name',d.name,'category',d.category,'barcode',d.barcode,'unit',d.unit,'costPrice',COALESCE(d.assembly_exact_cost,d.cost_price),
   'sellPrice',d.sell_price,'minStock',d.min_stock,'warehouseId',d.warehouse_id,'deletedAt',d.deleted_at`;
 const CLIENT_FIELDS = `'fullName',d.full_name,'phone',d.phone,'comment',d.comment`;
 const CHECK_FIELDS = `'number',d.number,'date',d.date,'masterId',d.master_id,'clientId',d.client_id,
@@ -31,7 +31,7 @@ const CHECK_FIELDS = `'number',d.number,'date',d.date,'masterId',d.master_id,'cl
   'services',COALESCE((SELECT jsonb_agg(jsonb_build_object('serviceId',l.service_id,'masterId',l.master_id,
     'name',l.name,'price',l.price,'quantity',l.quantity) ORDER BY l.id) FROM check_service_lines l WHERE l.check_id=d.id),'[]'::jsonb),
   'products',COALESCE((SELECT jsonb_agg(jsonb_build_object('productId',l.product_id,'name',l.name,
-    'sellPrice',l.sell_price,'costPrice',l.cost_price,'quantity',l.quantity) ORDER BY l.id) FROM check_product_lines l WHERE l.check_id=d.id),'[]'::jsonb)`;
+    'sellPrice',l.sell_price,'costPrice',COALESCE(l.kit_exact_unit_cost,l.cost_price),'quantity',l.quantity) ORDER BY l.id) FROM check_product_lines l WHERE l.check_id=d.id),'[]'::jsonb)`;
 const REGISTRY: Record<EntityType, { from: string; scope: string; fields: string }> = {
   products: {
     from: 'products d JOIN warehouses w ON w.id=d.warehouse_id AND w.tenant_id=d.tenant_id',

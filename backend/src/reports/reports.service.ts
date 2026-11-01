@@ -465,13 +465,13 @@ export class ReportsService {
     const { rows } = await this.pool.query(
       `SELECT
          COALESCE(SUM(CASE WHEN sm.type = 'defect_transfer' THEN sm.quantity ELSE 0 END), 0) as defect_qty,
-         COALESCE(SUM(CASE WHEN sm.type = 'defect_transfer' THEN sm.quantity * p.cost_price ELSE 0 END), 0) as defect_value,
+         COALESCE(SUM(CASE WHEN sm.type = 'defect_transfer' THEN sm.quantity * COALESCE(p.assembly_exact_cost,p.cost_price) ELSE 0 END), 0) as defect_value,
          COALESCE(SUM(CASE WHEN sm.type = 'writeoff' THEN sm.quantity ELSE 0 END), 0) as writeoff_qty,
-         COALESCE(SUM(CASE WHEN sm.type = 'writeoff' THEN sm.quantity * p.cost_price ELSE 0 END), 0) as writeoff_value,
+         COALESCE(SUM(CASE WHEN sm.type = 'writeoff' THEN sm.quantity * COALESCE(p.assembly_exact_cost,p.cost_price) ELSE 0 END), 0) as writeoff_value,
          COALESCE(SUM(CASE WHEN sm.type = 'writeoff' AND sm.record_as_expense = true THEN sm.quantity ELSE 0 END), 0) as writeoff_expensed_qty,
-         COALESCE(SUM(CASE WHEN sm.type = 'writeoff' AND sm.record_as_expense = true THEN sm.quantity * p.cost_price ELSE 0 END), 0) as writeoff_expensed_value,
+         COALESCE(SUM(CASE WHEN sm.type = 'writeoff' AND sm.record_as_expense = true THEN sm.quantity * COALESCE(p.assembly_exact_cost,p.cost_price) ELSE 0 END), 0) as writeoff_expensed_value,
          COALESCE(SUM(CASE WHEN sm.type = 'defect_return_to_supplier' THEN sm.quantity ELSE 0 END), 0) as returned_qty,
-         COALESCE(SUM(CASE WHEN sm.type = 'defect_return_to_supplier' THEN sm.quantity * p.cost_price ELSE 0 END), 0) as returned_value
+         COALESCE(SUM(CASE WHEN sm.type = 'defect_return_to_supplier' THEN sm.quantity * COALESCE(p.assembly_exact_cost,p.cost_price) ELSE 0 END), 0) as returned_value
        FROM stock_movements sm
        JOIN products p ON p.id = sm.product_id
        WHERE sm.tenant_id = $1

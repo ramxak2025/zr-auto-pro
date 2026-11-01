@@ -29,7 +29,13 @@ async function kitFixture(f, work) {
   const assemble = (more = {}) => f.run(() => kits.assemble(input(more), f.actor));
   const stock = async (id) => Number((await f.q('SELECT stock FROM products WHERE id=$1', [id]))[0].stock);
   const value = async () =>
-    Number((await f.q('SELECT SUM(stock*cost_price) value FROM products WHERE tenant_id=$1', [f.tenant]))[0].value);
+    Number(
+      (
+        await f.q('SELECT SUM(stock*COALESCE(assembly_exact_cost,cost_price)) value FROM products WHERE tenant_id=$1', [
+          f.tenant,
+        ])
+      )[0].value,
+    );
   await work({ kits, a, b, input, assemble, stock, value });
 }
 
@@ -126,20 +132,18 @@ test(
 );
 
 test(
-  'missing original place, insufficient stock, fractional-cent basis and generic mutation paths fail atomically',
+  'missing place, insufficient stock and generic mutations fail atomically while fine kit basis is preserved',
   options,
   () =>
     fixture((f) =>
       kitFixture(f, async (k) => {
         await assert.rejects(k.assemble({ quantity: 11 }), status(409));
         const fractional = await f.product({ name: 'Fractional cent', costPrice: 0.01, sellPrice: 1 });
-        await assert.rejects(
-          k.assemble({ components: [{ productId: fractional.id, quantity: 0.5 }] }),
-          (error) => error.getResponse().code === 'KIT_COST_PRECISION',
-        );
+        const fine = await k.assemble({ components: [{ productId: fractional.id, quantity: 0.5 }] });
+        assert.equal(fine.costPrice, 0.005);
         assert.equal(
           (await f.q('SELECT count(*)::int n FROM product_assemblies WHERE tenant_id=$1', [f.tenant]))[0].n,
-          0,
+          1,
         );
         const cell = randomUUID();
         await f.q("INSERT INTO storage_cells(id,tenant_id,warehouse_id,code) VALUES($1,$2,$3,'A-02')", [
@@ -597,4 +601,220 @@ test('split source identity retains product motivation/commission after physical
       );
     }),
   ),
+);
+
+test(
+  '0.5 × 99.99 keeps exact kit inventory basis; 1000-unit sale, edit, partial return and gross analysis round once per line',
+  options,
+  () =>
+    fixture((f) =>
+      kitFixture(f, async (k) => {
+        const hose = await f.product({ name: 'Шланг', unit: 'м', stock: 1000, costPrice: 99.99, sellPrice: 150 });
+        const before = await k.value();
+        const assembled = await k.assemble({
+          quantity: 1000,
+          sellPrice: 60,
+          components: [{ productId: hose.id, quantity: 0.5 }],
+        });
+        assert.equal(assembled.costPrice, 49.995);
+        assert.equal(await k.value(), before);
+        const read = await f.run(() => f.products.getById(assembled.productId, f.tenant, f.actor));
+        assert.equal(read.costPrice, 50);
+        assert.equal(read.assemblyExactCost, 49.995);
+        const stats = await f.run(() => f.products.getWarehouseStats(f.tenant, f.point));
+        assert.equal(stats.totalCostValue, before);
+        const { WarehouseAnalyticsService } = require('../dist/warehouse-analytics/warehouse-analytics.service');
+        const analytics = new WarehouseAnalyticsService(f.pool);
+        assert.equal(
+          (await f.run(() => analytics.getSummary(f.tenant, { period: 'month' }, f.point))).stockValueCurrent,
+          before,
+        );
+        const { ProductsBuilder } = require('../dist/reports/builder/builders/products.builder');
+        const stale = await f.run(() =>
+          new ProductsBuilder(f.pool).stale({
+            tenantId: f.tenant,
+            pointId: f.point,
+            dateFrom: '2026-01-01',
+            dateTo: '2027-01-01',
+            tz: 'Europe/Moscow',
+            refDate: '2026-11-01',
+          }),
+        );
+        assert.equal(stale.section.rows.find((row) => row._id === assembled.productId).value, 49995);
+        const checks = new ChecksService(f.pool, new WarrantyService(f.pool), new ClientsService(f.pool));
+        let sale = await f.run(() =>
+          checks.create(
+            f.tenant,
+            f.owner,
+            'director',
+            {
+              masterId: f.owner,
+              products: [
+                {
+                  productId: assembled.productId,
+                  name: 'Шланг в комплекте',
+                  quantity: 1000,
+                  sellPrice: 60,
+                  costPrice: 0,
+                },
+              ],
+              services: [],
+              paymentMethod: 'cash',
+            },
+            f.actor,
+          ),
+        );
+        assert.equal(sale.productCostTotal, 49995);
+        assert.equal(sale.products[0].kitExactUnitCost, 49.995);
+        const saved = (
+          await f.q('SELECT cost_price,kit_exact_unit_cost,total_cost FROM check_product_lines WHERE check_id=$1', [
+            sale.id,
+          ])
+        )[0];
+        assert.equal(saved.cost_price, '50.00');
+        assert.equal(saved.kit_exact_unit_cost, '49.99500');
+        assert.equal(saved.total_cost, '49995.00');
+        sale = await f.run(() =>
+          checks.update(sale.id, f.tenant, 'director', { products: sale.products }, f.owner, f.actor),
+        );
+        assert.equal(sale.productCostTotal, 49995);
+        const { loadAnalysis } = require('../dist/reports/builder/analysis-query');
+        const ctx = {
+          tenantId: f.tenant,
+          pointId: f.point,
+          dateFrom: '2026-01-01',
+          dateTo: '2027-01-01',
+          tz: 'Europe/Moscow',
+          days: 366,
+        };
+        const gross = await f.run(() => loadAnalysis(f.pool, ctx, { kind: 'products', basis: 'gross' }));
+        assert.equal(gross.totals.cost, 49995);
+        assert.equal(gross.totals.gross, 10005);
+        const returns = new ReturnsService(f.pool, new WarehousesService(f.pool));
+        await f.run(() =>
+          returns.createReturn(
+            f.tenant,
+            f.owner,
+            sale.id,
+            {
+              destination: 'warehouse',
+              scope: 'partial',
+              lines: [{ productLineId: sale.products[0].id, quantity: 1 }],
+            },
+            f.actor,
+          ),
+        );
+        assert.equal(await k.stock(assembled.productId), 1);
+        assert.equal((await f.run(() => checks.getById(sale.id, f.tenant, f.actor))).productCostTotal, 49945);
+        const afterReturn = await f.run(() => loadAnalysis(f.pool, ctx, { kind: 'products', basis: 'gross' }));
+        assert.equal(afterReturn.totals.cost, 49945);
+        assert.equal(afterReturn.totals.gross, 9995);
+        const inventory = (
+          await f.q('SELECT stock*assembly_exact_cost AS value FROM products WHERE id=$1', [assembled.productId])
+        )[0];
+        assert.equal(Number(inventory.value), 49.995);
+      }),
+    ),
+);
+
+test(
+  'fine-basis whole-kit defect return and disassembly conserve the exact original fractional component value',
+  options,
+  () =>
+    fixture((f) =>
+      kitFixture(f, async (k) => {
+        const hose = await f.product({ name: 'Трубка', unit: 'м', stock: 1, costPrice: 99.99, sellPrice: 150 }),
+          before = await k.value();
+        const assembled = await k.assemble({ sellPrice: 60, components: [{ productId: hose.id, quantity: 0.5 }] });
+        assert.equal(await k.value(), before);
+        const checks = new ChecksService(f.pool, new WarrantyService(f.pool), new ClientsService(f.pool));
+        const sale = await f.run(() =>
+          checks.create(
+            f.tenant,
+            f.owner,
+            'director',
+            {
+              masterId: f.owner,
+              products: [{ productId: assembled.productId, name: 'Трубка', quantity: 1, sellPrice: 60 }],
+              services: [],
+              paymentMethod: 'cash',
+            },
+            f.actor,
+          ),
+        );
+        assert.equal(sale.productCostTotal, 50);
+        const returns = new ReturnsService(f.pool, new WarehousesService(f.pool));
+        await f.run(() =>
+          returns.createReturn(
+            f.tenant,
+            f.owner,
+            sale.id,
+            { destination: 'defect', scope: 'full', reason: 'Повреждение' },
+            f.actor,
+          ),
+        );
+        assert.equal(await k.value(), before);
+        const defect = (
+          await f.q(
+            "SELECT p.id,p.assembly_exact_cost FROM products p JOIN warehouses w ON w.id=p.warehouse_id WHERE p.tenant_id=$1 AND p.assembly_id=$2 AND w.kind='defect'",
+            [f.tenant, assembled.assemblyId],
+          )
+        )[0];
+        assert.equal(defect.assembly_exact_cost, '49.99500');
+        await f.run(() =>
+          k.kits.disassemble(defect.id, { requestId: randomUUID(), expectedRevision: 1, quantity: 1 }, f.actor),
+        );
+        assert.equal(await k.stock(hose.id), 1);
+        assert.equal(await k.value(), before);
+      }),
+    ),
+);
+
+test(
+  'unused new split intent and over-allocated duplicate source lines roll back; ordinary same-SKU replacement keeps separate cost basis',
+  options,
+  () =>
+    fixture((f) =>
+      kitFixture(f, async (k) => {
+        const assembled = await k.assemble(),
+          x = splitFlows(f, k, assembled);
+        await assert.rejects(
+          x.create(
+            x.input({ products: [{ productId: k.a.id, name: 'Replacement only', quantity: 1, sellPrice: 7000 }] }),
+          ),
+          status(400),
+        );
+        await assert.rejects(
+          x.create(
+            x.input({
+              products: [
+                { ...x.lines[0], quantity: 0.75 },
+                { ...x.lines[0], quantity: 0.75 },
+              ],
+            }),
+          ),
+          status(400),
+        );
+        assert.equal(await k.stock(assembled.productId), 1);
+        assert.equal(
+          (await f.q("SELECT count(*)::int n FROM kit_operations WHERE tenant_id=$1 AND kind='split'", [f.tenant]))[0]
+            .n,
+          0,
+        );
+        await f.run(() => f.products.update(k.a.id, f.tenant, { costPrice: 9000 }, f.owner, f.point));
+        const sale = await x.create(
+          x.input({
+            discount: 0,
+            products: [x.lines[0], { productId: k.a.id, name: 'Replacement', quantity: 1, sellPrice: 7000 }],
+          }),
+        );
+        assert.equal(sale.productCostTotal, 13000);
+        assert.deepEqual(
+          sale.products.map((line) => line.costPrice).sort((a, b) => a - b),
+          [4000, 9000],
+        );
+        assert.equal(await k.stock(k.a.id), 8);
+        assert.equal(await k.stock(k.b.id), 10);
+      }),
+    ),
 );

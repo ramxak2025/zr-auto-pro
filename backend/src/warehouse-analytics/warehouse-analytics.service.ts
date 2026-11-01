@@ -149,7 +149,7 @@ export class WarehouseAnalyticsService {
            p.tenant_id,
            p.warehouse_id,
            $1::date,
-           COALESCE(SUM(p.cost_price * p.stock), 0),
+           COALESCE(SUM(COALESCE(p.assembly_exact_cost,p.cost_price) * p.stock), 0),
            COALESCE(SUM(p.sell_price * p.stock), 0),
            COUNT(*)
          FROM products p
@@ -171,7 +171,7 @@ export class WarehouseAnalyticsService {
            p.tenant_id,
            NULL,
            $1::date,
-           COALESCE(SUM(p.cost_price * p.stock), 0),
+           COALESCE(SUM(COALESCE(p.assembly_exact_cost,p.cost_price) * p.stock), 0),
            COALESCE(SUM(p.sell_price * p.stock), 0),
            COUNT(*)
          FROM products p
@@ -219,7 +219,7 @@ export class WarehouseAnalyticsService {
     // Current totals
     const { rows: currentRows } = await this.pool.query(
       `SELECT
-         COALESCE(SUM(p.cost_price * p.stock), 0) as total_cost_value,
+         COALESCE(SUM(COALESCE(p.assembly_exact_cost,p.cost_price) * p.stock), 0) as total_cost_value,
          COALESCE(SUM(p.sell_price * p.stock), 0) as total_sell_value,
          COUNT(*) FILTER (WHERE p.deleted_at IS NULL) as items_count
        FROM products p
@@ -291,7 +291,7 @@ export class WarehouseAnalyticsService {
          p.id,
          p.name,
          p.stock,
-         p.cost_price,
+         COALESCE(p.assembly_exact_cost,p.cost_price) AS cost_price,
          COALESCE(SUM(CASE WHEN ch.id IS NOT NULL THEN cpl.quantity ELSE 0 END), 0) as sold_qty,
          COALESCE(SUM(CASE WHEN ch.id IS NOT NULL THEN cpl.total_sell ELSE 0 END), 0) as revenue,
          COALESCE(SUM(CASE WHEN ch.id IS NOT NULL THEN cpl.total_cost ELSE 0 END), 0) as cost,
@@ -322,7 +322,7 @@ export class WarehouseAnalyticsService {
     }
     const lastSaleCheckPoint = pointFilterSql('ch', pointId, lastSaleParams);
     const { rows: lastSaleRows } = await this.pool.query(
-      `SELECT p.id, p.stock, p.cost_price, MAX(ch.date) as last_sold_at
+      `SELECT p.id, p.stock, COALESCE(p.assembly_exact_cost,p.cost_price) AS cost_price, MAX(ch.date) as last_sold_at
        FROM products p
        LEFT JOIN check_product_lines cpl ON cpl.product_id = p.id
        LEFT JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL${lastSaleCheckPoint}

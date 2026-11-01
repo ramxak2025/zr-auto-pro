@@ -152,6 +152,8 @@ export async function prepareKitCheckProducts<T extends KitCheckLine>(
   );
   const operations = new Map(priorOps.rows.map((row) => [row.request_id, row]));
   const fresh = intents.filter((intent) => !operations.has(intent.intentId));
+  if (fresh.some((intent) => !products.some((line) => line.kitSource?.intentId.toLowerCase() === intent.intentId)))
+    throw new BadRequestException('Намерение разборки не используется ни одной строкой компонента');
   if (new Set(fresh.map((intent) => intent.productId)).size !== fresh.length)
     throw new BadRequestException('Объедините количество одного комплекта в одно новое намерение разборки');
   const freshRows = fresh.length

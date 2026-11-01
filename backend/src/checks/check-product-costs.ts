@@ -1,3 +1,4 @@
+import { KIT_EXACT_UNIT_COST } from '../product-kits/kit-stock';
 import { KIT_CAPTURED_COST } from '../product-kits/kit-checks';
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { PoolClient } from 'pg';
@@ -8,6 +9,7 @@ interface ProductCostInput {
   sellPrice?: number;
   quantity?: number;
   [KIT_CAPTURED_COST]?: number;
+  [KIT_EXACT_UNIT_COST]?: string;
 }
 interface SavedProductCost {
   id: string;
@@ -40,11 +42,18 @@ export async function resolveConfirmedProductCosts(
     ...new Set(lines.map((line) => line.productId).filter((id): id is string => typeof id === 'string' && !!id)),
   ];
   if (!ids.length) return result;
-  const { rows } = await client.query<{ id: string; provisional: boolean }>(
-    `SELECT id, COALESCE((to_jsonb(products)->>'cost_price_is_placeholder')::boolean, false) AS provisional
+  const { rows } = await client.query<{ id: string; provisional: boolean; assembly_exact_cost: string | null }>(
+    `SELECT id, COALESCE((to_jsonb(products)->>'cost_price_is_placeholder')::boolean, false) AS provisional, assembly_exact_cost
        FROM products WHERE tenant_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR UPDATE`,
     [tenantId, ids],
   );
+  lines.forEach((line, index) => {
+    const exact = rows.find((row) => row.id === line.productId)?.assembly_exact_cost;
+    if (exact != null) {
+      line[KIT_EXACT_UNIT_COST] = exact;
+      result.set(index, Number(exact));
+    }
+  });
   const provisional = new Set(rows.filter((row) => row.provisional).map((row) => row.id.toLowerCase()));
   if (!provisional.size) return result;
   const prior = priorCheckId

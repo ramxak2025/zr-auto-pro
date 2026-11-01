@@ -1,3 +1,4 @@
+import { KIT_EXACT_UNIT_COST, exactKitLineCost } from '../product-kits/kit-stock';
 import {
   KIT_CAPTURED_COST,
   kitCanonicalProductId,
@@ -1056,7 +1057,7 @@ export class ChecksService {
     const map: Record<string, number> = {};
     if (productIds.length === 0) return map;
     const { rows } = await client.query(
-      `SELECT p.id, p.cost_price FROM products p WHERE p.id = ANY($1) AND p.tenant_id = $2
+      `SELECT p.id, COALESCE(p.assembly_exact_cost,p.cost_price) AS cost_price FROM products p WHERE p.id = ANY($1) AND p.tenant_id = $2
          AND ($3::uuid IS NULL OR EXISTS (SELECT 1 FROM warehouses wpt
                 WHERE wpt.id = p.warehouse_id AND wpt.point_id = $3::uuid))`,
       [productIds, tenantID, pointId],
@@ -1722,6 +1723,7 @@ export class ChecksService {
       id: p.id,
       productId: p.product_id,
       kitSource: p.kit_source ?? undefined,
+      kitExactUnitCost: p.kit_exact_unit_cost == null ? undefined : Number(p.kit_exact_unit_cost),
       name: p.name,
       sellPrice: parseFloat(p.sell_price) || 0,
       costPrice: parseFloat(p.cost_price) || 0,
@@ -3272,7 +3274,9 @@ export class ChecksService {
         // Money precision (item 6): per-line sell/cost are real 2-decimal
         // amounts, so Σ(lines) matches the stored totals cent-for-cent.
         const totalSell = round2(effectiveSellPrice * (prod.quantity || 1));
-        const totalCost = round2(effectiveCostPrice * (prod.quantity || 1));
+        const totalCost = prod[KIT_EXACT_UNIT_COST]
+          ? exactKitLineCost(prod[KIT_EXACT_UNIT_COST], prod.quantity || 1)
+          : round2(effectiveCostPrice * (prod.quantity || 1));
         const productProfit = totalSell - totalCost;
         productTotal += totalSell;
         productCostTotal += totalCost;
@@ -3492,8 +3496,8 @@ export class ChecksService {
       // those locks without a SHARE→UPDATE upgrade or a counter/product cycle.
       for (const prod of productLines) {
         await client.query(
-          `INSERT INTO check_product_lines (check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost, kit_source)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+          `INSERT INTO check_product_lines (check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost, kit_source, kit_exact_unit_cost)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,(SELECT assembly_exact_cost FROM products WHERE id=$2 AND tenant_id=(SELECT tenant_id FROM checks WHERE id=$1)))`,
           [
             checkId,
             prod.productId || null,
@@ -5052,7 +5056,9 @@ export class ChecksService {
           // Money precision (item 6): per-line sell/cost are real 2-decimal
           // amounts, so Σ(lines) matches the stored totals cent-for-cent.
           const totalSell = round2(effectiveSellPrice * (prod.quantity || 1));
-          const totalCost = round2(effectiveCostPrice * (prod.quantity || 1));
+          const totalCost = prod[KIT_EXACT_UNIT_COST]
+            ? exactKitLineCost(prod[KIT_EXACT_UNIT_COST], prod.quantity || 1)
+            : round2(effectiveCostPrice * (prod.quantity || 1));
           const productProfit = totalSell - totalCost;
           productTotal += totalSell;
           productCostTotal += totalCost;
@@ -5218,7 +5224,7 @@ export class ChecksService {
 
         for (const prod of productLines) {
           await client.query(
-            `INSERT INTO check_product_lines (check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost, kit_source) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+            `INSERT INTO check_product_lines (check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost, kit_source, kit_exact_unit_cost) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,(SELECT assembly_exact_cost FROM products WHERE id=$2 AND tenant_id=(SELECT tenant_id FROM checks WHERE id=$1)))`,
             [
               id,
               prod.productId || null,
@@ -5468,7 +5474,9 @@ export class ChecksService {
           : prod.costPrice || 0;
         // Money precision (item 6) — same round2 discipline as create/fullUpdate.
         const totalSell = round2(effectiveSellPrice * (prod.quantity || 1));
-        const totalCost = round2(effectiveCostPrice * (prod.quantity || 1));
+        const totalCost = prod[KIT_EXACT_UNIT_COST]
+          ? exactKitLineCost(prod[KIT_EXACT_UNIT_COST], prod.quantity || 1)
+          : round2(effectiveCostPrice * (prod.quantity || 1));
         const productProfit = totalSell - totalCost;
         productTotal += totalSell;
         productCostTotal += totalCost;
@@ -6030,7 +6038,7 @@ export class ChecksService {
         await client.query('DELETE FROM check_product_lines WHERE check_id=$1', [id]);
         for (const prod of c.productLines) {
           await client.query(
-            `INSERT INTO check_product_lines (id, check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost, kit_source) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+            `INSERT INTO check_product_lines (id, check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost, kit_source, kit_exact_unit_cost) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,(SELECT assembly_exact_cost FROM products WHERE id=$3 AND tenant_id=(SELECT tenant_id FROM checks WHERE id=$2)))`,
             [
               prod.id,
               id,

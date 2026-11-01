@@ -9,6 +9,7 @@ type LineFact = {
   sellPrice: number;
   totalCost: number;
   totalSell: number;
+  kitExactUnitCost?: number;
   kitSource?: { intentId: string; sourceProductId: string };
 };
 interface CheckFact {
@@ -42,7 +43,7 @@ interface HistoryCapture {
 
 async function lineFacts(client: PoolClient, checkId: string): Promise<Map<string, LineFact[]>> {
   const { rows } = await client.query(
-    `SELECT product_id,name,quantity,cost_price,sell_price,total_cost,total_sell,kit_source
+    `SELECT product_id,name,quantity,cost_price,sell_price,total_cost,total_sell,kit_source,kit_exact_unit_cost
     FROM check_product_lines WHERE check_id=$1 AND product_id IS NOT NULL
     ORDER BY product_id,name,quantity,cost_price,sell_price,total_cost,total_sell`,
     [checkId],
@@ -57,6 +58,7 @@ async function lineFacts(client: PoolClient, checkId: string): Promise<Map<strin
       sellPrice: Number(row.sell_price),
       totalCost: Number(row.total_cost),
       totalSell: Number(row.total_sell),
+      ...(row.kit_exact_unit_cost == null ? {} : { kitExactUnitCost: Number(row.kit_exact_unit_cost) }),
       ...(row.kit_source ? { kitSource: row.kit_source } : {}),
     });
     result.set(row.product_id, lines);
