@@ -136,7 +136,11 @@ test(
         f.products.getAll(
           f.tenant,
           { search: 'ABCD123', warehouseId: 'all' },
-          { ...f.actor, role: 'master', permissions: {} },
+          {
+            ...f.actor,
+            role: 'master',
+            permissions: { warehouse_access: false, warehouse_manage: false, checks_create: true },
+          },
         ),
       );
       assert.equal(restricted.data[0].costPrice, 0);
@@ -266,7 +270,15 @@ test(
       assert.equal((await lookup('FACTORY123', { limit: 1, page: 2 })).total, 2);
       assert.equal((await lookup('FACTORY123', { page: 99 })).matches.length, 0);
       assert.equal((await lookup('FACTORY123', { page: 99 })).status, 'ambiguous');
-      const found = await lookup(codes.get(one.id), {}, { ...f.actor, role: 'master', permissions: {} });
+      const found = await lookup(
+        codes.get(one.id),
+        {},
+        {
+          ...f.actor,
+          role: 'master',
+          permissions: { warehouse_access: false, warehouse_manage: false, checks_create: true },
+        },
+      );
       assert.equal(found.status, 'found');
       assert.equal(found.matches[0].costPrice, 0);
       assert.equal(found.matches[0].internalBarcode, codes.get(one.id));
@@ -453,4 +465,38 @@ test(
         0,
       );
     }),
+);
+
+test(
+  'barcode allocation and POS-only lookup finish through one actual RLS connection',
+  { ...options, timeout: 5000 },
+  () =>
+    fixture(async (f) => {
+      const service = barcodeService(f),
+        product = await f.product({ barcode: 'POS-ONLY' });
+      const generated = await f.run(() => service.generate(f.tenant, [product.id], f.actor));
+      const pos = {
+        ...f.actor,
+        role: 'master',
+        permissions: { checks_create: true, warehouse_access: false, warehouse_manage: false },
+      };
+      const result = await f.run(() =>
+        service.lookup(f.tenant, { barcode: generated.products[0].internalBarcode }, pos),
+      );
+      assert.equal(result.status, 'found');
+      assert.equal(result.matches[0].id, product.id);
+      assert.equal(result.matches[0].costPrice, 0);
+      assert.equal(result.matches[0].assemblyExactCost, undefined);
+      const { ProductBarcodesController } = require('../dist/products/product-barcodes.controller');
+      const { PermissionsGuard, PERMISSION_KEY } = require('../dist/common/guards/permissions.guard');
+      const { Reflector } = require('@nestjs/core');
+      const handler = ProductBarcodesController.prototype.lookup;
+      assert.equal(Reflect.getMetadata(PERMISSION_KEY, handler), undefined);
+      const context = {
+        getHandler: () => handler,
+        getClass: () => ProductBarcodesController,
+        switchToHttp: () => ({ getRequest: () => ({ user: pos }) }),
+      };
+      assert.equal(new PermissionsGuard(new Reflector()).canActivate(context), true);
+    }, 1),
 );
