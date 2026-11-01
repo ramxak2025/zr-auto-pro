@@ -142,6 +142,7 @@ jest.mock('react-native-safe-area-context', () => ({
   SafeAreaView: 'SafeAreaView',
   useSafeAreaInsets: () => ({ bottom: 34 }),
 }));
+jest.mock('../../components/ProductKitRecipes', () => ({ __esModule: true, default: 'ProductKitRecipes' }));
 jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 jest.mock('expo-linear-gradient', () => ({ LinearGradient: 'LinearGradient' }));
 jest.mock('expo-blur', () => ({ BlurView: 'BlurView' }));
