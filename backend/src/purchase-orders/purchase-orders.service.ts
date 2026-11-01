@@ -1,3 +1,4 @@
+import { lockInvoiceReceipt, linkInvoiceReceipt } from '../supplier-invoices/invoice-receipt';
 import {
   Injectable,
   Inject,
@@ -640,6 +641,23 @@ export class PurchaseOrdersService {
       const byId = new Map(itemRows.map((r) => [r.id, r]));
       for (const itemId of deltaById.keys())
         if (!byId.has(itemId)) throw new BadRequestException({ message: 'Позиция не найдена в заказе' });
+      if (dto.invoiceDocumentId) {
+        if (paymentMode !== 'debt' || !dto.items?.length)
+          throw new BadRequestException(
+            'Накладная требует явного подтверждения строк и приёмки без автоматической оплаты',
+          );
+        await lockInvoiceReceipt(
+          client,
+          tenantID,
+          pointId,
+          dto.invoiceDocumentId,
+          po.supplier_id,
+          dto.expectedInvoiceVersion,
+          dto.invoiceLineIds,
+          dto.items.map((item) => ({ productId: byId.get(item.itemId)!.product_id as string })),
+          id,
+        );
+      }
       const productIds = [...deltaById.keys()].map((itemId) => byId.get(itemId)!.product_id as string);
       const products = await lockReceiptProducts(client, tenantID, productIds, pointId);
       const productById = new Map(products.map((p) => [p.id, p]));
@@ -748,7 +766,7 @@ export class PurchaseOrdersService {
       // auto-payment. Stock was ALREADY credited above, so this writes ledger
       // rows only (no double stock count). Same transaction ⇒ all-or-nothing.
       if (paymentMode && supplyLines.length > 0) {
-        await this.suppliers.recordOrderSupplyTx(client, tenantID, userID, {
+        const supply = await this.suppliers.recordOrderSupplyTx(client, tenantID, userID, {
           supplierId: po.supplier_id,
           purchaseOrderId: id,
           comment: 'Приёмка заказа поставщику',
@@ -758,6 +776,8 @@ export class PurchaseOrdersService {
           lines: supplyLines,
           pointId,
         });
+        if (dto.invoiceDocumentId)
+          await linkInvoiceReceipt(client, tenantID, dto.invoiceDocumentId, supply.deliveryId, dto.invoiceDocumentDate);
       }
 
       const detail = await this.loadDetail(client, id, tenantID);

@@ -1,6 +1,8 @@
 import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
+  ArrayMaxSize,
+  IsInt,
   IsArray,
   IsDateString,
   IsNumber,
@@ -20,6 +22,11 @@ export class CreateDeliveryItemDto {
 }
 export class CreateDeliveryDto {
   @IsUUID('4') supplierId!: string;
+  /** Private scanned-invoice confirmation; linked atomically with this receipt. */
+  @IsOptional() @IsUUID('4') invoiceDocumentId?: string;
+  @IsOptional() @IsDateString() invoiceDocumentDate?: string;
+  @IsOptional() @IsInt() @Min(1) expectedInvoiceVersion?: number;
+  @IsOptional() @IsArray() @ArrayMaxSize(500) @IsUUID('4', { each: true }) invoiceLineIds?: string[];
   @IsOptional() @IsUUID() requestId?: string;
   @IsOptional() @IsDateString() date?: string;
   @IsOptional() @IsString() @MaxLength(2000) comment?: string;

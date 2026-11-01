@@ -1,0 +1,114 @@
+import { randomUUID } from 'crypto';
+
+export interface InvoiceLine {
+  id: string;
+  name: string;
+  sku: string;
+  unit: string;
+  quantity: number | null;
+  price: number | null;
+  productId: string | null;
+  suggestedProductId: string | null;
+  warnings: string[];
+}
+export interface InvoiceResult {
+  date: string | null;
+  lines: InvoiceLine[];
+  warnings: string[];
+}
+interface OcrCell {
+  rowIndex: string;
+  columnIndex: string;
+  rowSpan?: string;
+  columnSpan?: string;
+  text: string;
+}
+export interface OcrAnnotation {
+  fullText?: string;
+  rotate?: string;
+  tables?: Array<{ cells?: OcrCell[] }>;
+}
+
+export const normalizeAlias = (value: string) =>
+  value
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+export const invoiceAliasKey = (line: Pick<InvoiceLine, 'name' | 'sku'>) =>
+  line.sku.trim() ? `sku:${normalizeAlias(line.sku)}` : `name:${normalizeAlias(line.name)}`;
+
+/** Parse only a complete decimal cell, never extract a plausible substring. */
+export function invoiceNumber(value: string, decimals: number, positive: boolean): number | null {
+  const normalized = value
+    .trim()
+    .replace(/[\s\u00a0\u202f]/g, '')
+    .replace(',', '.');
+  if (!new RegExp(`^\\d+(?:\\.\\d{1,${decimals}})?$`).test(normalized)) return null;
+  const number = Number(normalized);
+  return Number.isFinite(number) && number <= 999999999 && (positive ? number > 0 : number >= 0) ? number : null;
+}
+
+export function parseInvoiceTables(pages: OcrAnnotation[]): InvoiceResult {
+  const lines: InvoiceLine[] = [];
+  const dates = new Set<string>();
+  for (const page of pages) {
+    for (const match of (page.fullText ?? '').matchAll(/\b(\d{2})[./-](\d{2})[./-](\d{4})\b/g)) {
+      const date = `${match[3]}-${match[2]}-${match[1]}`;
+      const parsed = new Date(`${date}T00:00:00Z`);
+      if (Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date) dates.add(date);
+    }
+    for (const table of page.tables ?? []) {
+      const rows = new Map<number, Map<number, string>>();
+      for (const cell of table.cells ?? []) {
+        const row = Number(cell.rowIndex),
+          col = Number(cell.columnIndex);
+        if (!Number.isInteger(row) || !Number.isInteger(col) || row < 0 || row > 1000 || col < 0 || col > 100) continue;
+        if (!rows.has(row)) rows.set(row, new Map());
+        rows.get(row)!.set(col, String(cell.text ?? '').slice(0, 2000));
+      }
+      let header: { row: number; name: number; qty: number; price: number; unit: number; sku: number } | null = null;
+      for (const [row, cells] of [...rows].sort((a, b) => a[0] - b[0])) {
+        const columns = [...cells].map(([col, text]) => ({ col, text: normalizeAlias(text) }));
+        const column = (pattern: RegExp) => columns.find((c) => pattern.test(c.text))?.col ?? -1;
+        if (!header) {
+          const name = column(/наимен|номенклат|название|товар|description/);
+          const qty = column(/колич|кол во|quantity|qty/);
+          const price = column(/^(?:цена|цен[аы] за|price|стоимость единиц|закупочная)/);
+          if (name >= 0 && qty >= 0 && price >= 0)
+            header = { row, name, qty, price, unit: column(/^(?:ед|единиц|unit)/), sku: column(/артикул|sku|^код/) };
+          continue;
+        }
+        const name = (cells.get(header.name) ?? '').trim();
+        if (!name || /^(?:итого|всего|total|наименование)(?:$|\s|:)/i.test(name)) continue;
+        const quantity = invoiceNumber(cells.get(header.qty) ?? '', 3, true),
+          price = invoiceNumber(cells.get(header.price) ?? '', 2, false);
+        lines.push({
+          id: randomUUID(),
+          name,
+          sku: (cells.get(header.sku) ?? '').trim(),
+          unit: (cells.get(header.unit) ?? '').trim(),
+          quantity,
+          price,
+          productId: null,
+          suggestedProductId: null,
+          warnings: [
+            ...(quantity === null ? ['Проверьте количество'] : []),
+            ...(price === null ? ['Проверьте закупочную цену за единицу'] : []),
+          ],
+        });
+        if (lines.length > 500) throw new Error('INVOICE_TOO_MANY_LINES');
+      }
+    }
+  }
+  return {
+    date: dates.size === 1 ? [...dates][0] : null,
+    lines,
+    warnings: [
+      ...(dates.size !== 1 ? ['Проверьте дату накладной'] : []),
+      ...(!lines.length ? ['Не удалось надёжно определить таблицу товаров. Заполните поставку вручную'] : []),
+      'Перед приёмкой проверьте каждую строку, количество и закупочную цену за единицу',
+    ],
+  };
+}

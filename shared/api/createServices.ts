@@ -1,3 +1,4 @@
+import type { SupplierInvoiceDocument, ConfirmSupplierInvoice } from './supplierInvoices';
 import type { TodayEarnings, DashboardAttention } from '../types';
 import type {
   OwnerHomeProfit,
@@ -3201,4 +3202,19 @@ export function createManagerCabinetApi(api: HttpClient) {
 
 export function createDashboardApi(api: HttpClient) {
   return { attention: () => api.get<DashboardAttention>('/dashboard/attention') };
+}
+
+/** Camera photos use multipart uploads; GET image URLs require the same bearer session. */
+export function createSupplierInvoicesApi(api: HttpClient) {
+  return {
+    prepare: (supplierId: string, orderId?: string) => api.post<SupplierInvoiceDocument>('/supplier-invoices/prepare', {supplierId,orderId}),
+    get: (id: string) => api.get<SupplierInvoiceDocument>(`/supplier-invoices/${id}`),
+    uploadPage: (id: string, data: FormData) => api.post<SupplierInvoiceDocument>(`/supplier-invoices/${id}/pages`, data),
+    extract: (id: string, expectedVersion: number) => api.post<SupplierInvoiceDocument>(`/supplier-invoices/${id}/extract`, {expectedVersion}),
+    mapLine: (id: string, lineId: string, data: {expectedVersion: number; productId: string; remember?: boolean}) =>
+      api.patch<SupplierInvoiceDocument>(`/supplier-invoices/${id}/lines/${lineId}`, data),
+    setOrder: (id: string, expectedVersion: number, orderId: string|null) =>
+      api.patch<SupplierInvoiceDocument>(`/supplier-invoices/${id}/context`, {expectedVersion,orderId}),
+    confirm: (id: string, data: ConfirmSupplierInvoice) => api.post<{id:string}>(`/supplier-invoices/${id}/confirm`, data),
+  };
 }

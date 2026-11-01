@@ -1,3 +1,4 @@
+import { lockInvoiceReceipt, linkInvoiceReceipt } from '../supplier-invoices/invoice-receipt';
 import {
   Injectable,
   Inject,
@@ -623,6 +624,17 @@ export class SuppliersService {
         await client.query('COMMIT');
         return request.replay;
       }
+      if (dto.invoiceDocumentId)
+        await lockInvoiceReceipt(
+          client,
+          tenantID,
+          pointId,
+          dto.invoiceDocumentId,
+          dto.supplierId,
+          dto.expectedInvoiceVersion,
+          dto.invoiceLineIds,
+          dto.items,
+        );
       const { rows: suppliers } = await client.query('SELECT id FROM suppliers WHERE id=$1 AND tenant_id=$2', [
         dto.supplierId,
         tenantID,
@@ -701,6 +713,8 @@ export class SuppliersService {
         `UPDATE suppliers SET total_purchases=total_purchases+$1, current_debt=current_debt+$1 WHERE id=$2 AND tenant_id=$3`,
         [decimal(invoice, 2), dto.supplierId, tenantID],
       );
+      if (dto.invoiceDocumentId)
+        await linkInvoiceReceipt(client, tenantID, dto.invoiceDocumentId, id, dto.invoiceDocumentDate);
       const result = { id };
       await saveProcurementRequest(client, tenantID, dto.requestId, request.fingerprint, result);
       await client.query('COMMIT');
