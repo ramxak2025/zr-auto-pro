@@ -38,7 +38,7 @@ export class ProductSharingService {
       VALUES($1,$2,$3,$4)`,
       [tokenHash(token), actor.tenantID, id, actor.userID],
     );
-    return { token, path: `/api/public/products/${token}` };
+    return { token, path: `/p/${token}` };
   }
 
   async revoke(id: string, actor: JwtPayload) {

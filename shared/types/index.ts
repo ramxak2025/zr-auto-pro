@@ -3540,6 +3540,9 @@ export interface StockMovement {
   checkId?: string | null;
   /** Только для type='sale' (волна G): номер чека продажи. */
   checkNumber?: number | null;
+  /** Synthetic sales retain return context; customer_return movements carry the actual inbound quantity. */
+  isReturned?: boolean;
+  returnScope?: string | null;
   createdAt: string;
 }
 

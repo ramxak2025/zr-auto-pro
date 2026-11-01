@@ -1722,6 +1722,8 @@ export function createWarrantyApi(api: HttpClient) {
 
 export function createStockMovementsApi(api: HttpClient) {
   return {
+    history: (params?: { productId?: string; warehouseId?: string; type?: string; dateFrom?: string; dateTo?: string; includeSales?: boolean; cursor?: string; limit?: number }) =>
+      api.get<{ data: StockMovement[]; limit: number; snapshotAt: string; nextCursor: string | null }>('/stock-movements/history', { params }),
     list: (params?: {
       warehouseId?: string;
       productId?: string;
