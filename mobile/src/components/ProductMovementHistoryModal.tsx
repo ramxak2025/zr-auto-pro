@@ -17,11 +17,11 @@
  *   • Тема/цвета — только из semantic palette (`useColors`) + theme tokens.
  *   • Android-совместимо: общий код, без iOS-only API в JS.
  */
-import React, { useCallback } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import { Modal as RNModal, Pressable, StyleSheet, View } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { Ionicons } from '@expo/vector-icons';
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { stockMovementsApi } from '../api/services';
@@ -34,6 +34,11 @@ import { ListSkeleton } from './Skeleton';
 import EmptyState from './EmptyState';
 import QueryErrorState from './QueryErrorState';
 import type { StockMovement, StockMovementType } from '../../../shared/types';
+import { useAuth } from '../contexts/AuthContext';
+import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
+import { formatDayKey, formatDateShort } from '../../../shared/utils/formatters';
+import { extractApiErrorMessage } from '../utils/apiError';
+type HistoryPage = Awaited<ReturnType<typeof stockMovementsApi.history>>['data'];
 
 // ─── Тип движения → визуальная подача ────────────────────────────────────────
 // Иконка + цвет + русское имя. Покрыты ВСЕ значения StockMovementType, чтобы
@@ -75,6 +80,10 @@ const MOVEMENT_VISUALS: Record<StockMovementType, MovementVisual> = {
   // строка нажимаема и ведёт в чек по checkId. Расход со склада → знак '−'.
   // Индиго — чтобы отличать от синей инвентаризации и зелёного поступления.
   sale: { icon: 'cart', color: colors.indigo[600], label: 'Продажа', sign: '−' },
+  sale_correction: { icon: 'create-outline', color: colors.blue[600], label: 'Изменение продажи', sign: '' },
+  sale_annulment: { icon: 'arrow-undo-circle', color: colors.amber[600], label: 'Отмена продажи', sign: '+' },
+  sale_restore: { icon: 'refresh-circle', color: colors.indigo[600], label: 'Восстановление продажи', sign: '−' },
+  legacy_baseline: { icon: 'document-text-outline', color: colors.gray[500], label: 'Из истории чека', sign: '' },
 };
 
 // Fallback на случай, если бэк пришлёт неизвестный (будущий) тип — не падаем,
@@ -91,6 +100,30 @@ const FALLBACK_VISUAL: MovementVisual = {
 // modal — single source of truth, no duplicated movement semantics.
 export function visualFor(type: StockMovementType): MovementVisual {
   return MOVEMENT_VISUALS[type] ?? FALLBACK_VISUAL;
+}
+
+export function movementAmount(movement: StockMovement) {
+  const delta = movement.stockDelta;
+  return {
+    quantity: typeof delta === 'number' ? Math.abs(delta) : movement.quantity,
+    sign:
+      typeof delta === 'number'
+        ? delta > 0
+          ? '+'
+          : delta < 0
+            ? '−'
+            : ''
+        : movement.legacyBaseline
+          ? ''
+          : visualFor(movement.type).sign,
+  };
+}
+
+export function movementDocumentDate(movement: StockMovement, timezone: string): string | null {
+  return movement.documentDate &&
+    formatDayKey(movement.documentDate, timezone) !== formatDayKey(movement.createdAt, timezone)
+    ? `Чек от ${formatDateShort(movement.documentDate, timezone)}`
+    : null;
 }
 
 // ─── Дата/время движения ─────────────────────────────────────────────────────
@@ -120,6 +153,8 @@ export function formatMovementDateTime(iso: string): string {
 export { formatQty } from '../utils/units';
 
 export interface ProductMovementHistoryModalProps {
+  initialPage?: HistoryPage;
+  initialPageUpdatedAt?: number;
   visible: boolean;
   onClose: () => void;
   /** Товар, для которого показываем журнал. null → запрос отключён. */
@@ -149,14 +184,16 @@ function MovementRow({
   onOpenCheck?: (checkId: string) => void;
 }) {
   const v = visualFor(item.type);
+  const timezone = useTenantTimezone();
+  const amount = movementAmount(item);
+  const documentDate = movementDocumentDate(item, timezone);
   const operator = item.user?.fullName?.trim();
 
   // Продажа с привязкой к чеку → строка нажимаема и ведёт в чек. Остаток
   // (stockAfter) для продажи не осмыслен (0/0), поэтому вместо «Остаток: N»
   // показываем «Чек №N» + chevron.
-  const isSale = item.type === 'sale';
   const checkId = item.checkId ?? null;
-  const canOpenCheck = isSale && !!checkId && !!onOpenCheck;
+  const canOpenCheck = !!checkId && item.receiptAvailable !== false && !!onOpenCheck;
 
   const body = (
     <>
@@ -167,11 +204,11 @@ function MovementRow({
       <View style={styles.rowBody}>
         <View style={styles.rowTop}>
           <Text variant="bodyEmph" color={palette.text.primary} numberOfLines={1} style={styles.typeLabel}>
-            {v.label}
+            {item.legacyBaseline ? 'Из истории чека' : v.label}
           </Text>
           <Text variant="bodyEmph" color={v.sign === '' ? palette.text.primary : v.color}>
-            {v.sign}
-            {formatQtyUnit(item.quantity, unit)}
+            {amount.sign}
+            {formatQtyUnit(amount.quantity, unit)}
           </Text>
         </View>
 
@@ -179,20 +216,25 @@ function MovementRow({
           <Text variant="caption" color={palette.text.tertiary}>
             {formatMovementDateTime(item.createdAt)}
           </Text>
-          {isSale ? (
+          {checkId ? (
             <View style={styles.checkLink}>
               <Text variant="caption" color={v.color}>
                 {item.checkNumber != null ? `Чек №${item.checkNumber}` : 'Открыть чек'}
               </Text>
               {canOpenCheck ? <Ionicons name="chevron-forward" size={14} color={v.color} /> : null}
             </View>
-          ) : (
+          ) : item.stockAfter !== null ? (
             <Text variant="caption" color={palette.text.tertiary}>
               {'Остаток: '}
               {formatQtyUnit(item.stockAfter, unit)}
             </Text>
-          )}
+          ) : null}
         </View>
+        {documentDate ? (
+          <Text variant="caption" color={palette.text.tertiary}>
+            {documentDate}
+          </Text>
+        ) : null}
 
         {operator ? (
           <View style={styles.metaLine}>
@@ -245,21 +287,42 @@ export default function ProductMovementHistoryModal({
   productUnit,
   warehouseId,
   onOpenCheck,
+  initialPage,
+  initialPageUpdatedAt,
 }: ProductMovementHistoryModalProps) {
   const palette = useColors();
+  const { hasPermission } = useAuth();
+  const queryClient = useQueryClient();
+  const cursorReset = useRef<unknown>(null);
 
-  const { data, isLoading, isError, refetch } = useQuery<StockMovement[]>({
+  const {
+    data,
+    isLoading,
+    isError,
+    error,
+    refetch,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    isFetchNextPageError,
+  } = useInfiniteQuery({
     // Ключ зависит от товара (+ склада, если задан) — каждый товар кэшируется
     // отдельно, повторное открытие того же товара мгновенно отдаёт прошлый
     // список, фон ревалидируется.
-    queryKey: ['stock-movements', 'product', productId, warehouseId ?? null],
-    queryFn: async () => {
-      const res = await stockMovementsApi.list({
+    queryKey: ['stock-movements', 'history', productId, warehouseId ?? null],
+    initialPageParam: undefined as string | undefined,
+    initialData: initialPage && productId ? { pages: [initialPage], pageParams: [undefined] } : undefined,
+    initialDataUpdatedAt: initialPageUpdatedAt,
+    getNextPageParam: (page: HistoryPage) => page.nextCursor ?? undefined,
+    queryFn: async ({ pageParam }) => {
+      const res = await stockMovementsApi.history({
         productId: productId ?? undefined,
         warehouseId,
         // Волна G: подмешиваем продажи товара из чеков в ленту движения —
         // строки type='sale' с checkId/checkNumber для перехода в чек.
         includeSales: true,
+        cursor: pageParam,
+        limit: 50,
       });
       return res.data;
     },
@@ -267,18 +330,44 @@ export default function ProductMovementHistoryModal({
     // сеть в фоне на закрытом экране.
     enabled: visible && !!productId,
     staleTime: 60_000,
+    retry: (count, cause) =>
+      (cause as { response?: { data?: { code?: string } } })?.response?.data?.code !== 'HISTORY_CURSOR_STALE' &&
+      count < 2,
   });
+
+  useEffect(() => {
+    const cause = error as { response?: { data?: { code?: string } } } | null;
+    const scope = `${productId}:${warehouseId ?? ''}`;
+    if (!visible) {
+      cursorReset.current = null;
+      return;
+    }
+    if (cause?.response?.data?.code === 'HISTORY_CURSOR_STALE' && cursorReset.current !== scope) {
+      cursorReset.current = scope;
+      void queryClient.resetQueries({
+        queryKey: ['stock-movements', 'history', productId, warehouseId ?? null],
+        exact: true,
+      });
+    }
+  }, [error, productId, warehouseId, queryClient, visible]);
 
   const renderItem = useCallback(
     ({ item }: { item: StockMovement }) => (
-      <MovementRow item={item} palette={palette} unit={productUnit} onOpenCheck={onOpenCheck} />
+      <MovementRow
+        item={item}
+        palette={palette}
+        unit={productUnit}
+        onOpenCheck={hasPermission('checks_view') ? onOpenCheck : undefined}
+      />
     ),
-    [palette, productUnit, onOpenCheck],
+    [palette, productUnit, onOpenCheck, hasPermission],
   );
 
   const keyExtractor = useCallback((m: StockMovement) => m.id, []);
 
-  const movements = data ?? [];
+  const movements = [
+    ...new Map((data?.pages.flatMap((page) => page.data) ?? []).map((item) => [item.id, item])).values(),
+  ];
   const showSkeleton = isLoading && movements.length === 0;
   const showError = isError && movements.length === 0;
   const showEmpty = !isLoading && !isError && movements.length === 0;
@@ -309,7 +398,7 @@ export default function ProductMovementHistoryModal({
           </View>
         ) : showError ? (
           <QueryErrorState
-            description="Не удалось загрузить историю движения товара."
+            description={extractApiErrorMessage(error, 'Не удалось загрузить историю движения товара.')}
             onRetry={() => {
               void refetch();
             }}
@@ -328,6 +417,28 @@ export default function ProductMovementHistoryModal({
             contentContainerStyle={styles.listContent}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
+            onEndReached={() => {
+              if (hasNextPage && !isFetchingNextPage && !isFetchNextPageError) void fetchNextPage();
+            }}
+            onEndReachedThreshold={0.3}
+            ListFooterComponent={
+              hasNextPage || isFetchNextPageError ? (
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={isFetchingNextPage}
+                  onPress={() => void fetchNextPage()}
+                  style={{ padding: spacing[4] }}
+                >
+                  <Text color={palette.accent.primaryText} style={{ textAlign: 'center' }}>
+                    {isFetchingNextPage
+                      ? 'Загрузка…'
+                      : isFetchNextPageError
+                        ? 'Не удалось загрузить продолжение · Повторить'
+                        : 'Загрузить ещё'}
+                  </Text>
+                </Pressable>
+              ) : null
+            }
           />
         )}
       </SafeAreaView>

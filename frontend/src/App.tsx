@@ -114,6 +114,7 @@ const CallsPage = lazyWithRetry(() => import('./pages/CallsPage'));
 const EquipmentPage = lazyWithRetry(() => import('./pages/EquipmentPage'));
 const KnowledgeBasePage = lazyWithRetry(() => import('./pages/KnowledgeBasePage'));
 const ReviewPublicPage = lazyWithRetry(() => import('./pages/ReviewPublicPage'));
+const PublicProductPage = lazyWithRetry(() => import('./pages/PublicProductPage'));
 const NfcAttendanceLandingPage = lazyWithRetry(() => import('./pages/NfcAttendanceLandingPage'));
 const PublicBookingPage = lazyWithRetry(() => import('./pages/PublicBookingPage'));
 const BookingsPage = lazyWithRetry(() => import('./pages/BookingsPage'));
@@ -252,6 +253,7 @@ export default function App() {
 
           {/* Public: Review page (no auth) */}
           <Route path="/review/:token" element={<ReviewPublicPage />} />
+          <Route path="/p/:token" element={<PublicProductPage />} />
 
           {/* Public: Privacy Policy & Terms of Use (no auth — required for App Store / Google Play review) */}
           <Route path="/privacy" element={<PrivacyPage />} />

@@ -1055,33 +1055,7 @@ export default function SupplierDetailScreen() {
 
         {/* Primary/secondary action row — покупка б/у или возврат брака.
             Оба — mutating, поэтому весь блок скрыт без suppliers_manage. */}
-        {!canManageSuppliers ? null : isUsedPurchaseSupplier ? (
-          // System "Покупка б/у товара" supplier — single primary CTA.
-          // Standard delivery / return flows make no sense here: we
-          // always buy from a client and the product lands on Б/У.
-          // Recolour `quickPayBtn` (default = red, for debt pay-off) to
-          // primary blue — same visual hierarchy, neutral semantics.
-          <TouchableOpacity
-            style={[styles.quickPayBtn, { backgroundColor: colors.primary[600] }]}
-            onPress={() => {
-              if (!usedWarehouse) {
-                Alert.alert('Склад Б/У не найден', 'Подождите загрузку складов или обновите экран.');
-                return;
-              }
-              setUpName('');
-              setUpQty('');
-              setUpPrice('');
-              setUpSellPrice('');
-              setUpCategory('');
-              setUpNote('');
-              setUsedPurchaseModalOpen(true);
-            }}
-            activeOpacity={0.85}
-          >
-            <Ionicons name="cube-outline" size={18} color={colors.white} />
-            <Text style={styles.quickPayText}>Купить б/у запчасть</Text>
-          </TouchableOpacity>
-        ) : (
+        {!canManageSuppliers || isUsedPurchaseSupplier ? null : (
           // Secondary action: return defective stock to supplier. Always
           // available — even when there's no current debt the action is
           // legitimate (it can drive the debt negative = supplier owes us).

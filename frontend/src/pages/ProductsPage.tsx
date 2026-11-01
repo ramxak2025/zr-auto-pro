@@ -1,5 +1,6 @@
 import LowStockView from './LowStockPage';
 import { smartSearch } from '../../../shared/utils/smartSearch';
+import { newUuid } from '../utils/uuid';
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -204,6 +205,7 @@ function ProductsPageContents() {
     [warehouses, activeWarehouseId],
   );
   const activeWarehouseKind = activeWarehouse?.kind ?? null;
+  const usedRequestId = useRef<string | null>(null);
 
   // Ячейки активного склада. Пока их нет (`hasCells === false`), страница выглядит как раньше.
   const {
@@ -649,8 +651,21 @@ function ProductsPageContents() {
   };
 
   const createMutation = useMutation({
-    mutationFn: (data: ProductFormData) =>
-      productsApi.create({ ...data, costPrice: data.costPrice ?? 0, sellPrice: data.sellPrice ?? 0 }),
+    mutationFn: async (data: ProductFormData) => {
+      if (activeWarehouseKind === 'used') {
+        const { stock, isBundle: _isBundle, bundleItems: _bundleItems, ...fields } = data;
+        usedRequestId.current ??= newUuid();
+        const result = await productsApi.usedIntake({
+          ...fields,
+          quantity: stock,
+          requestId: usedRequestId.current,
+          costPrice: data.costPrice ?? 0,
+          sellPrice: data.sellPrice ?? 0,
+        });
+        return { data: result.data.product };
+      }
+      return productsApi.create({ ...data, costPrice: data.costPrice ?? 0, sellPrice: data.sellPrice ?? 0 });
+    },
     onSuccess: (_res, data) => {
       toast.success('Товар создан');
       queryClient.invalidateQueries({ queryKey: ['products'] });
@@ -790,12 +805,22 @@ function ProductsPageContents() {
   // ---- Handlers ----
 
   function openCreate() {
+    usedRequestId.current = null;
     setEditingProduct(null);
     setFormOpen(true);
   }
 
-  function openEdit(product: Product) {
-    setEditingProduct(product);
+  async function openEdit(product: Product) {
+    let complete = product;
+    if (!Array.isArray(product.photos)) {
+      try {
+        complete = (await productsApi.getById(product.id)).data;
+      } catch {
+        toast.error('Не удалось загрузить карточку. Обновите товар и попробуйте ещё раз.');
+        return;
+      }
+    }
+    setEditingProduct(complete);
     setFormOpen(true);
   }
 
@@ -1199,7 +1224,7 @@ function ProductsPageContents() {
                 Операции
               </Button>
               <Button icon={Plus} onClick={openCreate}>
-                Добавить товар
+                {activeWarehouseKind === 'used' ? 'Добавить Б/У' : 'Добавить товар'}
               </Button>
               <input
                 ref={fileInputRef}
@@ -1666,6 +1691,7 @@ function ProductsPageContents() {
           allProducts={allProducts}
           defaultCategory={activePath.length > 0 ? activePath.join('/') : undefined}
           defaultWarehouseId={activeWarehouseId || undefined}
+          usedIntake={!editingProduct && activeWarehouseKind === 'used'}
           canManage={canManageWarehouse}
         />
       )}

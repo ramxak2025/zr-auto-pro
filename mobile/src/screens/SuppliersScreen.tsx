@@ -342,24 +342,10 @@ export default function SuppliersScreen() {
   // contractor suppliers. We don't filter out from a separate list —
   // useMemo keeps the partition stable across keystrokes so FlashList
   // doesn't tear down rows when search debounces.
-  const { systemSupplier, regularSuppliers } = useMemo(() => {
-    const list = suppliers ?? [];
-    let system: Supplier | null = null;
-    const regular: Supplier[] = [];
-    for (const s of list) {
-      if (s.isSystem || s.kind === 'used_purchase') {
-        // Backend may return multiple system rows in theory; keep the
-        // first and let the rest fall through as "regular" so the
-        // owner can still see them rather than silently dropping data.
-        if (!system) {
-          system = s;
-          continue;
-        }
-      }
-      regular.push(s);
-    }
-    return { systemSupplier: system, regularSuppliers: regular };
-  }, [suppliers]);
+  const regularSuppliers = useMemo(
+    () => (suppliers ?? []).filter((supplier) => !supplier.isSystem && supplier.kind !== 'used_purchase'),
+    [suppliers],
+  );
 
   // Sheet picker list — only real contractors. The system row is
   // excluded because the defect-return flow doesn't apply to it (it
@@ -527,18 +513,6 @@ export default function SuppliersScreen() {
   // so it shares the same scroll surface as the regular rows. Falsy
   // when the backend hasn't sent a system supplier (e.g. very old
   // tenants pre-migration).
-  const listHeader = systemSupplier ? (
-    <View>
-      <SystemSupplierCard item={systemSupplier} onPress={handlePressSupplier} onPressIn={handlePressInSupplier} />
-      {/* Section separator — small label + hairline divider so the
-          regular contractor list visually starts as its own block. */}
-      <View style={styles.sectionSeparator}>
-        <View style={[styles.sectionDivider, { backgroundColor: palette.border.subtle }]} />
-        <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>ПОСТАВЩИКИ</Text>
-        <View style={[styles.sectionDivider, { backgroundColor: palette.border.subtle }]} />
-      </View>
-    </View>
-  ) : null;
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
@@ -669,11 +643,10 @@ export default function SuppliersScreen() {
               data={regularSuppliers}
               keyExtractor={(i) => i.id}
               renderItem={renderSupplier}
-              ListHeaderComponent={listHeader}
               ListEmptyComponent={
                 // When ONLY the system supplier exists (no contractors yet)
                 // we still want to render a friendly nudge below it.
-                systemSupplier && regularSuppliers.length === 0 ? (
+                regularSuppliers.length === 0 ? (
                   <View style={styles.listEmptyHint}>
                     <Text style={[styles.listEmptyHintText, { color: palette.text.tertiary }]}>
                       Контрагентов пока нет. Добавьте первого поставщика.

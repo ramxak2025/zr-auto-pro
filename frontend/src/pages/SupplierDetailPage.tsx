@@ -784,15 +784,6 @@ export default function SupplierDetailPage() {
     });
   };
 
-  const openUsedPurchaseModal = () => {
-    if (!usedWarehouse) {
-      toast.error('Склад Б/У не найден');
-      return;
-    }
-    setUsedPurchaseForm({ productName: '', qty: '', purchasePrice: '', category: '', note: '' });
-    setIsUsedPurchaseModalOpen(true);
-  };
-
   // ── Состояния загрузки / ошибки ─────────────────────────────────────────────
   if (isLoading || isError || !supplier) {
     const is404 = (error as any)?.response?.status === 404;
@@ -1085,11 +1076,7 @@ export default function SupplierDetailPage() {
         }
         actions={
           canManage ? (
-            supplier.isSystem ? (
-              <Button icon={Package} onClick={openUsedPurchaseModal}>
-                Покупка б/у товара
-              </Button>
-            ) : (
+            supplier.isSystem ? null : (
               <Button variant="secondary" icon={Pencil} onClick={openEditModal}>
                 Редактировать
               </Button>

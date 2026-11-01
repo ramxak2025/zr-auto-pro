@@ -23,7 +23,7 @@
  * ячейки: `?fields=` отдаёт только перечисленные ключи.
  */
 export const PRODUCT_LIST_FIELDS =
-  'id,name,stock,minStock,sellPrice,costPrice,photo,category,unit,warehouseId,supplierId,warrantyDays,barcode,storageCellId,storageCellCode';
+  'id,name,stock,minStock,sellPrice,costPrice,photo,photos,category,unit,warehouseId,supplierId,warrantyDays,barcode,storageCellId,storageCellCode';
 
 /**
  * ПОЛНЫЙ КАТАЛОГ СКЛАДА ОДНОЙ СТРАНИЦЕЙ.

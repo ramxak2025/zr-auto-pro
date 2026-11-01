@@ -1,3 +1,6 @@
+import ProductPhotoGallery from '../components/ProductPhotoGallery';
+import { randomUUID } from 'expo-crypto';
+import { productPhotoUrls, productPhotoPatch, uploadProductPhotos } from '../../../shared/utils/productPhotos';
 import type { ProductsStackParamList } from '../navigation/AppNavigator';
 import { smartSearch } from '../../../shared/utils/smartSearch';
 import LowStockView from './dashboard/LowStockView';
@@ -495,7 +498,9 @@ function ProductsScreenContents() {
   // ВНУТРИ form-Modal, отдельный state открытия.
   const [formCell, setFormCell] = useState<{ id: string; code: string } | null>(null);
   const [cellPickerOpen, setCellPickerOpen] = useState(false);
-  const [photoUri, setPhotoUri] = useState<string | null>(null); // local image URI or existing server path
+  const [photoUris, setPhotoUris] = useState<string[]>([]);
+  const usedRequestId = useRef<string | null>(null);
+  const photoPickIndex = useRef<number | null>(null); // local image URI or existing server path
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const photoUploadPending = useRef(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -682,7 +687,12 @@ function ProductsScreenContents() {
     active: modalOpen,
     formKey: `${activeWarehouseId ?? ''}:${editingProduct?.id ?? 'new'}`,
     navigation,
-    onChange: setPhotoUri,
+    onChange: (uri) =>
+      setPhotoUris((current) =>
+        photoPickIndex.current === null
+          ? [...current, uri].slice(0, 4)
+          : current.map((value, index) => (index === photoPickIndex.current ? uri : value)),
+      ),
   });
   const folderWarehouseRef = useRef(activeWarehouseId);
   folderWarehouseRef.current = activeWarehouseId;
@@ -806,7 +816,15 @@ function ProductsScreenContents() {
   }, [inventoryMovements]);
 
   const createMutation = useMutation({
-    mutationFn: (d: any) => productsApi.create(d),
+    mutationFn: async (d: any) => {
+      if (warehouses?.find((warehouse) => warehouse.id === d.warehouseId)?.kind === 'used') {
+        const { stock, supplierId, isBundle, bundleItems, ...fields } = d;
+        usedRequestId.current ??= randomUUID();
+        const result = await productsApi.usedIntake({ ...fields, quantity: stock, requestId: usedRequestId.current });
+        return { data: result.data.product };
+      }
+      return productsApi.create(d);
+    },
     onSuccess: () => {
       haptic('success');
       queryClient.invalidateQueries({ queryKey: ['products'] });
@@ -1506,6 +1524,7 @@ function ProductsScreenContents() {
   }, [bulkDeleteMutation, activeWarehouseId]);
 
   const openCreate = () => {
+    usedRequestId.current = null;
     invalidatePhotoPicker();
     setEditingProduct(null);
     setName('');
@@ -1517,7 +1536,7 @@ function ProductsScreenContents() {
     setUnit(DEFAULT_UNIT);
     setFormBarcode('');
     setFormCell(null);
-    setPhotoUri(null);
+    setPhotoUris([]);
     setModalOpen(true);
   };
 
@@ -1525,7 +1544,17 @@ function ProductsScreenContents() {
   // refetches; otherwise React.memo on ProductRow can't short-circuit
   // re-renders. The picker invalidation callback is stable as well.
   const openEdit = useCallback(
-    (p: Product) => {
+    async (p: Product) => {
+      const lease = captureDataSession();
+      if (!Array.isArray(p.photos)) {
+        try {
+          p = (await productsApi.getById(p.id)).data;
+        } catch {
+          if (lease.isCurrent()) Alert.alert('Не удалось загрузить карточку', 'Обновите товар и попробуйте ещё раз.');
+          return;
+        }
+        if (!lease.isCurrent() || navigation.isFocused?.() === false) return;
+      }
       invalidatePhotoPicker();
       setConfirmStarterPrices(false);
       setEditingProduct(p);
@@ -1541,7 +1570,7 @@ function ProductsScreenContents() {
       setUnit(unitLabel(p.unit));
       setFormBarcode(p.barcode || '');
       setFormCell(p.storageCellId ? { id: p.storageCellId, code: p.storageCellCode ?? '' } : null);
-      setPhotoUri(p.photo ? (p.photo.startsWith('http') ? p.photo : p.photo) : null);
+      setPhotoUris(productPhotoUrls(p));
       setModalOpen(true);
     },
     [invalidatePhotoPicker],
@@ -1610,7 +1639,7 @@ function ProductsScreenContents() {
     invalidatePhotoPicker();
     setModalOpen(false);
     setEditingProduct(null);
-    setPhotoUri(null);
+    setPhotoUris([]);
     setCellPickerOpen(false);
   };
 
@@ -1624,36 +1653,28 @@ function ProductsScreenContents() {
     )
       return;
     const continuation = capturePhotoForm();
-    // #63 — тип допускает null: убранное фото у существующего товара шлём как
-    // null (иначе поле просто не отправится и старое фото останется на сервере).
-    let uploadedPhotoPath: string | null | undefined = editingProduct?.photo || undefined;
-
-    // Upload new photo if it's a local file URI
-    if (photoUri && photoUri.startsWith('file://')) {
-      try {
-        photoUploadPending.current = true;
-        setUploadingPhoto(true);
-        const filename = photoUri.split('/').pop() || 'photo.jpg';
-        const res = await uploadsApi.upload(photoUri, filename);
-        if (!continuation.isCurrent()) return;
-        uploadedPhotoPath = res.data.url;
-      } catch {
-        if (!continuation.isCurrent()) return;
-        Alert.alert(
-          '\u041E\u0448\u0438\u0431\u043A\u0430',
-          '\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044C \u0444\u043E\u0442\u043E',
-        );
-        return;
-      } finally {
-        photoUploadPending.current = false;
-        setUploadingPhoto(false);
-      }
-    } else if (!photoUri) {
-      // #63 — фото убрали: у существующего товара шлём null (бэкенд очистит),
-      // у нового — undefined (поля просто нет в payload).
-      uploadedPhotoPath = editingProduct ? null : undefined;
+    let uploadedPhotos: string[];
+    try {
+      photoUploadPending.current = true;
+      setUploadingPhoto(true);
+      const result = await uploadProductPhotos(
+        photoUris,
+        async (uri) => {
+          const res = await uploadsApi.upload(uri, uri.split('/').pop() || 'photo.jpg');
+          return res.data.url;
+        },
+        continuation.isCurrent,
+      );
+      if (!result) return;
+      uploadedPhotos = result;
+    } catch {
+      if (continuation.isCurrent())
+        Alert.alert('Ошибка', 'Не удалось загрузить фотографии. Поля сохранены, попробуйте ещё раз.');
+      return;
+    } finally {
+      photoUploadPending.current = false;
+      setUploadingPhoto(false);
     }
-
     // Числовые поля читаем через readNumericField: запятая с русской цифровой
     // клавиатуры iOS — полноценный разделитель («1250,50» = 1250.5). Раньше
     // здесь стоял `Number(costPrice) || 0`, и такой ввод молча превращался в 0.
@@ -1667,6 +1688,11 @@ function ProductsScreenContents() {
       return;
     }
 
+    if (!editingProduct && activeWarehouse?.kind === 'used' && (!name.trim() || parsedStock <= 0)) {
+      Alert.alert('Проверьте приёмку', 'Укажите название и положительное количество товара Б/У.');
+      return;
+    }
+
     const payload: Record<string, unknown> = {
       name,
       category: category || undefined,
@@ -1674,7 +1700,7 @@ function ProductsScreenContents() {
       // Round 12 #6б: у существующего товара '' ОЧИЩАЕТ штрихкод (PATCH сетит
       // поле только когда оно пришло); у нового пустое поле просто не шлём.
       barcode: editingProduct ? formBarcode.trim() : formBarcode.trim() || undefined,
-      photo: uploadedPhotoPath,
+      ...productPhotoPatch(uploadedPhotos),
       // New products inherit the currently selected warehouse. On edit
       // we don't override warehouseId — moving between warehouses is
       // done via dedicated transfer actions, not the edit form.
@@ -2448,7 +2474,11 @@ function ProductsScreenContents() {
           setShowScanner(true);
         }}
         onOperations={canManageWarehouse ? () => setShowOpsModal(true) : undefined}
-        onAdd={canManageWarehouse && activeWarehouse?.kind === 'main' ? openCreate : undefined}
+        onAdd={
+          canManageWarehouse && (activeWarehouse?.kind === 'main' || activeWarehouse?.kind === 'used')
+            ? openCreate
+            : undefined
+        }
         onCreateFolder={
           canManageWarehouse && activeWarehouseId && !search && !selectMode && !cellFilterId
             ? () =>
@@ -2564,7 +2594,7 @@ function ProductsScreenContents() {
             activeWarehouse?.kind === 'defect'
               ? '\u0422\u043E\u0432\u0430\u0440\u044B \u043F\u043E\u043F\u0430\u0434\u0430\u044E\u0442 \u0432 \u0431\u0440\u0430\u043A \u0442\u043E\u043B\u044C\u043A\u043E \u0447\u0435\u0440\u0435\u0437 \u043F\u0435\u0440\u0435\u043C\u0435\u0449\u0435\u043D\u0438\u0435 \u0441\u043E \u0441\u043A\u043B\u0430\u0434\u0430 \u0438\u043B\u0438 \u0432\u043E\u0437\u0432\u0440\u0430\u0442 \u043E\u0442 \u043A\u043B\u0438\u0435\u043D\u0442\u0430'
               : activeWarehouse?.kind === 'used'
-                ? '\u0411/\u0423 \u0442\u043E\u0432\u0430\u0440\u044B \u0434\u043E\u0431\u0430\u0432\u043B\u044F\u044E\u0442\u0441\u044F \u0447\u0435\u0440\u0435\u0437 \u0441\u0438\u0441\u0442\u0435\u043C\u043D\u043E\u0433\u043E \u043F\u043E\u0441\u0442\u0430\u0432\u0449\u0438\u043A\u0430 \u00AB\u041F\u043E\u043A\u0443\u043F\u043A\u0430 \u0431/\u0443\u00BB'
+                ? 'Добавьте товар прямо на склад Б/У: название, количество и цены.'
                 : activePath.length > 0
                   ? '\u0412 \u044D\u0442\u043E\u0439 \u043F\u0430\u043F\u043A\u0435 \u043F\u0443\u0441\u0442\u043E'
                   : '\u0414\u043E\u0431\u0430\u0432\u044C\u0442\u0435 \u043F\u0435\u0440\u0432\u044B\u0439 \u0442\u043E\u0432\u0430\u0440'
@@ -2572,7 +2602,7 @@ function ProductsScreenContents() {
           action={
             // Action-\u043A\u043D\u043E\u043F\u043A\u0430 \u00AB\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C\u00BB \u2014 \u0442\u043E\u043B\u044C\u043A\u043E \u043D\u0430 \u043E\u0441\u043D\u043E\u0432\u043D\u043E\u043C \u0441\u043A\u043B\u0430\u0434\u0435:
             // \u043D\u0430 defect/used \u0441\u043E\u0437\u0434\u0430\u043D\u0438\u0435 \u0438\u0434\u0451\u0442 \u0434\u0440\u0443\u0433\u0438\u043C \u043F\u0443\u0442\u0451\u043C.
-            !activePath.length && activeWarehouse?.kind === 'main'
+            !activePath.length && (activeWarehouse?.kind === 'main' || activeWarehouse?.kind === 'used')
               ? { label: '\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C', onPress: openCreate }
               : undefined
           }
@@ -2633,72 +2663,27 @@ function ProductsScreenContents() {
         title={
           editingProduct
             ? '\u0420\u0435\u0434\u0430\u043A\u0442\u0438\u0440\u043E\u0432\u0430\u0442\u044C \u0442\u043E\u0432\u0430\u0440'
-            : '\u041D\u043E\u0432\u044B\u0439 \u0442\u043E\u0432\u0430\u0440'
+            : activeWarehouse?.kind === 'used'
+              ? 'Добавить товар Б/У'
+              : 'Новый товар'
         }
       >
-        {/* Photo section */}
-        <View style={styles.photoSection}>
-          <TouchableOpacity
-            style={[styles.photoPickerWrap, { borderColor: palette.border.subtle }]}
-            onPress={pickImage}
-            disabled={pickingPhoto || uploadingPhoto}
-            accessibilityLabel={photoUri ? 'Заменить фото товара' : 'Добавить фото товара'}
-          >
-            {photoUri ? (
-              <CachedImage
-                source={{ uri: getDisplayPhotoUri(photoUri) }}
-                style={styles.photoPreview}
-                resizeMode="cover"
-              />
-            ) : (
-              <View style={[styles.photoPickerPlaceholder, { backgroundColor: palette.bg.muted }]}>
-                <Ionicons name="camera-outline" size={28} color={palette.text.tertiary} />
-                <Text style={[styles.photoPickerText, { color: palette.text.tertiary }]}>
-                  {'\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u0444\u043E\u0442\u043E'}
-                </Text>
-              </View>
-            )}
-          </TouchableOpacity>
-          {photoUri && (
-            <View style={styles.photoActions}>
-              <TouchableOpacity
-                style={styles.photoActionBtn}
-                onPress={pickImage}
-                disabled={pickingPhoto || uploadingPhoto}
-              >
-                <Ionicons name="swap-horizontal" size={16} color={colors.primary[600]} />
-                <Text style={styles.photoActionText}>{'\u0417\u0430\u043C\u0435\u043D\u0438\u0442\u044C'}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.photoActionBtn}
-                onPress={() => setFullscreenPhoto(getDisplayPhotoUri(photoUri)!)}
-              >
-                <Ionicons name="expand-outline" size={16} color={colors.primary[600]} />
-                <Text style={styles.photoActionText}>{'\u041F\u0440\u043E\u0441\u043C\u043E\u0442\u0440'}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.photoActionBtn}
-                onPress={() => {
-                  invalidatePhotoPicker();
-                  setPhotoUri(null);
-                }}
-                disabled={pickingPhoto || uploadingPhoto}
-              >
-                <Ionicons name="trash-outline" size={16} color={colors.red[500]} />
-                <Text style={[styles.photoActionText, { color: colors.red[500] }]}>
-                  {'\u0423\u0434\u0430\u043B\u0438\u0442\u044C'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          )}
-        </View>
-
+        <ProductPhotoGallery
+          photos={photoUris}
+          onChange={setPhotoUris}
+          onPick={(index) => {
+            photoPickIndex.current = index;
+            void pickImage();
+          }}
+          disabled={pickingPhoto || uploadingPhoto || createMutation.isPending || updateMutation.isPending}
+        />
         <View style={styles.formField}>
           <Text style={[styles.formLabel, { color: palette.text.secondary }]}>
             {'\u041D\u0430\u0437\u0432\u0430\u043D\u0438\u0435'}
           </Text>
           <TextInput
             value={name}
+            accessibilityLabel="Название товара"
             onChangeText={setName}
             style={[styles.formInput, formInputThemed]}
             placeholder={'\u041C\u0430\u0441\u043B\u043E \u043C\u043E\u0442\u043E\u0440\u043D\u043E\u0435...'}
@@ -2744,6 +2729,7 @@ function ProductsScreenContents() {
             </Text>
             <TextInput
               value={costPrice}
+              accessibilityLabel="Себестоимость товара"
               onChangeText={setCostPrice}
               style={[styles.formInput, formInputThemed]}
               keyboardType="decimal-pad"
@@ -2757,6 +2743,7 @@ function ProductsScreenContents() {
             </Text>
             <TextInput
               value={sellPrice}
+              accessibilityLabel="Цена продажи товара"
               onChangeText={setSellPrice}
               style={[styles.formInput, formInputThemed]}
               keyboardType="decimal-pad"
@@ -2807,11 +2794,12 @@ function ProductsScreenContents() {
         <View style={styles.formRowFields}>
           <View style={{ flex: 1 }}>
             <Text style={[styles.formLabel, { color: palette.text.secondary }]}>
-              {'\u041E\u0441\u0442\u0430\u0442\u043E\u043A'}
+              {!editingProduct && activeWarehouse?.kind === 'used' ? 'Количество к приёмке' : 'Остаток'}
               {unit !== DEFAULT_UNIT ? ` (${unit})` : ''}
             </Text>
             <TextInput
               value={stock}
+              accessibilityLabel="Количество товара"
               onChangeText={setStock}
               style={[styles.formInput, formInputThemed]}
               keyboardType="decimal-pad"
@@ -2968,7 +2956,9 @@ function ProductsScreenContents() {
               <Text style={styles.submitBtnText}>
                 {editingProduct
                   ? '\u0421\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u044C'
-                  : '\u0421\u043E\u0437\u0434\u0430\u0442\u044C'}
+                  : activeWarehouse?.kind === 'used'
+                    ? 'Принять на склад Б/У'
+                    : 'Создать'}
               </Text>
             )}
           </TouchableOpacity>
