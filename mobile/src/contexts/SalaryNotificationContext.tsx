@@ -1,3 +1,4 @@
+import { inventoryInternal } from '../utils/runtimeEnvironment';
 /** Recipient inbox for payouts, fines and legacy payment confirmations.
  * A push wakes the inbox; it never supplies the displayed amount or reason.
  * One native modal prevents competing presentations on iOS.
@@ -95,12 +96,14 @@ export function SalaryNotificationProvider({ children }: { children: React.React
     const foreground = AppState.addEventListener('change', (state) => {
       if (state === 'active') void checkOnce();
     });
-    const push = Notifications.addNotificationReceivedListener((notification) => {
-      if (isSalaryNoticePush(notification.request.content.data)) void checkOnce();
-    });
+    const push = inventoryInternal
+      ? null
+      : Notifications.addNotificationReceivedListener((notification) => {
+          if (isSalaryNoticePush(notification.request.content.data)) void checkOnce();
+        });
     return () => {
       foreground.remove();
-      push.remove();
+      push?.remove();
     };
   }, [checkOnce]);
 

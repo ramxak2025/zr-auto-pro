@@ -545,6 +545,7 @@ export function isAndroidPushConfigured(): boolean {
  * token rotated after a restore).
  */
 export async function registerPushToken(): Promise<void> {
+  if (inventoryInternal) return;
   const lease = captureAuthSession();
   if (!lease.token) return;
   try {

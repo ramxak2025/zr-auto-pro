@@ -1,3 +1,4 @@
+import { inventoryInternal } from '../utils/runtimeEnvironment';
 /**
  * BroadcastNotificationContext — surfaces superadmin → director broadcasts
  * («объявления от поддержки») as a global center-screen <BroadcastModal />.
@@ -290,6 +291,7 @@ export function BroadcastNotificationProvider({ children }: ProviderProps) {
   // Foreground push listener — when a broadcast push arrives while the app is
   // open the OS doesn't surface a banner, so we re-fetch unseen and show it.
   React.useEffect(() => {
+    if (inventoryInternal) return;
     const sub = Notifications.addNotificationReceivedListener((notification) => {
       const data = notification.request.content.data as Record<string, unknown> | undefined;
       if (data?.type === 'superadmin_broadcast') {

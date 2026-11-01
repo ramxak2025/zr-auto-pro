@@ -29,7 +29,7 @@ const DEPLOYMENT_TARGET = '17.0';
 const DEVELOPMENT_TEAM = '98SHYK65HQ';
 const SRC_DIR = path.join(__dirname, '..', 'ios-extensions', 'AuTexaWidget');
 
-function copyWidgetFiles(iosRoot, version, buildNumber) {
+function copyWidgetFiles(iosRoot, version, buildNumber, inventoryInternal) {
   const dest = path.join(iosRoot, WIDGET_TARGET);
   if (!fs.existsSync(dest)) {
     fs.mkdirSync(dest, { recursive: true });
@@ -44,6 +44,9 @@ function copyWidgetFiles(iosRoot, version, buildNumber) {
   let plist = fs.readFileSync(plistPath, 'utf8');
   plist = plist.replace(/(<key>CFBundleShortVersionString<\/key>\s*<string>)[^<]*(<\/string>)/, `$1${version}$2`);
   plist = plist.replace(/(<key>CFBundleVersion<\/key>\s*<string>)[^<]*(<\/string>)/, `$1${buildNumber}$2`);
+  if (inventoryInternal) {
+    plist = plist.replace(/<\/dict>\s*<\/plist>\s*$/, '<key>AutexaInventoryInternal</key><true/>\n</dict>\n</plist>\n');
+  }
   fs.writeFileSync(plistPath, plist);
 }
 
@@ -83,7 +86,12 @@ const withWidgetTarget = (config) =>
     const projectRoot = mod.modRequest.projectRoot;
     const iosRoot = path.join(projectRoot, 'ios');
 
-    copyWidgetFiles(iosRoot, mod.version || '1.0.0', (mod.ios && mod.ios.buildNumber) || '1');
+    copyWidgetFiles(
+      iosRoot,
+      mod.version || '1.0.0',
+      (mod.ios && mod.ios.buildNumber) || '1',
+      mod.extra?.inventoryInternal === 'ios-v1',
+    );
     writeWidgetEntitlements(iosRoot);
 
     const proj = mod.modResults;
@@ -96,6 +104,27 @@ const withWidgetTarget = (config) =>
       return name === WIDGET_TARGET;
     });
     if (alreadyAdded) {
+      // Incremental prebuilds also need the newly shared guard source.
+      const targetEntry = Object.entries(existingTargets).find(
+        ([, t]) => t && typeof t === 'object' && (t.name || '').replace(/^"|"$/g, '') === WIDGET_TARGET,
+      );
+      const groups = proj.hash.project.objects.PBXGroup;
+      const group = Object.keys(groups).find(
+        (key) =>
+          groups[key] &&
+          typeof groups[key] === 'object' &&
+          (groups[key].name || groups[key].path || '').replace(/^"|"$/g, '') === WIDGET_TARGET,
+      );
+      const refs = Object.values(proj.pbxFileReferenceSection());
+      if (
+        targetEntry &&
+        group &&
+        !refs.some(
+          (ref) => ref && typeof ref === 'object' && (ref.path || '').includes('AutexaNativeEnvironment.swift'),
+        )
+      ) {
+        proj.addSourceFile('AutexaNativeEnvironment.swift', { target: targetEntry[0] }, group);
+      }
       return mod;
     }
 
