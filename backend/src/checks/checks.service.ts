@@ -61,7 +61,7 @@ import {
   serviceLineSalary,
   ServiceLineInput,
 } from './check-service-prices';
-import { resolveTemplateProductSources } from '../check-templates/template-product-source';
+import { templateKitBatch, resolveTemplateProductSources } from '../check-templates/template-product-source';
 import { lockMotivationRead } from '../motivation/motivation-rules';
 import {
   archiveLegacyMotivation,
@@ -3509,8 +3509,8 @@ export class ChecksService {
       // those locks without a SHARE→UPDATE upgrade or a counter/product cycle.
       for (const prod of productLines) {
         await client.query(
-          `INSERT INTO check_product_lines (check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost, kit_source, kit_exact_unit_cost)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,(SELECT assembly_exact_cost FROM products WHERE id=$2 AND tenant_id=(SELECT tenant_id FROM checks WHERE id=$1)))`,
+          `INSERT INTO check_product_lines (check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost, kit_source, kit_exact_unit_cost, template_kit_batch)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,(SELECT assembly_exact_cost FROM products WHERE id=$2 AND tenant_id=(SELECT tenant_id FROM checks WHERE id=$1)),$10)`,
           [
             checkId,
             prod.productId || null,
@@ -3521,6 +3521,7 @@ export class ChecksService {
             prod.totalSell,
             prod.totalCost,
             JSON.stringify(prod.kitSource ?? null),
+            templateKitBatch(prod) ? JSON.stringify(templateKitBatch(prod)) : null,
           ],
         );
 
@@ -5237,7 +5238,7 @@ export class ChecksService {
 
         for (const prod of productLines) {
           await client.query(
-            `INSERT INTO check_product_lines (check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost, kit_source, kit_exact_unit_cost) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,(SELECT assembly_exact_cost FROM products WHERE id=$2 AND tenant_id=(SELECT tenant_id FROM checks WHERE id=$1)))`,
+            `INSERT INTO check_product_lines (check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost, kit_source, kit_exact_unit_cost, template_kit_batch) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,(SELECT assembly_exact_cost FROM products WHERE id=$2 AND tenant_id=(SELECT tenant_id FROM checks WHERE id=$1)),$10)`,
             [
               id,
               prod.productId || null,
@@ -5248,6 +5249,7 @@ export class ChecksService {
               prod.totalSell,
               prod.totalCost,
               JSON.stringify(prod.kitSource ?? null),
+              templateKitBatch(prod) ? JSON.stringify(templateKitBatch(prod)) : null,
             ],
           );
         }
@@ -6051,7 +6053,7 @@ export class ChecksService {
         await client.query('DELETE FROM check_product_lines WHERE check_id=$1', [id]);
         for (const prod of c.productLines) {
           await client.query(
-            `INSERT INTO check_product_lines (id, check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost, kit_source, kit_exact_unit_cost) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,(SELECT assembly_exact_cost FROM products WHERE id=$3 AND tenant_id=(SELECT tenant_id FROM checks WHERE id=$2)))`,
+            `INSERT INTO check_product_lines (id, check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost, kit_source, kit_exact_unit_cost, template_kit_batch) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,(SELECT assembly_exact_cost FROM products WHERE id=$3 AND tenant_id=(SELECT tenant_id FROM checks WHERE id=$2)),$11)`,
             [
               prod.id,
               id,
@@ -6063,6 +6065,7 @@ export class ChecksService {
               prod.totalSell,
               prod.totalCost,
               JSON.stringify(prod.kitSource ?? null),
+              templateKitBatch(prod) ? JSON.stringify(templateKitBatch(prod)) : null,
             ],
           );
         }

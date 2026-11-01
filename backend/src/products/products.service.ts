@@ -292,7 +292,7 @@ export class ProductsService {
        FROM products p LEFT JOIN suppliers s ON s.id = p.supplier_id
        ${CELL_JOIN_SQL}
        WHERE p.tenant_id = $1 AND p.deleted_at IS NULL
-         AND p.stock <= p.min_stock AND p.min_stock > 0${pointFilter}
+         AND (p.assembly_id IS NULL OR p.stock>0) AND p.stock <= p.min_stock AND p.min_stock > 0${pointFilter}
        ORDER BY p.name`,
       params,
     );

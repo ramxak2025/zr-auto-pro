@@ -1,3 +1,4 @@
+import { templateKitBatch } from '../check-templates/template-product-source';
 import { KIT_EXACT_UNIT_COST } from '../product-kits/kit-stock';
 import { KIT_CAPTURED_COST } from '../product-kits/kit-checks';
 import { BadRequestException, ConflictException } from '@nestjs/common';
@@ -47,6 +48,39 @@ export async function resolveConfirmedProductCosts(
        FROM products WHERE tenant_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR UPDATE`,
     [tenantId, ids],
   );
+  const selected = lines.filter((line) => templateKitBatch(line)?.requiresRevision !== false && templateKitBatch(line));
+  if (selected.length) {
+    const batches = (
+      await client.query(
+        `SELECT p.id,p.assembly_id,p.assembly_revision,p.stock,p.deleted_at,p.warehouse_id,w.point_id,a.recipe_id,a.recipe_version
+      FROM products p JOIN product_assemblies a ON a.id=p.assembly_id AND a.tenant_id=p.tenant_id JOIN warehouses w ON w.id=p.warehouse_id
+      WHERE p.tenant_id=$1 AND p.id=ANY($2::uuid[])`,
+        [tenantId, selected.map((line) => line.productId)],
+      )
+    ).rows;
+    for (const line of selected) {
+      const expected = templateKitBatch(line)!,
+        batch = batches.find((row) => row.id === line.productId);
+      const quantity = lines
+        .filter((item) => item.productId === line.productId)
+        .reduce((sum, item) => sum + Number(item.quantity ?? 1), 0);
+      if (
+        !batch ||
+        batch.deleted_at ||
+        batch.assembly_id !== expected.assemblyId ||
+        batch.recipe_id !== expected.recipeId ||
+        batch.recipe_version !== expected.recipeVersion ||
+        batch.assembly_revision !== expected.expectedRevision ||
+        batch.warehouse_id !== expected.warehouseId ||
+        (expected.pointId !== null && batch.point_id !== expected.pointId) ||
+        Number(batch.stock) < quantity
+      )
+        throw new ConflictException({
+          code: 'TEMPLATE_KIT_BATCH_CHANGED',
+          message: 'Выбранной партии комплекта недостаточно или она изменилась. Выберите партию заново',
+        });
+    }
+  }
   lines.forEach((line, index) => {
     const exact = rows.find((row) => row.id === line.productId)?.assembly_exact_cost;
     if (exact != null) {

@@ -1,3 +1,4 @@
+import { restoreTemplateKitBatches } from '../check-templates/template-product-source';
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { isUUID } from 'class-validator';
 import { createHash } from 'crypto';
@@ -92,6 +93,7 @@ export async function prepareKitCheckProducts<T extends KitCheckLine>(
   let saved: KitSplitIntent[] = [];
   let savedSources: Array<{ id: string; product_id: string; kit_source: KitSourceReference }> = [];
   if (checkId) {
+    products = await restoreTemplateKitBatches(client, tenant, checkId, products);
     const check = (await client.query('SELECT kit_splits FROM checks WHERE id=$1 AND tenant_id=$2', [checkId, tenant]))
       .rows[0];
     saved = intentsFrom(check?.kit_splits ?? []);

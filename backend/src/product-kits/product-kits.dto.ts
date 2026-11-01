@@ -37,6 +37,7 @@ export class AssembleKitDto extends KitRecipeDto {
   @IsOptional() @IsUUID('4') storageCellId?: string;
   @IsOptional() @IsUUID('4') recipeId?: string;
   @IsOptional() @IsInt() @Min(1) expectedRecipeVersion?: number;
+  @IsOptional() @IsInt() @Min(1) recipeVersion?: number;
 }
 export class DisassembleKitDto {
   @IsUUID('4') requestId!: string;

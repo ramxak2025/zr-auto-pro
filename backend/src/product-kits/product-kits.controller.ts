@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { IsInt, Min } from 'class-validator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -15,6 +15,13 @@ export class ProductKitsController {
   constructor(private readonly kits: ProductKitsService) {}
   @RequirePermission('warehouse_access') @Get('recipes') recipes(@CurrentUser() actor: JwtPayload) {
     return this.kits.recipes(actor);
+  }
+  @RequirePermission('warehouse_access') @Get('recipes/:id') recipeVersion(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Query('version') version: string | undefined,
+    @CurrentUser() actor: JwtPayload,
+  ) {
+    return this.kits.recipe(id, actor, version);
   }
   @RequirePermission('warehouse_manage') @Post('recipes') recipe(
     @Body() dto: KitRecipeDto,

@@ -77,6 +77,7 @@ export class ProductKitsService {
       ...(cost ? { costPrice: Number(row.unit_cost) } : {}),
       warehouseId: row.warehouse_id,
       recipeId: row.recipe_id,
+      recipeVersion: row.recipe_version,
       components: components.map((component) => ({
         productId: component.source_product_id,
         name: component.product_snapshot.name,
@@ -100,32 +101,72 @@ export class ProductKitsService {
     return rows;
   }
 
-  async saveRecipe(dto: KitRecipeDto, actor: JwtPayload, id?: string, expectedVersion?: number) {
-    this.assert(actor);
-    if (validateSync(plainToInstance(KitRecipeDto, dto)).length || !dto.name.trim())
-      throw new BadRequestException('Проверьте название и состав шаблона комплекта');
+  async recipe(id: string, actor: JwtPayload, version?: string) {
+    this.assert(actor, false);
+    if (version !== undefined && (typeof version !== 'string' || !/^[1-9]\d{0,8}$/.test(version)))
+      throw new BadRequestException('Некорректная версия рецепта');
+    const { rows } = await this.pool.query(
+      `SELECT r.id,v.name,v.version,v.components FROM kit_recipes r
+      JOIN kit_recipe_versions v ON v.recipe_id=r.id AND v.tenant_id=r.tenant_id AND v.version=COALESCE($4::int,r.version)
+      WHERE r.id=$1 AND r.tenant_id=$2 AND ($3::uuid IS NULL OR r.point_id=$3)`,
+      [id, actor.tenantID, actorPointId(actor), version ?? null],
+    );
+    if (!rows.length) throw new NotFoundException('Рецепт комплекта не найден');
+    return rows[0];
+  }
+
+  private async saveRecipeTx(
+    client: PoolClient,
+    dto: KitRecipeDto,
+    actor: JwtPayload,
+    id?: string,
+    expectedVersion?: number,
+  ) {
     const ids = dto.components.map((item) => item.productId);
-    const found = await this.pool.query(
-      `SELECT p.id FROM products p JOIN warehouses w ON w.id=p.warehouse_id WHERE p.tenant_id=$1 AND p.id=ANY($2::uuid[])
-      AND p.deleted_at IS NULL AND p.assembly_id IS NULL AND ($3::uuid IS NULL OR w.point_id=$3)`,
+    const found = await client.query(
+      `SELECT p.id FROM products p JOIN warehouses w ON w.id=p.warehouse_id
+      WHERE p.tenant_id=$1 AND p.id=ANY($2::uuid[]) AND p.deleted_at IS NULL AND p.assembly_id IS NULL
+      AND ($3::uuid IS NULL OR w.point_id=$3)`,
       [actor.tenantID, ids, actorPointId(actor)],
     );
     if (found.rows.length !== ids.length)
-      throw new BadRequestException(
-        'Выберите доступные товары текущего филиала. Вложенные собранные комплекты сначала разберите',
-      );
-    const result = id
-      ? await this.pool.query(
+      throw new BadRequestException('Выберите доступные компоненты текущего филиала');
+    const { rows } = id
+      ? await client.query(
           `UPDATE kit_recipes SET name=$3,components=$4,version=version+1,updated_at=now()
       WHERE id=$1 AND tenant_id=$2 AND version=$5 AND ($6::uuid IS NULL OR point_id=$6) RETURNING id,name,version,components`,
           [id, actor.tenantID, dto.name.trim(), JSON.stringify(dto.components), expectedVersion, actorPointId(actor)],
         )
-      : await this.pool.query(
-          'INSERT INTO kit_recipes(tenant_id,name,components,created_by,point_id) VALUES($1,$2,$3,$4,$5) RETURNING id,name,version,components',
+      : await client.query(
+          `INSERT INTO kit_recipes(tenant_id,name,components,created_by,point_id)
+        VALUES($1,$2,$3,$4,$5) RETURNING id,name,version,components`,
           [actor.tenantID, dto.name.trim(), JSON.stringify(dto.components), actor.userID, actorPointId(actor)],
         );
-    if (!result.rows.length) throw new ConflictException('Шаблон комплекта изменился. Обновите список');
-    return result.rows[0];
+    if (!rows.length) throw new ConflictException('Рецепт изменился. Обновите список');
+    const result = rows[0];
+    await client.query(
+      'INSERT INTO kit_recipe_versions(tenant_id,recipe_id,version,name,components,created_by) VALUES($1,$2,$3,$4,$5,$6)',
+      [actor.tenantID, result.id, result.version, result.name, JSON.stringify(result.components), actor.userID],
+    );
+    return result;
+  }
+
+  async saveRecipe(dto: KitRecipeDto, actor: JwtPayload, id?: string, expectedVersion?: number) {
+    this.assert(actor);
+    if (validateSync(plainToInstance(KitRecipeDto, dto)).length || !dto.name.trim())
+      throw new BadRequestException('Проверьте название и состав рецепта');
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await this.saveRecipeTx(client, dto, actor, id, expectedVersion);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   private async operation<T>(
@@ -186,17 +227,30 @@ export class ProductKitsService {
   }
 
   private async assembleTx(client: PoolClient, dto: AssembleKitDto, actor: JwtPayload, operation: string) {
-    if (dto.recipeId) {
-      const recipe = await client.query(
-        'SELECT version,components FROM kit_recipes WHERE id=$1 AND tenant_id=$2 AND ($3::uuid IS NULL OR point_id=$3) FOR SHARE',
-        [dto.recipeId, actor.tenantID, actorPointId(actor)],
+    let recipeId = dto.recipeId,
+      recipeVersion: number;
+    if (recipeId) {
+      const { rows } = await client.query(
+        `SELECT r.version AS latest_version,v.version,v.components FROM kit_recipes r
+        JOIN kit_recipe_versions v ON v.recipe_id=r.id AND v.tenant_id=r.tenant_id AND v.version=COALESCE($4::int,r.version)
+        WHERE r.id=$1 AND r.tenant_id=$2 AND ($3::uuid IS NULL OR r.point_id=$3) FOR SHARE OF r`,
+        [recipeId, actor.tenantID, actorPointId(actor), dto.recipeVersion ?? null],
       );
+      const selected = rows[0];
       if (
-        !recipe.rows.length ||
-        recipe.rows[0].version !== dto.expectedRecipeVersion ||
-        kitFingerprint(recipe.rows[0].components) !== kitFingerprint(dto.components)
+        !selected ||
+        (dto.recipeVersion === undefined && selected.latest_version !== dto.expectedRecipeVersion) ||
+        kitFingerprint([...selected.components].sort((a, b) => a.productId.localeCompare(b.productId))) !==
+          kitFingerprint([...dto.components].sort((a, b) => a.productId.localeCompare(b.productId)))
       )
-        throw new ConflictException('Шаблон комплекта изменился. Примените его заново');
+        throw new ConflictException('Рецепт изменился. Примените выбранную версию заново');
+      recipeVersion = selected.version;
+    } else {
+      if (dto.recipeVersion !== undefined || dto.expectedRecipeVersion !== undefined)
+        throw new BadRequestException('Для версии выберите рецепт');
+      const recipe = await this.saveRecipeTx(client, dto, actor);
+      recipeId = recipe.id;
+      recipeVersion = recipe.version;
     }
     const ids = dto.components.map((item) => item.productId).sort();
     const sourceProducts = (
@@ -262,16 +316,17 @@ export class ProductKitsService {
     );
     const assemblyId = kitOperationId();
     await client.query(
-      'INSERT INTO product_assemblies(id,tenant_id,product_id,recipe_id,point_id,assembled_quantity,unit_cost,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',
+      'INSERT INTO product_assemblies(id,tenant_id,product_id,recipe_id,point_id,assembled_quantity,unit_cost,created_by,recipe_version) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',
       [
         assemblyId,
         actor.tenantID,
         product.id,
-        dto.recipeId ?? null,
+        recipeId,
         actorPointId(actor),
         dto.quantity,
         unitCost,
         actor.userID,
+        recipeVersion,
       ],
     );
     await client.query(
@@ -322,6 +377,8 @@ export class ProductKitsService {
     );
     return {
       productId: product.id,
+      recipeId,
+      recipeVersion,
       assemblyId,
       revision: 1,
       quantity: dto.quantity,

@@ -180,6 +180,7 @@ test('template displayed unit/total and CSV export retain49.995 rather than mult
     const saved = await f.run(() =>
       templates.create(f.tenant, f.actor, {
         name: 'Exact template',
+        supportsKitRecipes:true,
         shared: true,
         services: [],
         products: [{ productId: assembled.productId, name: 'Kit', quantity: 1000, sellPrice: 25, costPrice: 50 }],
@@ -187,12 +188,12 @@ test('template displayed unit/total and CSV export retain49.995 rather than mult
     );
     assert.equal(saved.products[0].costPrice, 49.995);
     assert.equal(saved.productCostTotal, 49995);
-    const listed = (await f.run(() => templates.getAll(f.tenant, f.actor))).find(
+    const listed = (await f.run(() => templates.getAll(f.tenant, f.actor,{sourceAware:true,kitRecipes:true}))).find(
       (template) => template.id === saved.id,
     );
     assert.equal(listed.productCostTotal, 49995);
     const staff = { ...f.actor, userID: f.other, role: 'master', permissions: { warehouse_manage: false } };
-    const hidden = (await f.run(() => templates.getAll(f.tenant, staff))).find((template) => template.id === saved.id);
+    const hidden = (await f.run(() => templates.getAll(f.tenant, staff,{sourceAware:true,kitRecipes:true}))).find((template) => template.id === saved.id);
     assert.equal(hidden.products[0].costPrice, undefined);
     assert.equal(hidden.productCostTotal, undefined);
     const csv = await f.run(() => f.products.exportCsv(f.tenant, f.point));
@@ -203,6 +204,7 @@ test('template displayed unit/total and CSV export retain49.995 rather than mult
     const fineTemplate = await f.run(() =>
       templates.create(f.tenant, f.actor, {
         name: 'Exact half-cent template',
+        supportsKitRecipes:true,
         services: [],
         products: [
           { productId: fine.assembled.productId, name: 'Fine kit', quantity: 1, sellPrice: 25, costPrice: 10.08 },

@@ -39,8 +39,15 @@ export class CheckTemplatesController {
   // ── Templates ────────────────────────────────────────────────────────────
 
   @Get()
-  getAll(@CurrentUser() user: JwtPayload, @Query('sourceAware') sourceAware?: string) {
-    return this.checkTemplatesService.getAll(user.tenantID, user, { sourceAware: sourceAware === '1' });
+  getAll(
+    @CurrentUser() user: JwtPayload,
+    @Query('sourceAware') sourceAware?: string,
+    @Query('kitRecipes') kitRecipes?: string,
+  ) {
+    return this.checkTemplatesService.getAll(user.tenantID, user, {
+      sourceAware: sourceAware === '1',
+      kitRecipes: kitRecipes === '1',
+    });
   }
 
   /**

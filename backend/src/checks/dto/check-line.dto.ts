@@ -100,6 +100,7 @@ export class TemplateProductSourceDto {
   @IsString()
   @MaxLength(10)
   version!: string;
+  @IsOptional() @IsInt() @Min(1) expectedAssemblyRevision?: number;
 }
 
 export class KitSplitIntentDto {
@@ -114,6 +115,7 @@ export class KitSourceReferenceDto {
 }
 
 export class CheckProductLineDto {
+  @IsOptional() @IsString() kind?: string;
   @IsOptional()
   @ValidateNested()
   @Type(() => KitSourceReferenceDto)

@@ -1,11 +1,24 @@
+import {
+  hasRecipeTemplateProducts,
+  normalizeKitTemplateProducts,
+  recipeTemplateCandidates,
+} from './kit-template-products';
 import { exactKitLineCost } from '../product-kits/kit-stock';
-import { Injectable, Inject, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import {
+  Injectable,
+  Inject,
+  NotFoundException,
+  BadRequestException,
+  ForbiddenException,
+  ConflictException,
+} from '@nestjs/common';
 import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
 import { userHasPermission } from '../common/guards/permissions.guard';
 import { actorPointId } from '../common/point-scope';
 import { CreateCheckTemplateDto, UpdateCheckTemplateDto, normalizeTemplateServices } from './dto/check-template.dto';
 import {
+  isRecipeTemplateProduct,
   isManualTemplateProduct,
   manualTemplateProductCost,
   resolveTemplateProductSources,
@@ -23,6 +36,25 @@ const TEMPLATE_COLS =
 const FOLDER_COLS = 'id, name, parent_id, sort, created_at, user_id';
 const round2 = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
 
+export interface TemplateProductProjection {
+  productId?: string;
+  name: unknown;
+  quantity: unknown;
+  sellPrice?: unknown;
+  catalogStatus: string;
+  costStatus?: string;
+  costPrice?: number;
+  kind?: 'kitRecipe';
+  kitRecipeId?: unknown;
+  kitRecipeVersion?: unknown;
+  sourceTemplateProduct: {
+    templateId: unknown;
+    productIndex: number;
+    version: unknown;
+    expectedAssemblyRevision?: number;
+  };
+  kitResolution?: { status: string; availableQuantity: number; candidates: Record<string, unknown>[] };
+}
 @Injectable()
 export class CheckTemplatesService {
   constructor(@Inject(PG_POOL) private pool: Pool) {}
@@ -34,6 +66,7 @@ export class CheckTemplatesService {
     actor: TemplateActor,
     db: Pool | PoolClient = this.pool,
     sourceAware = true,
+    kitRecipes = true,
   ) {
     const records = (value: unknown): Record<string, unknown>[] =>
       Array.isArray(value)
@@ -71,14 +104,80 @@ export class CheckTemplatesService {
           )
         ).rows
       : [];
+    const recipeCandidates = await recipeTemplateCandidates(
+      db,
+      tenantId,
+      actorPointId(actor),
+      rows.flatMap((row) => records(row.products)),
+      canSeeCost,
+    );
     const serviceMap = new Map(services.map((row) => [row.id, row]));
     const productMap = new Map(products.map((row) => [row.id, row]));
     const exactCosts = new WeakMap<object, string>();
     const projected = rows.map((row) => {
       const productLines = (Array.isArray(row.products) ? row.products : []).flatMap(
-        (value: unknown, productIndex: number) => {
+        (value: unknown, productIndex: number): TemplateProductProjection[] => {
           if (value === null || typeof value !== 'object' || Array.isArray(value)) return [];
           const line = value as Record<string, unknown>;
+          if (isRecipeTemplateProduct(line)) {
+            const candidates = recipeCandidates.filter(
+              (p) => p.recipe_id === line.kitRecipeId && p.recipe_version === line.kitRecipeVersion,
+            );
+            const required = records(row.products)
+              .filter(
+                (p) =>
+                  isRecipeTemplateProduct(p) &&
+                  p.kitRecipeId === line.kitRecipeId &&
+                  p.kitRecipeVersion === line.kitRecipeVersion,
+              )
+              .reduce((sum, p) => sum + Number(p.quantity), 0);
+            const available = candidates.reduce((sum, p) => sum + Number(p.stock), 0);
+            const status = !candidates.length
+              ? 'unavailable'
+              : candidates.length > 1
+                ? 'selection_required'
+                : available < required
+                  ? 'shortage'
+                  : 'resolved';
+            const chosen = status === 'resolved' ? candidates[0] : null;
+            const result = {
+              kind: 'kitRecipe' as const,
+              kitRecipeId: line.kitRecipeId,
+              kitRecipeVersion: line.kitRecipeVersion,
+              name: line.name,
+              quantity: line.quantity,
+              ...(chosen ? { productId: chosen.product_id, sellPrice: Number(chosen.sell_price) } : {}),
+              catalogStatus: status === 'resolved' ? 'current' : status,
+              sourceTemplateProduct: {
+                templateId: row.id,
+                productIndex,
+                version: row.product_version,
+                ...(chosen ? { expectedAssemblyRevision: chosen.assembly_revision } : {}),
+              },
+              kitResolution: {
+                status,
+                availableQuantity: available,
+                candidates: candidates.map((p) => ({
+                  productId: p.product_id,
+                  assemblyId: p.assembly_id,
+                  revision: p.assembly_revision,
+                  quantity: Number(p.stock),
+                  name: p.name,
+                  sellPrice: Number(p.sell_price),
+                  warehouseId: p.warehouse_id,
+                  ...(canSeeCost ? { costPrice: Number(p.assembly_exact_cost) } : {}),
+                })),
+              },
+              ...(canSeeCost
+                ? {
+                    costStatus: chosen ? 'known' : 'unknown',
+                    ...(chosen ? { costPrice: Number(chosen.assembly_exact_cost) } : {}),
+                  }
+                : {}),
+            };
+            if (canSeeCost && chosen) exactCosts.set(result, String(chosen.assembly_exact_cost));
+            return [result];
+          }
           const current = productMap.get(line.productId);
           const manual = isManualTemplateProduct(line);
           const cost = manual
@@ -159,9 +258,15 @@ export class CheckTemplatesService {
     });
     // Old clients discard provenance and send hidden/missing cost as zero.
     // Keep complete safe templates available; never send a partial recipe.
+    const supported =
+      kitRecipes && sourceAware
+        ? projected
+        : projected.filter(
+            (template) => !template.products.some((line) => 'kind' in line && line.kind === 'kitRecipe'),
+          );
     return sourceAware
-      ? projected
-      : projected.filter((template) =>
+      ? supported
+      : supported.filter((template) =>
           template.products.every((line) =>
             line.catalogStatus === 'current'
               ? !canSeeCost || line.costStatus === 'known'
@@ -313,7 +418,7 @@ export class CheckTemplatesService {
 
   // ── Templates ────────────────────────────────────────────────────────────
 
-  async getAll(tenantId: string, actor: TemplateActor, options: { sourceAware?: boolean } = {}) {
+  async getAll(tenantId: string, actor: TemplateActor, options: { sourceAware?: boolean; kitRecipes?: boolean } = {}) {
     const { rows } = await this.pool.query(
       `SELECT ${TEMPLATE_COLS}
        FROM check_templates
@@ -321,7 +426,14 @@ export class CheckTemplatesService {
        ORDER BY name ASC`,
       [tenantId, actor.userID],
     );
-    return this.projectRows(rows, tenantId, actor, this.pool, options.sourceAware !== false);
+    return this.projectRows(
+      rows,
+      tenantId,
+      actor,
+      this.pool,
+      options.sourceAware !== false,
+      options.kitRecipes === true,
+    );
   }
 
   async create(tenantId: string, actor: TemplateActor, dto: CreateCheckTemplateDto) {
@@ -334,7 +446,20 @@ export class CheckTemplatesService {
         await this.assertFolderScope(client, dto.folderId, tenantId, actor, shared);
         folderId = dto.folderId;
       }
-      const products = await resolveTemplateProductSources(client, tenantId, actor.userID, dto.products || []);
+      const products = await normalizeKitTemplateProducts(
+        client,
+        tenantId,
+        actorPointId(actor),
+        await resolveTemplateProductSources(
+          client,
+          tenantId,
+          actor.userID,
+          dto.products || [],
+          actorPointId(actor),
+          true,
+        ),
+        dto.supportsKitRecipes === true,
+      );
       const { rows } = await client.query(
         `INSERT INTO check_templates (tenant_id, name, services, products, user_id, folder_id)
          VALUES ($1, $2, $3, $4, $5, $6)
@@ -366,6 +491,11 @@ export class CheckTemplatesService {
   async update(id: string, tenantId: string, actor: TemplateActor, dto: UpdateCheckTemplateDto) {
     return this.withTreeLock(tenantId, async (client) => {
       const current = await this.loadForWrite(client, id, tenantId, actor);
+      if (hasRecipeTemplateProducts(current.products) && dto.supportsKitRecipes !== true)
+        throw new ConflictException({
+          code: 'TEMPLATE_KIT_CLIENT_UPDATE_REQUIRED',
+          message: 'Обновите приложение для изменения шаблона комплекта',
+        });
       const currentlyShared = current.user_id == null;
       if (currentlyShared && dto.shared === false) {
         throw new BadRequestException({
@@ -392,7 +522,24 @@ export class CheckTemplatesService {
       }
       if (dto.products !== undefined) {
         sets.push(`products=$${idx++}`);
-        vals.push(JSON.stringify(await resolveTemplateProductSources(client, tenantId, actor.userID, dto.products)));
+        vals.push(
+          JSON.stringify(
+            await normalizeKitTemplateProducts(
+              client,
+              tenantId,
+              actorPointId(actor),
+              await resolveTemplateProductSources(
+                client,
+                tenantId,
+                actor.userID,
+                dto.products,
+                actorPointId(actor),
+                true,
+              ),
+              dto.supportsKitRecipes === true,
+            ),
+          ),
+        );
       }
       if (current.user_id !== this.scopeOwner(actor, shared)) {
         sets.push(`user_id=$${idx++}`);
