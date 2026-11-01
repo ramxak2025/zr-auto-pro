@@ -222,7 +222,9 @@ export class ProductsService {
     const offset = (page - 1) * limit;
     const search = query.search || '';
 
-    let where = 'p.tenant_id = $1 AND p.deleted_at IS NULL';
+    // Physical batches leave the active catalog when sold or dismantled. Their
+    // product identity/history stays addressable; ordinary zero-stock SKUs stay.
+    let where = 'p.tenant_id = $1 AND p.deleted_at IS NULL AND (p.assembly_id IS NULL OR p.stock > 0)';
     if (query.lowStock === true || query.lowStock === 'true')
       where += ' AND p.min_stock > 0 AND p.stock <= p.min_stock';
     const params: any[] = [tenantID];

@@ -104,7 +104,8 @@ export class ProductBarcodesService {
     const page = this.pageNumber(query.page, 1, 1000000);
     const limit = this.pageNumber(query.limit, 50, 200);
     const params: unknown[] = [tenantID, query.barcode.trim()];
-    let where = 'p.tenant_id=$1 AND p.deleted_at IS NULL AND (p.internal_barcode=$2 OR p.barcode=$2)';
+    let where =
+      'p.tenant_id=$1 AND p.deleted_at IS NULL AND (p.assembly_id IS NULL OR p.stock > 0) AND (p.internal_barcode=$2 OR p.barcode=$2)';
     where += warehousePointFilterSql('p', actorPointId(actor), params);
     if (query.warehouseId) {
       params.push(query.warehouseId);

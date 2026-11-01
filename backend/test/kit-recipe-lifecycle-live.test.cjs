@@ -7,6 +7,7 @@ const {ClientsService}=require('../dist/clients/clients.service');
 const {WarrantyService}=require('../dist/warranty/warranty.service');
 const {ReturnsService}=require('../dist/returns/returns.service');
 const {WarehousesService}=require('../dist/warehouses/warehouses.service');
+const {ProductBarcodesService}=require('../dist/products/product-barcodes.service');
 async function setup(f){
  const kits=new ProductKitsService(f.pool,f.products),templates=new CheckTemplatesService(f.pool);
  const checks=new ChecksService(f.pool,new WarrantyService(f.pool),new ClientsService(f.pool));
@@ -121,6 +122,27 @@ test('exhausted physical batches leave low-stock alerts while ordinary zero-stoc
  await f.run(()=>x.kits.disassemble(a.productId,{requestId:randomUUID(),expectedRevision:1,quantity:1},f.actor));
  const ids=(await f.run(()=>f.products.getLowStock(f.tenant,f.actor))).map(p=>p.id);assert.ok(!ids.includes(a.productId));assert.ok(ids.includes(ordinary.id));
  assert.equal((await f.run(()=>x.kits.get(a.productId,f.actor))).quantity,0);
+},1));
+
+test('active catalog and exact barcode hide exhausted physical batches, retain ordinary zero stock and restore returned kits',options,()=>fixture(async f=>{
+ const x=await setup(f),a=await x.assemble({quantity:1}),ordinary=await f.product({name:'Normal zero',stock:0,barcode:'NORMAL-ZERO'});
+ const barcodes=new ProductBarcodesService(f.pool,f.products);
+ const generated=await f.run(()=>barcodes.generate(f.tenant,[a.productId],f.actor));
+ const code=generated.products[0].internalBarcode;
+ const catalog=(search='')=>f.run(()=>f.products.getAll(f.tenant,{warehouseId:f.main,search},f.actor));
+ const lookup=()=>f.run(()=>barcodes.lookup(f.tenant,{barcode:code},f.actor));
+ assert.ok((await catalog()).data.some(p=>p.id===a.productId));assert.equal((await lookup()).status,'found');
+ await x.save(a);const sale=await x.sale((await x.read())[0].products[0]);
+ let listing=await catalog();assert.ok(!listing.data.some(p=>p.id===a.productId));assert.ok(listing.data.some(p=>p.id===ordinary.id));
+ assert.equal((await catalog('Набор')).total,0);assert.equal((await lookup()).status,'not_found');
+ assert.equal((await f.run(()=>f.products.getById(a.productId,f.tenant,f.actor))).stock,0);
+ assert.equal((await f.run(()=>barcodes.lookup(f.tenant,{barcode:'NORMAL-ZERO'},f.actor))).status,'found');
+ const returns=new ReturnsService(f.pool,new WarehousesService(f.pool));await f.run(()=>returns.createReturn(f.tenant,f.owner,sale.id,{destination:'warehouse',scope:'full'},f.actor));
+ assert.ok((await catalog()).data.some(p=>p.id===a.productId));assert.equal((await lookup()).status,'found');
+ const fresh=await f.run(()=>x.kits.get(a.productId,f.actor));
+ await f.run(()=>x.kits.disassemble(a.productId,{requestId:randomUUID(),expectedRevision:fresh.revision,quantity:1},f.actor));
+ assert.equal((await catalog('Набор')).total,0);assert.equal((await lookup()).status,'not_found');
+ assert.ok((await f.run(()=>x.kits.recipes(f.actor))).some(recipe=>recipe.id===a.recipeId));
 },1));
 
 
