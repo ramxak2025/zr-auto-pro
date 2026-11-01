@@ -102,7 +102,22 @@ export class TemplateProductSourceDto {
   version!: string;
 }
 
+export class KitSplitIntentDto {
+  @IsUUID('4') intentId!: string;
+  @IsUUID('4') productId!: string;
+  @IsInt() @Min(1) expectedRevision!: number;
+  @IsInt() @Min(1) @Max(10000) quantity!: number;
+}
+export class KitSourceReferenceDto {
+  @IsUUID('4') intentId!: string;
+  @IsUUID('4') sourceProductId!: string;
+}
+
 export class CheckProductLineDto {
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => KitSourceReferenceDto)
+  kitSource?: KitSourceReferenceDto;
   /** Existing saved product-line identity on a paid edit. */
   @IsOptional()
   @IsUUID('all')
@@ -163,6 +178,12 @@ export class CheckInstallmentDto {
  * обязателен», «Добавьте хотя бы одну услугу или товар») with friendly 400s.
  */
 export class BaseCheckDto {
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @ValidateNested({ each: true })
+  @Type(() => KitSplitIntentDto)
+  kitSplits?: KitSplitIntentDto[];
   @IsOptional()
   @IsString()
   @MaxLength(64, maxLen('Дата', 64))

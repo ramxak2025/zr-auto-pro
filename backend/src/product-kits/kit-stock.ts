@@ -60,6 +60,13 @@ export async function decrementKitAwareCheckStock(
   sql: string,
   params: [number, string, string, string],
 ) {
+  if (!Number.isInteger(params[0])) {
+    const product = await client.query('SELECT assembly_id FROM products WHERE id=$1 AND tenant_id=$2', [
+      params[1],
+      params[2],
+    ]);
+    if (product.rows[0]?.assembly_id) throw new BadRequestException('Собранный комплект продаётся только целиком');
+  }
   await checkKitWrite(client);
   const result = await client.query(`${sql} AND (assembly_id IS NULL OR stock >= $1) RETURNING id`, params);
   if (result.rowCount === 0) {
@@ -75,7 +82,7 @@ export async function decrementKitAwareCheckStock(
   }
 }
 
-export async function assertKitPlace(
+async function checkKitPlace(
   client: PoolClient,
   tenant: string,
   point: string | null,
@@ -235,30 +242,7 @@ export async function disassembleKitTx(
     if (!destination) {
       // A changed/moved source is a different stock position. Recreate the captured
       // basis at the original place, without rewriting any existing stock's cost.
-      const { rows } = await client.query(
-        `INSERT INTO products(tenant_id,name,category,unit,cost_price,sell_price,stock,min_stock,warehouse_id,storage_cell_id,
-        photo,photos,brand,article,packaging,barcode,warranty_days,restored_from_source_id,cost_price_is_placeholder,sell_price_is_placeholder)
-        VALUES($1,$2,$3,$4,$5,$6,0,0,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,false,false) RETURNING *`,
-        [
-          tenant,
-          snapshot.name,
-          component.source_category,
-          snapshot.unit || 'шт',
-          component.unit_cost,
-          snapshot.sell_price,
-          component.source_warehouse_id,
-          component.source_cell_id,
-          snapshot.photo,
-          JSON.stringify(snapshot.photos ?? []),
-          snapshot.brand ?? '',
-          snapshot.article ?? '',
-          snapshot.packaging ?? '',
-          snapshot.barcode,
-          snapshot.warranty_days,
-          component.source_product_id,
-        ],
-      );
-      destination = rows[0] as KitProduct;
+      destination = await createCapturedKitPosition(client, tenant, component);
       products.push(destination);
     }
     destinations.push({
@@ -303,4 +287,68 @@ export async function disassembleKitTx(
 
 export function kitOperationId() {
   return randomUUID();
+}
+
+export function isCapturedKitPosition(product: KitProduct | undefined, component: AssemblyComponent): boolean {
+  return (
+    !!product &&
+    !product.deleted_at &&
+    !product.assembly_id &&
+    product.warehouse_id === component.source_warehouse_id &&
+    (product.category ?? '') === (component.source_category ?? '') &&
+    product.storage_cell_id === component.source_cell_id &&
+    cents(product.cost_price) === cents(component.unit_cost) &&
+    (product.unit || 'шт') === (component.product_snapshot.unit || 'шт')
+  );
+}
+export async function createCapturedKitPosition(
+  client: PoolClient,
+  tenant: string,
+  component: AssemblyComponent,
+): Promise<KitProduct> {
+  const snapshot = component.product_snapshot;
+  const { rows } = await client.query(
+    `INSERT INTO products(tenant_id,name,category,unit,cost_price,sell_price,stock,min_stock,warehouse_id,storage_cell_id,
+        photo,photos,brand,article,packaging,barcode,warranty_days,restored_from_source_id,cost_price_is_placeholder,sell_price_is_placeholder)
+        VALUES($1,$2,$3,$4,$5,$6,0,0,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,false,false) RETURNING *`,
+    [
+      tenant,
+      snapshot.name,
+      component.source_category,
+      snapshot.unit || 'шт',
+      component.unit_cost,
+      snapshot.sell_price,
+      component.source_warehouse_id,
+      component.source_cell_id,
+      snapshot.photo,
+      JSON.stringify(snapshot.photos ?? []),
+      snapshot.brand ?? '',
+      snapshot.article ?? '',
+      snapshot.packaging ?? '',
+      snapshot.barcode,
+      snapshot.warranty_days,
+      component.source_product_id,
+    ],
+  );
+  return rows[0] as KitProduct;
+}
+
+export async function assertKitPlace(
+  client: PoolClient,
+  tenant: string,
+  point: string | null,
+  warehouse: string | null,
+  category: string | null,
+  cell: string | null,
+) {
+  try {
+    await checkKitPlace(client, tenant, point, warehouse, category, cell);
+  } catch (error) {
+    if ((error as { code?: string }).code === '55P03')
+      throw new ConflictException({
+        code: 'KIT_SOURCE_PLACE_BUSY',
+        message: 'Место хранения комплекта сейчас меняется. Повторите операцию',
+      });
+    throw error;
+  }
 }

@@ -1,3 +1,10 @@
+import {
+  KIT_CAPTURED_COST,
+  kitCanonicalProductId,
+  prepareKitCheckProducts,
+  resolveSavedKitPositions,
+  saveCheckKitIntents,
+} from '../product-kits/kit-checks';
 import { decrementKitAwareCheckStock } from '../product-kits/kit-stock';
 import { captureCheckProductHistory, finishCheckProductHistory } from './check-product-events';
 import { checkMotivationAmounts } from './check-display-profit';
@@ -632,19 +639,19 @@ export class ChecksService {
               ROUND(agg.margin_base * agg.percent / 100.0, 2), now()
          FROM checks c
          JOIN (
-           SELECT pl.product_id,
+           SELECT COALESCE(NULLIF(pl.kit_source->>'sourceProductId','')::uuid,pl.product_id) AS product_id,
                   SUM(pl.quantity)                        AS qty,
                   SUM(pl.total_sell) - SUM(pl.total_cost) AS margin_base,
                   MAX(mp.percent)                         AS percent
              FROM check_product_lines pl
              JOIN motivation_promo_products mp
                ON mp.tenant_id  = $1
-              AND mp.product_id = pl.product_id
+              AND mp.product_id = COALESCE(NULLIF(pl.kit_source->>'sourceProductId','')::uuid,pl.product_id)
               AND mp.active     = true
               AND (mp.starts_at IS NULL OR mp.starts_at <= now())
               AND (mp.ends_at   IS NULL OR mp.ends_at   >= now())
             WHERE pl.check_id = $2 AND pl.product_id IS NOT NULL
-            GROUP BY pl.product_id
+            GROUP BY COALESCE(NULLIF(pl.kit_source->>'sourceProductId','')::uuid,pl.product_id)
          ) agg ON true
         WHERE c.id = $2 AND c.tenant_id = $1 AND c.master_id IS NOT NULL
           AND agg.margin_base > 0 AND agg.percent > 0
@@ -657,7 +664,7 @@ export class ChecksService {
       `INSERT INTO motivation_accruals(tenant_id,employee_id,check_id,product_id,qty,margin_base,percent,amount,accrued_at)
       SELECT a.tenant_id,a.employee_id,a.check_id,a.product_id,SUM(pl.quantity),SUM(pl.total_sell-pl.total_cost),a.percent,
         ROUND(SUM(pl.total_sell-pl.total_cost)*a.percent/100.0,2),a.accrued_at
-      FROM check_motivation_legacy_snapshots a JOIN check_product_lines pl ON pl.check_id=a.check_id AND pl.product_id=a.product_id
+      FROM check_motivation_legacy_snapshots a JOIN check_product_lines pl ON pl.check_id=a.check_id AND COALESCE(NULLIF(pl.kit_source->>'sourceProductId','')::uuid,pl.product_id)=a.product_id
       WHERE a.tenant_id=$1 AND a.check_id=$2 AND a.protected=true
       GROUP BY a.tenant_id,a.employee_id,a.check_id,a.product_id,a.percent,a.accrued_at
       HAVING SUM(pl.total_sell-pl.total_cost)>0 AND a.percent>0`,
@@ -1710,9 +1717,11 @@ export class ChecksService {
        WHERE pl.check_id=$1`,
       [id, tenantID],
     );
+    ch.kitSplits = row.kit_splits ?? [];
     ch.products = prodRows.map((p) => ({
       id: p.id,
       productId: p.product_id,
+      kitSource: p.kit_source ?? undefined,
       name: p.name,
       sellPrice: parseFloat(p.sell_price) || 0,
       costPrice: parseFloat(p.cost_price) || 0,
@@ -3066,6 +3075,33 @@ export class ChecksService {
       await client.query('BEGIN');
       await lockMotivationRead(client, tenantID);
 
+      if (dto.kitSplits?.length && !effectiveIsDeferred) {
+        if (!clientRequestId) throw new BadRequestException('Для продажи разобранного комплекта нужен clientRequestId');
+        await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
+          `kit-check-create:${tenantID}:${clientRequestId}`,
+        ]);
+        const prior = await client.query('SELECT id FROM checks WHERE tenant_id=$1 AND client_request_id=$2', [
+          tenantID,
+          clientRequestId,
+        ]);
+        if (prior.rows.length) {
+          await client.query('COMMIT');
+          releaseClient();
+          return this.getById(prior.rows[0].id, tenantID, actor);
+        }
+      }
+      const kitPrepared = await prepareKitCheckProducts(
+        client,
+        tenantID,
+        authorPointId,
+        userID,
+        null,
+        dto.kitSplits,
+        products,
+        !effectiveIsDeferred,
+      );
+      products = kitPrepared.products;
+
       // ── Cross-tenant integrity guard ─────────────────────────────────
       products = await resolveTemplateProductSources(
         client,
@@ -3187,7 +3223,11 @@ export class ChecksService {
       // Fetch product-specific commissions for this master
       const productCommissionMap: Record<string, number> = {};
       if (products.length > 0) {
-        const prodIds = products.map((p: Record<string, unknown>) => p.productId).filter(Boolean);
+        const prodIds = products
+          .map((p: { productId?: string; kitSource?: { intentId: string; sourceProductId: string } }) =>
+            kitCanonicalProductId(p),
+          )
+          .filter(Boolean);
         if (prodIds.length > 0) {
           const { rows: pcRows } = await client.query(
             `SELECT product_id, percent FROM product_commissions WHERE user_id = $1 AND product_id = ANY($2) AND tenant_id = $3`,
@@ -3238,7 +3278,7 @@ export class ChecksService {
         productCostTotal += totalCost;
 
         // Product commission: specific per-product % takes priority, otherwise global %
-        const pct = productCommissionMap[prod.productId] ?? globalProductPct;
+        const pct = productCommissionMap[kitCanonicalProductId(prod) ?? ''] ?? globalProductPct;
         if (pct > 0 && productProfit > 0) {
           // Rounded per-addend (item 6) — mirrors the lineSalary round2 so the
           // accumulated commission is an exact money amount, not float dust.
@@ -3428,6 +3468,7 @@ export class ChecksService {
       );
 
       const checkId = checkRows[0].id;
+      await saveCheckKitIntents(client, tenantID, checkId, kitPrepared.intents);
 
       // First-save price policy and identity are written in the check transaction.
       await saveCheckServiceLines(client, tenantID, checkId, serviceLines, actor?.userID ?? userID);
@@ -3451,8 +3492,8 @@ export class ChecksService {
       // those locks without a SHARE→UPDATE upgrade or a counter/product cycle.
       for (const prod of productLines) {
         await client.query(
-          `INSERT INTO check_product_lines (check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          `INSERT INTO check_product_lines (check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost, kit_source)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
           [
             checkId,
             prod.productId || null,
@@ -3462,6 +3503,7 @@ export class ChecksService {
             prod.quantity || 1,
             prod.totalSell,
             prod.totalCost,
+            JSON.stringify(prod.kitSource ?? null),
           ],
         );
 
@@ -4191,17 +4233,47 @@ export class ChecksService {
         const { rows: storedProducts } = await client.query('SELECT * FROM check_product_lines WHERE check_id=$1', [
           id,
         ]);
-        await resolveConfirmedProductCosts(
+        const prepared = await prepareKitCheckProducts(
           client,
           tenantID,
+          actorPointId(actor),
+          actorUserId,
+          id,
+          undefined,
           storedProducts.map((row) => ({
+            id: row.id,
             productId: row.product_id,
             name: row.name,
             sellPrice: Number(row.sell_price),
+            costPrice: Number(row.cost_price),
             quantity: Number(row.quantity),
+            kitSource: row.kit_source ?? undefined,
           })),
-          id,
+          true,
         );
+        await saveCheckKitIntents(client, tenantID, id, prepared.intents);
+        let costDelta = 0;
+        for (const line of prepared.products) {
+          const cost = line[KIT_CAPTURED_COST];
+          if (cost === undefined) continue;
+          const prior = storedProducts.find((row) => row.id === line.id)!;
+          const total = round2(cost * (line.quantity || 1));
+          costDelta = round2(costDelta + total - Number(prior.total_cost));
+          await client.query(
+            'UPDATE check_product_lines SET product_id=$3,cost_price=$4,total_cost=$5,kit_source=$6 WHERE id=$1 AND check_id=$2',
+            [line.id, id, line.productId, cost, total, JSON.stringify(line.kitSource)],
+          );
+        }
+        if (costDelta !== 0) {
+          await client.query(
+            'UPDATE checks SET product_cost_total=product_cost_total+$3,total_cost=total_cost+$3,profit=profit-$3 WHERE id=$1 AND tenant_id=$2',
+            [id, tenantID, costDelta],
+          );
+          checkRows[0].product_cost_total = Number(checkRows[0].product_cost_total) + costDelta;
+          checkRows[0].total_cost = Number(checkRows[0].total_cost) + costDelta;
+          checkRows[0].profit = Number(checkRows[0].profit) - costDelta;
+        }
+        await resolveConfirmedProductCosts(client, tenantID, prepared.products, id);
       }
 
       // Machine exchange may close a known draft only; it must never race into
@@ -4735,7 +4807,20 @@ export class ChecksService {
         dto.products || [],
         actorPointId(actor),
       );
+      const kitPrepared = await prepareKitCheckProducts(
+        client,
+        tenantID,
+        actorPointId(actor),
+        actorUserId,
+        id,
+        dto.kitSplits,
+        dto.products,
+        lockedIsActivating,
+      );
+      dto.products = kitPrepared.products;
+      if (lockedIsActivating && kitPrepared.intents.length) preserve.products = false;
       const products = dto.products;
+      await saveCheckKitIntents(client, tenantID, id, kitPrepared.intents);
 
       // ── Cross-tenant integrity guard (same as create()) ───────────────
       // fullUpdate persists client-supplied master/client/car/service/product
@@ -4926,7 +5011,11 @@ export class ChecksService {
 
         const productCommissionMap: Record<string, number> = {};
         if (products.length > 0) {
-          const prodIds = products.map((p: Record<string, unknown>) => p.productId).filter(Boolean);
+          const prodIds = products
+            .map((p: { productId?: string; kitSource?: { intentId: string; sourceProductId: string } }) =>
+              kitCanonicalProductId(p),
+            )
+            .filter(Boolean);
           if (prodIds.length > 0) {
             const { rows: pcRows } = await client.query(
               `SELECT product_id, percent FROM product_commissions WHERE user_id = $1 AND product_id = ANY($2) AND tenant_id = $3`,
@@ -4968,7 +5057,7 @@ export class ChecksService {
           productTotal += totalSell;
           productCostTotal += totalCost;
 
-          const pct = productCommissionMap[prod.productId] ?? globalProductPct;
+          const pct = productCommissionMap[kitCanonicalProductId(prod) ?? ''] ?? globalProductPct;
           if (pct > 0 && productProfit > 0) {
             // Rounded per-addend (item 6) — mirrors the lineSalary round2 so the
             // accumulated commission is an exact money amount, not float dust.
@@ -5129,7 +5218,7 @@ export class ChecksService {
 
         for (const prod of productLines) {
           await client.query(
-            `INSERT INTO check_product_lines (check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+            `INSERT INTO check_product_lines (check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost, kit_source) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
             [
               id,
               prod.productId || null,
@@ -5139,6 +5228,7 @@ export class ChecksService {
               prod.quantity || 1,
               prod.totalSell,
               prod.totalCost,
+              JSON.stringify(prod.kitSource ?? null),
             ],
           );
         }
@@ -5350,7 +5440,7 @@ export class ChecksService {
       if (referencedProductIds.length > 0) {
         const { rows: pcRows } = await client.query(
           `SELECT product_id, percent FROM product_commissions WHERE user_id = $1 AND product_id = ANY($2) AND tenant_id = $3`,
-          [primaryMasterId, referencedProductIds, tenantID],
+          [primaryMasterId, products.map(kitCanonicalProductId).filter(Boolean), tenantID],
         );
         for (const r of pcRows) productCommissionMap[r.product_id] = parseFloat(r.percent) || 0;
       }
@@ -5382,7 +5472,7 @@ export class ChecksService {
         const productProfit = totalSell - totalCost;
         productTotal += totalSell;
         productCostTotal += totalCost;
-        const pct = productCommissionMap[prod.productId] ?? globalProductPct;
+        const pct = productCommissionMap[kitCanonicalProductId(prod) ?? ''] ?? globalProductPct;
         if (pct > 0 && productProfit > 0) productSalaryTotal += round2((productProfit * pct) / 100);
         productLines.push({
           ...prod,
@@ -5681,6 +5771,14 @@ export class ChecksService {
 
       // Cross-tenant integrity guards (same as create()/fullUpdate): every
       // client-supplied reference must belong to this tenant.
+      if (prior.kit_splits?.length)
+        await resolveSavedKitPositions(
+          client,
+          tenantID,
+          actorPointId(actor),
+          id,
+          (dto.products ?? []).flatMap((line: { productId?: string }) => (line.productId ? [line.productId] : [])),
+        );
       const preserve = { services: dto.services === undefined, products: dto.products === undefined };
       dto = { ...dto, ...(await hydrateOmittedCheckLines(client, tenantID, id, preserve)) };
       if (dto.products)
@@ -5691,6 +5789,24 @@ export class ChecksService {
           dto.products,
           actorPointId(actor),
         );
+      const oldKitLockIds = (
+        await client.query('SELECT product_id FROM check_product_lines WHERE check_id=$1 AND product_id IS NOT NULL', [
+          id,
+        ])
+      ).rows.map((row) => row.product_id as string);
+      const kitPrepared = await prepareKitCheckProducts(
+        client,
+        tenantID,
+        actorPointId(actor),
+        actorUserId,
+        id,
+        dto.kitSplits,
+        dto.products || [],
+        true,
+        oldKitLockIds,
+      );
+      dto.products = kitPrepared.products;
+      await saveCheckKitIntents(client, tenantID, id, kitPrepared.intents);
       const services = dto.services || [];
       if (!preserve.products)
         dto.products = await reconcileMotivationProductLines(client, tenantID, id, dto.products || []);
@@ -5914,7 +6030,7 @@ export class ChecksService {
         await client.query('DELETE FROM check_product_lines WHERE check_id=$1', [id]);
         for (const prod of c.productLines) {
           await client.query(
-            `INSERT INTO check_product_lines (id, check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+            `INSERT INTO check_product_lines (id, check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost, kit_source) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
             [
               prod.id,
               id,
@@ -5925,6 +6041,7 @@ export class ChecksService {
               prod.quantity || 1,
               prod.totalSell,
               prod.totalCost,
+              JSON.stringify(prod.kitSource ?? null),
             ],
           );
         }
@@ -6175,6 +6292,7 @@ export class ChecksService {
         });
       }
 
+      if (prior.kit_splits?.length) await resolveSavedKitPositions(client, tenantID, actorPointId(actor), id);
       const productHistory = await captureCheckProductHistory(client, tenantID, id, 'sale_annulment', actorUserId);
       // (a) reverse the materialised footprint (stock / motivation / warranty).
       await this.reverseCheckFootprintTx(client, tenantID, id, prior);
@@ -6371,6 +6489,7 @@ export class ChecksService {
 
       // Re-apply first (may throw on insufficient stock → whole restore rolls back
       // and the check stays safely in the trash).
+      if (prior.kit_splits?.length) await resolveSavedKitPositions(client, tenantID, actorPointId(actor), id);
       const productHistory = await captureCheckProductHistory(
         client,
         tenantID,

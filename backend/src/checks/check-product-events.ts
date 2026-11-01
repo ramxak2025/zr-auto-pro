@@ -9,6 +9,7 @@ type LineFact = {
   sellPrice: number;
   totalCost: number;
   totalSell: number;
+  kitSource?: { intentId: string; sourceProductId: string };
 };
 interface CheckFact {
   id: string;
@@ -41,7 +42,7 @@ interface HistoryCapture {
 
 async function lineFacts(client: PoolClient, checkId: string): Promise<Map<string, LineFact[]>> {
   const { rows } = await client.query(
-    `SELECT product_id,name,quantity,cost_price,sell_price,total_cost,total_sell
+    `SELECT product_id,name,quantity,cost_price,sell_price,total_cost,total_sell,kit_source
     FROM check_product_lines WHERE check_id=$1 AND product_id IS NOT NULL
     ORDER BY product_id,name,quantity,cost_price,sell_price,total_cost,total_sell`,
     [checkId],
@@ -56,6 +57,7 @@ async function lineFacts(client: PoolClient, checkId: string): Promise<Map<strin
       sellPrice: Number(row.sell_price),
       totalCost: Number(row.total_cost),
       totalSell: Number(row.total_sell),
+      ...(row.kit_source ? { kitSource: row.kit_source } : {}),
     });
     result.set(row.product_id, lines);
   }
@@ -89,9 +91,9 @@ async function insertEvent(
   const check = capture.check;
   await client.query(
     `INSERT INTO check_product_events(tenant_id,point_id,check_id,check_number,revision,product_id,product_name,unit,
-    kind,quantity,stock_delta,stock_before,stock_after,warehouse_id,category,storage_cell_id,actor_id,visible_user_ids,before_lines,after_lines,occurred_at,document_date)
+    kind,quantity,stock_delta,stock_before,stock_after,warehouse_id,category,storage_cell_id,actor_id,visible_user_ids,before_lines,after_lines,occurred_at,document_date,source_product_id)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-      CASE WHEN $21 THEN $22::timestamptz ELSE clock_timestamp() END,$22)`,
+      CASE WHEN $21 THEN $22::timestamptz ELSE clock_timestamp() END,$22,$23)`,
     [
       check.tenant_id,
       check.point_id,
@@ -115,6 +117,9 @@ async function insertEvent(
       JSON.stringify(afterLines),
       legacy,
       check.date,
+      afterLines.find((line) => line.kitSource)?.kitSource?.sourceProductId ??
+        beforeLines.find((line) => line.kitSource)?.kitSource?.sourceProductId ??
+        null,
     ],
   );
 }

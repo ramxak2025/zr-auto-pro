@@ -2146,6 +2146,7 @@ export interface TemplateProductSource {
 }
 
 export interface CheckProductLine {
+  kitSource?: { intentId: string; sourceProductId: string };
   sourceTemplateProduct?: TemplateProductSource;
   id?: string;
   productId?: string;
@@ -2400,6 +2401,7 @@ export interface CheckAssignee {
 }
 
 export interface Check {
+  kitSplits?: Array<{ intentId: string; productId: string; expectedRevision: number; quantity: number }>;
   id: string;
   number: number;
   date: string;

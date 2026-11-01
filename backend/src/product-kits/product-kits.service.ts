@@ -238,8 +238,9 @@ export class ProductKitsService {
     if (costMilliCents % 1000n !== 0n)
       throw new ConflictException({
         code: 'KIT_COST_PRECISION',
+        exactCost: decimal(costMilliCents, 5),
         message:
-          'Себестоимость одного комплекта получается с долей копейки. Измените количество компонента, чтобы сохранить точную стоимость запасов',
+          'Сборка состава с долей копейки в себестоимости пока недоступна. Количество компонентов менять не требуется',
       });
     const unitCost = Number(decimal(costMilliCents / 1000n, 2));
     cents(unitCost);

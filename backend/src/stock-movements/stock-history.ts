@@ -120,7 +120,7 @@ export async function loadStockHistory(
     const id = bind(query.productId);
     stockWhere += ` AND (sm.product_id=${id} OR sm.source_product_id=${id})`;
     saleWhere += ` AND cpl.product_id=${id}`;
-    ledgerWhere += ` AND e.product_id=${id}`;
+    ledgerWhere += ` AND (e.product_id=${id} OR e.source_product_id=${id})`;
   }
   if (query.warehouseId) {
     const id = bind(query.warehouseId);
@@ -181,7 +181,7 @@ export async function loadStockHistory(
       'warehouseId',e.warehouse_id,'warehouseName',w.name,'category',e.category,'storageCellId',e.storage_cell_id,
       'checkId',CASE WHEN c.deleted_at IS NULL THEN c.id END,'checkNumber',e.check_number,
       'receiptAvailable',c.id IS NOT NULL AND c.deleted_at IS NULL,'legacyBaseline',e.kind='legacy_baseline',
-      'documentDate',e.document_date,'createdAt',e.occurred_at) AS item
+      'documentDate',e.document_date,'sourceProductId',e.source_product_id,'createdAt',e.occurred_at) AS item
     FROM check_product_events e LEFT JOIN checks c ON c.id=e.check_id AND c.tenant_id=e.tenant_id
       LEFT JOIN users u ON u.id=e.actor_id AND u.tenant_id=e.tenant_id LEFT JOIN warehouses w ON w.id=e.warehouse_id
       WHERE ${ledgerWhere}`;

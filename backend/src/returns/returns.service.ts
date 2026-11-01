@@ -1,3 +1,4 @@
+import { resolveSavedKitPositions } from '../product-kits/kit-checks';
 import { captureCheckProductHistory } from '../checks/check-product-events';
 import { lockMotivationRead } from '../motivation/motivation-rules';
 import { returnRevenueMotivation } from '../motivation/check-motivation';
@@ -5,6 +6,7 @@ import {
   Injectable,
   Inject,
   BadRequestException,
+  ConflictException,
   NotFoundException,
   InternalServerErrorException,
   Logger,
@@ -127,7 +129,7 @@ export class ReturnsService {
       // drives the default refund for partial scope (money-audit M6), the cost
       // side drives the COGS reversal for warehouse returns (money-audit C1).
       const allProductLines = await client.query(
-        `SELECT id, product_id, quantity, sell_price, cost_price, total_sell, total_cost
+        `SELECT id, product_id, quantity, sell_price, cost_price, total_sell, total_cost, kit_source
            FROM check_product_lines WHERE check_id = $1`,
         [checkId],
       );
@@ -157,6 +159,8 @@ export class ReturnsService {
       const productMoves: Array<{
         productLineId: string | null;
         productId: string | null;
+        sourceProductId?: string | null;
+        kitSource?: { intentId: string; sourceProductId: string };
         quantity: number;
         /** Себестоимость возвращаемого количества — реверс COGS (C1). */
         cost: number;
@@ -176,6 +180,8 @@ export class ReturnsService {
           productMoves.push({
             productLineId: pl.id,
             productId: pl.product_id,
+            sourceProductId: pl.kit_source?.sourceProductId ?? pl.product_id,
+            kitSource: pl.kit_source ?? undefined,
             quantity: qty,
             cost: lineMoney(pl, qty).cost,
           });
@@ -197,6 +203,8 @@ export class ReturnsService {
             productMoves.push({
               productLineId: match.id,
               productId: match.product_id,
+              sourceProductId: match.kit_source?.sourceProductId ?? match.product_id,
+              kitSource: match.kit_source ?? undefined,
               quantity: qty,
               cost: money.cost,
             });
@@ -321,6 +329,16 @@ export class ReturnsService {
       // вернувшимся в сток (товар не удалён). Брак (defect) — реальный убыток:
       // сток ОСНОВНОГО склада не восстанавливается (единицы ложатся на склад
       // брака ниже), cost остаётся на чеке.
+      if (productMoves.some((move) => move.kitSource)) {
+        await resolveSavedKitPositions(client, tenantID, actorPointId(actor), checkId, sourceIds);
+        const positions = (
+          await client.query('SELECT id,product_id FROM check_product_lines WHERE check_id=$1', [checkId])
+        ).rows;
+        for (const move of productMoves) {
+          const position = positions.find((row) => row.id === move.productLineId);
+          if (position) move.productId = position.product_id;
+        }
+      }
       // Freeze legacy document facts once; the existing return movement remains
       // the only physical return event (no duplicate synthetic delta).
       await captureCheckProductHistory(client, tenantID, checkId, 'sale_correction', userID);
@@ -328,11 +346,13 @@ export class ReturnsService {
       for (const mv of productMoves) {
         if (!mv.productId || mv.quantity <= 0) continue;
         const { rows: prodRows } = await client.query(
-          `SELECT stock, warehouse_id, name, unit FROM products WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
+          `SELECT stock, warehouse_id, name, unit, cost_price, assembly_id FROM products WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
           [mv.productId, tenantID],
         );
         if (prodRows.length === 0) continue; // product deleted — skip stock, but keep the return line
 
+        if (prodRows[0].assembly_id && !Number.isInteger(mv.quantity))
+          throw new BadRequestException('Собранный комплект возвращается только целиком');
         const stockBefore = parseFloat(prodRows[0].stock) || 0;
 
         if (dto.destination === 'warehouse') {
@@ -362,10 +382,10 @@ export class ReturnsService {
               dto.reason ?? `Возврат заказ-наряда`,
               tenantID,
               userID || null,
-              targetWh.id,
+              mv.kitSource ? prodRows[0].warehouse_id : targetWh.id,
               checkId,
               returnId,
-              mv.productId,
+              mv.sourceProductId ?? mv.productId,
             ],
           );
           continue;
@@ -395,9 +415,18 @@ export class ReturnsService {
           const { rows: targetRows } = await client.query(
             `SELECT id, stock FROM products
               WHERE tenant_id=$1 AND warehouse_id=$2 AND name=$3 AND unit IS NOT DISTINCT FROM $4
-                AND deleted_at IS NULL AND id <> $5
-              ORDER BY created_at LIMIT 1 FOR UPDATE`,
-            [tenantID, targetWh.id, prodRows[0].name, prodRows[0].unit, mv.productId],
+                AND deleted_at IS NULL AND id <> $5 AND ($6::numeric IS NULL OR cost_price=$6::numeric)
+                AND assembly_id IS NOT DISTINCT FROM $7::uuid
+              ORDER BY created_at LIMIT 1 FOR UPDATE${mv.kitSource ? ' NOWAIT' : ''}`,
+            [
+              tenantID,
+              targetWh.id,
+              prodRows[0].name,
+              prodRows[0].unit,
+              mv.productId,
+              mv.kitSource ? prodRows[0].cost_price : null,
+              prodRows[0].assembly_id ?? null,
+            ],
           );
           if (targetRows.length > 0) {
             defectProductId = targetRows[0].id;
@@ -449,7 +478,7 @@ export class ReturnsService {
             targetWh.id,
             checkId,
             returnId,
-            mv.productId,
+            mv.sourceProductId ?? mv.productId,
           ],
         );
       }
@@ -530,6 +559,11 @@ export class ReturnsService {
       };
     } catch (err) {
       await client.query('ROLLBACK');
+      if ((err as { code?: string }).code === '55P03')
+        throw new ConflictException({
+          code: 'KIT_STOCK_BUSY',
+          message: 'Остатки компонентов сейчас меняются. Повторите возврат',
+        });
       if (err instanceof BadRequestException || err instanceof NotFoundException) throw err;
       this.logger.error(`Return create error: ${err}`);
       throw new InternalServerErrorException({ message: 'Ошибка сервера' });

@@ -1,3 +1,4 @@
+import { KIT_CAPTURED_COST } from '../product-kits/kit-checks';
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { PoolClient } from 'pg';
 
@@ -6,6 +7,7 @@ interface ProductCostInput {
   name: string;
   sellPrice?: number;
   quantity?: number;
+  [KIT_CAPTURED_COST]?: number;
 }
 interface SavedProductCost {
   id: string;
@@ -30,6 +32,10 @@ export async function resolveConfirmedProductCosts(
   priorCheckId: string | null,
 ): Promise<Map<number, number>> {
   const result = new Map<number, number>();
+  lines.forEach((line, index) => {
+    const captured = line[KIT_CAPTURED_COST];
+    if (captured !== undefined) result.set(index, captured);
+  });
   const ids = [
     ...new Set(lines.map((line) => line.productId).filter((id): id is string => typeof id === 'string' && !!id)),
   ];
@@ -53,7 +59,7 @@ export async function resolveConfirmedProductCosts(
   const used = new Set<string>();
   for (const [index, line] of lines.entries()) {
     const productId = typeof line.productId === 'string' ? line.productId.toLowerCase() : null;
-    if (!productId || !provisional.has(productId)) continue;
+    if (result.has(index) || !productId || !provisional.has(productId)) continue;
     const candidates = prior.filter(
       (row) =>
         !used.has(row.id) &&

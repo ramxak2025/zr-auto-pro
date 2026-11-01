@@ -1,3 +1,4 @@
+import type { KitSplitIntent, KitSourceReference } from './productKits';
 // ═══════════════════════════════════════════════════════════════════════════════
 //  Shared API Request/Response types
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -738,6 +739,7 @@ export type PutServiceVisibilityRuleRequest =
   | { categoryPath: string; visibleRoleIds: string[] };
 
 export interface CreateCheckRequest {
+  kitSplits?: KitSplitIntent[];
   /**
    * Идемпотентность (офлайн-очередь): UUID, сгенерированный клиентом один раз
    * на логический чек и повторяемый с каждым ретраем. Сервер гарантирует
@@ -776,6 +778,7 @@ export interface CreateCheckRequest {
     /** Existing saved check-product-line UUID on edit; omit for a new line. */
     id?: string;
     sourceTemplateProduct?: TemplateProductSource;
+    kitSource?: KitSourceReference;
     productId?: string;
     name: string;
     sellPrice: number;
@@ -820,6 +823,7 @@ export interface CreateCheckRequest {
 }
 
 export interface UpdateCheckRequest {
+  kitSplits?: KitSplitIntent[];
   date?: string;
   paymentMethod?: string;
   isDeferred?: boolean;
@@ -844,6 +848,7 @@ export interface UpdateCheckRequest {
     /** Stable identity returned as CheckProductLine.id; verified against this check. */
     id?: string;
     sourceTemplateProduct?: TemplateProductSource;
+    kitSource?: KitSourceReference;
     productId?: string;
     name: string;
     sellPrice: number;

@@ -12,6 +12,7 @@ interface CheckState {
   motivation_assignees_confirmed: boolean;
 }
 interface Line {
+  kit_source?: { intentId: string; sourceProductId: string };
   id: string;
   product_id: string | null;
   quantity: string;
@@ -258,7 +259,7 @@ export async function snapshotCheckMotivation(
     );
     const lines = (
       await client.query<Line>(
-        `SELECT pl.id,pl.product_id,pl.quantity,pl.total_sell,pl.name,p.category,p.warehouse_id
+        `SELECT pl.id,pl.product_id,pl.quantity,pl.total_sell,pl.name,p.category,p.warehouse_id,pl.kit_source
       FROM check_product_lines pl LEFT JOIN products p ON p.id=pl.product_id AND p.tenant_id=$1
       WHERE pl.check_id=$2 ORDER BY pl.id`,
         [tenant, checkId],
@@ -267,6 +268,7 @@ export async function snapshotCheckMotivation(
       .map((line) => ({
         ...line,
         product_id:
+          line.kit_source?.sourceProductId ||
           line.product_id ||
           snapshots.find((snapshot) => snapshot.sale_lines.some((saved) => saved.id === line.id))?.product_id ||
           null,
