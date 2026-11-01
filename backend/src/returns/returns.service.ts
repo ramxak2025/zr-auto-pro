@@ -1,3 +1,4 @@
+import { captureCheckProductHistory } from '../checks/check-product-events';
 import { lockMotivationRead } from '../motivation/motivation-rules';
 import { returnRevenueMotivation } from '../motivation/check-motivation';
 import {
@@ -320,6 +321,9 @@ export class ReturnsService {
       // вернувшимся в сток (товар не удалён). Брак (defect) — реальный убыток:
       // сток ОСНОВНОГО склада не восстанавливается (единицы ложатся на склад
       // брака ниже), cost остаётся на чеке.
+      // Freeze legacy document facts once; the existing return movement remains
+      // the only physical return event (no duplicate synthetic delta).
+      await captureCheckProductHistory(client, tenantID, checkId, 'sale_correction', userID);
       let reversedCost = 0;
       for (const mv of productMoves) {
         if (!mv.productId || mv.quantity <= 0) continue;
@@ -343,8 +347,8 @@ export class ReturnsService {
           await client.query(
             `INSERT INTO stock_movements
                (product_id, type, quantity, stock_before, stock_after, reason,
-                tenant_id, user_id, warehouse_id)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+                tenant_id, user_id, warehouse_id, check_id, return_id, source_product_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
             [
               mv.productId,
               // Customer return to the main warehouse gets its OWN type so the
@@ -359,6 +363,9 @@ export class ReturnsService {
               tenantID,
               userID || null,
               targetWh.id,
+              checkId,
+              returnId,
+              mv.productId,
             ],
           );
           continue;
@@ -405,10 +412,10 @@ export class ReturnsService {
             defectBefore = 0;
             defectAfter = mv.quantity;
             const { rows: insRows } = await client.query(
-              `INSERT INTO products (name, category, photo, cost_price, sell_price, stock, min_stock, unit,
+              `INSERT INTO products (name, category, photo, photos, cost_price, sell_price, stock, min_stock, unit,
                                      is_bundle, bundle_items, supplier_id, tenant_id, warehouse_id, warranty_days, barcode,
                                      brand, article, packaging, source_url, sell_price_is_placeholder, cost_price_is_placeholder)
-               SELECT name, category, photo, cost_price, sell_price, $3, 0, unit,
+               SELECT name, category, photo, photos, cost_price, sell_price, $3, 0, unit,
                       is_bundle, bundle_items, supplier_id, tenant_id, $4, warranty_days, barcode,
                       brand, article, packaging, source_url, sell_price_is_placeholder, cost_price_is_placeholder
                  FROM products WHERE id=$1 AND tenant_id=$2
@@ -427,8 +434,8 @@ export class ReturnsService {
         await client.query(
           `INSERT INTO stock_movements
              (product_id, type, quantity, stock_before, stock_after, reason,
-              tenant_id, user_id, warehouse_id, target_warehouse_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+              tenant_id, user_id, warehouse_id, target_warehouse_id, check_id, return_id, source_product_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
           [
             defectProductId,
             'defect_transfer',
@@ -440,6 +447,9 @@ export class ReturnsService {
             userID || null,
             targetWh.id,
             targetWh.id,
+            checkId,
+            returnId,
+            mv.productId,
           ],
         );
       }

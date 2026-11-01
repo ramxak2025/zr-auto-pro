@@ -1,3 +1,4 @@
+import { captureCheckProductHistory, finishCheckProductHistory } from './check-product-events';
 import { checkMotivationAmounts } from './check-display-profit';
 import { validateJournalFilters } from './journal-filters';
 import {
@@ -508,6 +509,8 @@ export class ChecksService {
     clientId: string | null,
     carId: string | null,
   ): Promise<void> {
+    const productHistory = await captureCheckProductHistory(client, tenantID, checkId, 'sale', null, [], true);
+
     // ── 1) Decrement stock from the persisted product lines ───────────────
     // Aggregate per product so a product appearing on several lines is
     // decremented once by the summed quantity. Stock is allowed to go NEGATIVE
@@ -533,6 +536,8 @@ export class ChecksService {
       if (qty <= 0) continue;
       await client.query(STOCK_DECREMENT_IN_CHECK_POINT_SQL, [qty, r.product_id, tenantID, checkId]);
     }
+
+    await finishCheckProductHistory(client, productHistory);
 
     // ── 1b) «Мотивация»: accrue promo-product bonuses (095) ────────────────
     // A deferred draft becoming active IS the payment moment — accrue here so
@@ -3421,6 +3426,20 @@ export class ChecksService {
       // First-save price policy and identity are written in the check transaction.
       await saveCheckServiceLines(client, tenantID, checkId, serviceLines, actor?.userID ?? userID);
 
+      const productHistory = effectiveIsDeferred
+        ? null
+        : await captureCheckProductHistory(
+            client,
+            tenantID,
+            checkId,
+            'sale',
+            userID,
+            productLines
+              .map((line: { productId?: string }) => line.productId)
+              .filter((id: string | undefined): id is string => !!id),
+            true,
+          );
+
       // The cost guard already holds every product FOR UPDATE in id order,
       // before allocating the check number. Inserts and stock writes reuse
       // those locks without a SHARE→UPDATE upgrade or a counter/product cycle.
@@ -3452,6 +3471,8 @@ export class ChecksService {
           ]);
         }
       }
+
+      await finishCheckProductHistory(client, productHistory);
 
       // Spawn warranty_claims rows for any product/service in this check
       // whose master record has warranty_days set. Skip for deferred
@@ -5713,6 +5734,15 @@ export class ChecksService {
         }
       }
 
+      const productHistory = await captureCheckProductHistory(
+        client,
+        tenantID,
+        id,
+        'sale_correction',
+        actorUserId,
+        prodIds,
+      );
+
       // Recompute lines + money from the edit DTO (same math as close).
       // Round 14 review MEDIUM-4: ставки — за МЕСТНЫЙ месяц ИТОГОВОЙ даты чека
       // (newDateIso, если владелец сменил дату продажи, иначе прежняя дата) —
@@ -5907,6 +5937,8 @@ export class ChecksService {
         if (qty <= 0) continue;
         await client.query(STOCK_DECREMENT_IN_CHECK_POINT_SQL, [qty, productId, tenantID, id]);
       }
+
+      await finishCheckProductHistory(client, productHistory);
 
       // ── 5) Motivation — idempotent re-accrual from the new lines + master ───
       if (dto.assigneeIds !== undefined)
@@ -6137,6 +6169,7 @@ export class ChecksService {
         });
       }
 
+      const productHistory = await captureCheckProductHistory(client, tenantID, id, 'sale_annulment', actorUserId);
       // (a) reverse the materialised footprint (stock / motivation / warranty).
       await this.reverseCheckFootprintTx(client, tenantID, id, prior);
 
@@ -6147,6 +6180,7 @@ export class ChecksService {
         tenantID,
         actorUserId,
       ]);
+      await finishCheckProductHistory(client, productHistory);
 
       await client.query('COMMIT');
     } catch (err) {
@@ -6326,6 +6360,13 @@ export class ChecksService {
 
       // Re-apply first (may throw on insufficient stock → whole restore rolls back
       // and the check stays safely in the trash).
+      const productHistory = await captureCheckProductHistory(
+        client,
+        tenantID,
+        id,
+        'sale_restore',
+        actor?.userID ?? null,
+      );
       await this.reapplyCheckFootprintTx(client, tenantID, id, prior);
 
       // Clear the trash mark — the derived money reappears identical at once.
@@ -6334,6 +6375,7 @@ export class ChecksService {
         tenantID,
       ]);
 
+      await finishCheckProductHistory(client, productHistory);
       await client.query('COMMIT');
     } catch (err) {
       try {

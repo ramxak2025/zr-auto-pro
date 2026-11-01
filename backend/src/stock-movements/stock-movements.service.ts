@@ -685,10 +685,10 @@ export class StockMovementsService {
         // Copy the SKU onto the target warehouse. min_stock = 0 on the copy —
         // брак/Б-У stock must never ring low-stock alerts.
         const { rows: insRows } = await client.query(
-          `INSERT INTO products (name, category, photo, cost_price, sell_price, stock, min_stock, unit,
+          `INSERT INTO products (name, category, photo, photos, cost_price, sell_price, stock, min_stock, unit,
                                  is_bundle, bundle_items, supplier_id, tenant_id, warehouse_id, warranty_days, barcode,
                                      brand, article, packaging, source_url, sell_price_is_placeholder, cost_price_is_placeholder)
-           SELECT name, category, photo, cost_price, sell_price, $3, 0, unit,
+           SELECT name, category, photo, photos, cost_price, sell_price, $3, 0, unit,
                   is_bundle, bundle_items, supplier_id, tenant_id, $4, warranty_days, barcode,
                       brand, article, packaging, source_url, sell_price_is_placeholder, cost_price_is_placeholder
              FROM products WHERE id=$1 AND tenant_id=$2

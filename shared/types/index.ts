@@ -3508,8 +3508,12 @@ export type StockMovementType =
   // Продажа товара из чека (волна G). Синтетический тип — на сервере НЕ
   // создаётся движением склада, только подмешивается в ленту «Движение товара»
   // карточки товара при includeSales. Несёт checkId/checkNumber для перехода
-  // в чек; остаток (stockBefore/After) для него не осмыслен (0/0).
-  | 'sale';
+  // в чек; неизвестные исторические остатки передаются как null.
+  | 'sale'
+  | 'sale_correction'
+  | 'sale_annulment'
+  | 'sale_restore'
+  | 'legacy_baseline';
 
 export interface StockMovement {
   id: string;
@@ -3517,8 +3521,14 @@ export interface StockMovement {
   product?: Product;
   type: StockMovementType;
   quantity: number;
-  stockBefore: number;
-  stockAfter: number;
+  stockBefore: number | null;
+  stockAfter: number | null;
+  stockDelta?: number | null;
+  legacyBaseline?: boolean;
+  receiptAvailable?: boolean;
+  documentDate?: string | null;
+  returnId?: string | null;
+  sourceProductId?: string | null;
   reason?: string;
   userId?: string;
   user?: { id: string; fullName: string } | null;
