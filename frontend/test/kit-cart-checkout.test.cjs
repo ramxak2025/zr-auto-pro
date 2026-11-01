@@ -11,6 +11,7 @@ require.extensions['.ts'] = (module, filename) =>
     filename,
   );
 const kitCart = require('../../shared/utils/kitCart');
+const { prepareTemplateProducts, validateKitAllocation } = require('../../shared/utils/templateKitApplication');
 const { checkProductPayload, savedProductLineIds } = require('../../mobile/src/screens/checkCreate/productPayload');
 function action(file, name, context) {
   const ast = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -51,6 +52,13 @@ const physical = {
 function cartContext(lines = []) {
   const ctx = {
     ...kitCart,
+    prepareTemplateProducts,
+    chooseTemplateKit: async () => null,
+    templateApplyBusy: { current: false },
+    templateApplyEpoch: { current: 0 },
+    setTemplatePreparing() {},
+    templateApplyLive: { current: true },
+    readStoredToken: () => 'owned',
     productLines: lines,
     allProducts: [a, b, physical],
     useCallback: (fn) => fn,
@@ -426,5 +434,293 @@ test('actual web/native template application resolves unknown kit metadata, keep
     assert.equal(ctx.productLines[0].sellPrice, 450);
     assert.equal(ctx.productLines[0].assemblyId, 'assembly');
     assert.deepEqual(splits, []);
+  }
+});
+
+const batch = (id, stock, price, revision = 3) => ({
+  id,
+  name: `Партия ${id}`,
+  stock,
+  sellPrice: price,
+  costPrice: 11,
+  assemblyExactCost: 11.123456,
+  assemblyId: `assembly-${id}`,
+  assemblyRevision: revision,
+  unit: 'компл',
+});
+const recipeTemplate = (batches, quantity = 3) => ({
+  id: 'template',
+  name: 'Состав ТО',
+  services: [{ serviceId: 's', name: 'Мойка', price: 50, quantity: 2 }],
+  products: [
+    {
+      kind: 'kitRecipe',
+      kitRecipeId: 'recipe',
+      kitRecipeVersion: 1,
+      name: 'ТО',
+      quantity,
+      sourceTemplateProduct: { templateId: 'template', productIndex: 0, version: '9' },
+      kitResolution: {
+        status: 'selection_required',
+        candidates: batches.map((p) => ({
+          productId: p.id,
+          assemblyId: p.assemblyId,
+          revision: p.assemblyRevision,
+          quantity: p.stock,
+        })),
+        availableQuantity: batches.reduce((sum, p) => sum + p.stock, 0),
+      },
+    },
+  ],
+});
+function templateContext(batches, choose) {
+  const { expandServiceQuantities, toCheckTemplateServiceInput } = require('../../shared/utils/checkLines');
+  const ctx = cartContext([{ name: 'old', productId: 'old', quantity: 1 }]);
+  ctx.services = ['old-service'];
+  ctx.splits = ['old-split'];
+  Object.assign(ctx, {
+    chooseTemplateKit: choose,
+    captureDataSession: () => ({ isCurrent: () => true }),
+    canApplyTemplateSnapshot: () => true,
+    templatesRefreshing: false,
+    templatesRefreshFailed: false,
+    templatesPaused: false,
+    Alert: { alert() {} },
+    productsApi: { getById: async (id) => ({ data: batches.find((p) => p.id === id) }) },
+    serviceLineTotal: require('../../shared/utils/checkLines').serviceLineTotal,
+    expandServiceQuantities,
+    toCheckTemplateServiceInput,
+    legacyQuantity: (line) => (line.quantity > 1 ? line.quantity : undefined),
+    user: { id: 'master' },
+    defaultMasterId: 'master',
+    setKitSplits: (value) => {
+      ctx.splits = value;
+    },
+    setServiceLines: (value) => {
+      ctx.services = value;
+    },
+    setShowTemplatesPicker() {},
+  });
+  return ctx;
+}
+
+test('actual web/native apply is atomic on cancellation, shortage, wrong quantity, and stale batch revisions', async () => {
+  for (const file of [web, mobile]) {
+    const batches = [batch('a', 2, 100), batch('b', 2, 200)];
+    for (const choose of [
+      async () => null,
+      async () => [{ productId: 'a', quantity: 1 }],
+      async () => [{ productId: 'a', quantity: 3 }],
+    ]) {
+      const ctx = templateContext(batches, choose);
+      await action(file, 'applyTemplate', ctx)(recipeTemplate(batches));
+      assert.equal(ctx.productLines[0].productId, 'old');
+      assert.deepEqual(ctx.services, ['old-service']);
+      assert.deepEqual(ctx.splits, ['old-split']);
+    }
+    let missing;
+    const shortage = templateContext([], async (request) => {
+      missing = request;
+      return null;
+    });
+    await action(file, 'applyTemplate', shortage)(recipeTemplate([], 2));
+    assert.equal(missing.line.kitRecipeVersion, 1);
+    assert.equal(missing.candidates.length, 0);
+    assert.equal(shortage.productLines[0].productId, 'old');
+    const stale = templateContext([batch('a', 5, 100, 4)], async () => {
+      throw Error('should not offer stale batch');
+    });
+    await action(file, 'applyTemplate', stale)(recipeTemplate([batch('a', 5, 100, 3)]));
+    assert.equal(stale.productLines[0].productId, 'old');
+    assert.deepEqual(stale.services, ['old-service']);
+  }
+});
+
+test('actual web/native apply keeps explicit separate batch lines, current price, pinned version and revision through request serialization', async () => {
+  for (const file of [web, mobile]) {
+    const batches = [batch('a', 2, 123), batch('b', 2, 456)];
+    let offered;
+    const ctx = templateContext(batches, async (request) => {
+      offered = request;
+      return [
+        { productId: 'a', quantity: 1 },
+        { productId: 'b', quantity: 2 },
+      ];
+    });
+    await action(file, 'applyTemplate', ctx)(recipeTemplate(batches));
+    assert.equal(offered.line.kitRecipeVersion, 1);
+    assert.equal(ctx.services.length, 2, 'repeated legacy services stay expanded');
+    assert.deepEqual(
+      ctx.productLines.map((p) => [p.productId, p.quantity, p.sellPrice]),
+      [
+        ['a', 1, 123],
+        ['b', 2, 456],
+      ],
+    );
+    assert.ok(ctx.productLines.every((p) => p.sourceTemplateProduct.expectedAssemblyRevision === 3));
+    const payload = JSON.parse(JSON.stringify(checkProductPayload(ctx.productLines[0], new Set())));
+    assert.deepEqual(payload.sourceTemplateProduct, {
+      templateId: 'template',
+      productIndex: 0,
+      version: '9',
+      expectedAssemblyRevision: 3,
+    });
+    assert.deepEqual(ctx.splits, []);
+  }
+});
+
+test('recipe never falls back to manual and a single sufficient physical batch automatically resolves exactly', async () => {
+  const one = batch('a', 5, 900);
+  const template = recipeTemplate([one], 4);
+  const result = await prepareTemplateProducts(
+    template,
+    async () => one,
+    async () => {
+      throw Error('no choice needed');
+    },
+  );
+  assert.equal(result.length, 1);
+  assert.equal(result[0].productId, 'a');
+  assert.equal(result[0].quantity, 4);
+  assert.equal(result[0].sellPrice, 900);
+  await assert.rejects(
+    prepareTemplateProducts(
+      { ...template, products: [{ kind: 'kitRecipe', name: 'missing', quantity: 1 }] },
+      async () => one,
+      async () => [],
+    ),
+    /Обновите/,
+  );
+  assert.throws(
+    () =>
+      validateKitAllocation(
+        template.products[0],
+        [one],
+        [
+          { productId: 'a', quantity: 2 },
+          { productId: 'a', quantity: 2 },
+        ],
+      ),
+    /Проверьте/,
+  );
+});
+
+test('later recipe cancellation leaves ordinary goods and services from the entire template unapplied', async () => {
+  for (const file of [web, mobile]) {
+    const ordinary = { id: 'ordinary', name: 'Масло', stock: 20, assemblyId: null, sellPrice: 90, costPrice: 10 };
+    const template = recipeTemplate([], 1);
+    template.products.unshift({ productId: 'ordinary', name: 'Масло', sellPrice: 90, quantity: 2 });
+    const ctx = templateContext([ordinary], async () => null);
+    await action(file, 'applyTemplate', ctx)(template);
+    assert.equal(ctx.productLines.length, 1);
+    assert.equal(ctx.productLines[0].productId, 'old');
+    assert.deepEqual(ctx.services, ['old-service']);
+  }
+});
+
+test('repeated recipe rows reserve physical stock across the whole application', async () => {
+  const one = batch('a', 3, 900);
+  const template = recipeTemplate([one], 2);
+  template.products.push({
+    ...template.products[0],
+    sourceTemplateProduct: { ...template.products[0].sourceTemplateProduct, productIndex: 1 },
+  });
+  let remaining;
+  const result = await prepareTemplateProducts(
+    template,
+    async () => one,
+    async (request) => {
+      remaining = request.candidates[0].stock;
+      return null;
+    },
+  );
+  assert.equal(result, null);
+  assert.equal(remaining, 1);
+});
+
+test('actual native template editor stores a physical selection as a recipe binding without zero prices or exhausted SKU identity', async () => {
+  const file = path.join(__dirname, '../../mobile/src/screens/TemplateEditorScreen.tsx');
+  let lines = [];
+  const ctx = {
+    haptic() {},
+    canSeeCost: true,
+    Alert: {
+      alert() {
+        assert.fail('valid kit selection failed');
+      },
+    },
+    productsApi: {},
+    productKitsApi: { get: async () => ({ data: { recipeId: 'recipe', recipeVersion: 1, name: 'ТО' } }) },
+    setProductLines: (updater) => {
+      lines = updater(lines);
+    },
+  };
+  await action(file, 'addProduct', ctx)({ id: 'packed-v1', assemblyId: 'assembly', sellPrice: 99, costPrice: 22 });
+  assert.deepEqual(lines, [
+    { kind: 'kitRecipe', kitRecipeId: 'recipe', kitRecipeVersion: 1, name: 'ТО', quantity: 1, costStatus: 'unknown' },
+  ]);
+  const saved = action(file, 'products', { productLines: lines });
+  assert.equal(saved[0].kitRecipeVersion, 1);
+  assert.equal(saved[0].productId, undefined);
+  assert.equal(saved[0].sellPrice, undefined);
+  assert.equal(saved[0].costPrice, undefined);
+});
+
+test('actual native template composition upgrade is explicit; cancellation keeps v1 and confirmation changes only the binding to v2', async () => {
+  const file = path.join(__dirname, '../../mobile/src/screens/TemplateEditorScreen.tsx');
+  const original = { kind: 'kitRecipe', kitRecipeId: 'recipe', kitRecipeVersion: 1, name: 'ТО', quantity: 2 };
+  let lines = [original],
+    choices;
+  const ctx = {
+    productKitsApi: {
+      recipe: async () => ({
+        data: { id: 'recipe', version: 2, name: 'ТО новый', components: [{ productId: 'filter', quantity: 3 }] },
+      }),
+    },
+    productsApi: { getById: async () => ({ data: { name: 'Фильтр' } }) },
+    Alert: {
+      alert: (title, message, buttons) => {
+        choices = buttons;
+      },
+    },
+    setProductLines: (updater) => {
+      lines = updater(lines);
+    },
+  };
+  await action(file, 'replaceRecipeVersion', ctx)(0, original);
+  assert.equal(lines[0].kitRecipeVersion, 1);
+  assert.equal(choices[0].text, 'Отмена');
+  choices[1].onPress();
+  assert.deepEqual(lines, [
+    {
+      kind: 'kitRecipe',
+      kitRecipeId: 'recipe',
+      kitRecipeVersion: 2,
+      name: 'ТО новый',
+      quantity: 2,
+      costStatus: 'unknown',
+    },
+  ]);
+  assert.equal(original.kitRecipeVersion, 1, 'old pinned object stays immutable');
+});
+
+test('a late template fetch cannot replace a cart after its data session changed', async () => {
+  const one = batch('a', 5, 900);
+  for (const file of [web, mobile]) {
+    const ctx = templateContext([one], async () => {
+      assert.fail('stale session must not open a chooser');
+    });
+    if (file === web) {
+      let token = 'old';
+      ctx.readStoredToken = () => token;
+      ctx.productsApi.getById = async () => {
+        token = 'new';
+        return { data: one };
+      };
+    } else ctx.captureDataSession = () => ({ isCurrent: () => false });
+    await action(file, 'applyTemplate', ctx)(recipeTemplate([one], 2));
+    assert.equal(ctx.productLines[0].productId, 'old');
+    assert.deepEqual(ctx.services, ['old-service']);
+    assert.deepEqual(ctx.splits, ['old-split']);
   }
 });

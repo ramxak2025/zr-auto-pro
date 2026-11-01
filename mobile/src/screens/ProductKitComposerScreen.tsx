@@ -1,3 +1,4 @@
+import { BottomSheet } from '../components/BottomSheet';
 import { colors } from '../theme';
 import React, { useEffect, useRef, useState } from 'react';
 import { View, TextInput, Pressable, StyleSheet } from 'react-native';
@@ -9,9 +10,9 @@ import type { RouteProp } from '@react-navigation/native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import type { AssembleKitRequest } from '../../../shared/api/productKits';
-import { kitDraftPayload, type KitDraftLine } from '../../../shared/utils/productKitDraft';
+import { kitComponents, kitDraftPayload, type KitDraftLine } from '../../../shared/utils/productKitDraft';
 import { parsePurchaseOrderQuantity } from '../../../shared/utils/purchaseOrderInput';
-import { productKitsApi, warehousesApi } from '../api/services';
+import { productKitsApi, productsApi, warehousesApi } from '../api/services';
 import { captureDataSession } from '../contexts/dataSession';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
@@ -31,17 +32,24 @@ import { Text } from '../platform/Typography';
 export default function ProductKitComposerScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const route = useRoute<RouteProp<RootStackParamList, 'ProductKitComposer'>>();
-  const { warehouseId, productId } = route.params;
+  const { warehouseId, productId, recipeId, recipeVersion, recipeEdit = false } = route.params;
   const palette = useColors(),
     queryClient = useQueryClient();
   const { hasPermission } = useAuth();
   const owner = captureDataSession();
-  const storageKey = `autexa.kit-draft.v1:${owner.key}:${productId ?? warehouseId}`;
+  const storageKey = `autexa.kit-draft.v1:${owner.key}:${productId ?? (recipeId ? `${recipeId}:${recipeVersion}:${recipeEdit ? 'edit' : 'assemble'}` : warehouseId)}`;
   const [name, setName] = useState(''),
     [quantity, setQuantity] = useState('1'),
     [sellPrice, setSellPrice] = useState('');
   const [lines, setLines] = useState<KitDraftLine[]>([]),
     [sourceWarehouse, setSourceWarehouse] = useState<string | null>(warehouseId || null);
+  const [targetWarehouse, setTargetWarehouse] = useState(warehouseId);
+  const [targetPickerOpen, setTargetPickerOpen] = useState(false);
+  const [recipePending, setRecipePending] = useState<{
+    name: string;
+    components: ReturnType<typeof kitComponents>;
+    expectedVersion: number;
+  } | null>(null);
   const [requestId, setRequestId] = useState(() => randomUUID()),
     [pending, setPending] = useState<(AssembleKitRequest & { expectedRevision?: number }) | null>(null);
   const [busy, setBusy] = useState(false),
@@ -69,10 +77,23 @@ export default function ProductKitComposerScreen() {
     queryFn: async () => (await productKitsApi.get(productId!)).data,
     enabled: !!productId,
   });
+  const {
+    data: recipe,
+    isPending: recipeLoading,
+    isError: recipeError,
+  } = useQuery({
+    queryKey: ['kit-recipe', recipeId, recipeVersion],
+    queryFn: async () => (await productKitsApi.recipe(recipeId!, recipeVersion)).data,
+    enabled: !!recipeId && !!recipeVersion,
+  });
   const { data: warehouses = [] } = useQuery({
     queryKey: ['warehouses'],
     queryFn: async () => (await warehousesApi.list()).data,
   });
+  useEffect(() => {
+    if (warehouses.length && !warehouses.some((item) => item.id === targetWarehouse))
+      setTargetWarehouse((warehouses.find((item) => item.kind === 'main') ?? warehouses[0]).id);
+  }, [warehouses, targetWarehouse]);
   useEffect(() => {
     const lease = captureDataSession();
     if (!owner.key || !owner.isCurrent()) return;
@@ -87,7 +108,9 @@ export default function ProductKitComposerScreen() {
               sellPrice?: string;
               lines?: KitDraftLine[];
               requestId?: string;
+              targetWarehouse?: string;
               pending?: typeof pending;
+              recipePending?: typeof recipePending;
               submitted?: boolean;
             })
           : {};
@@ -97,7 +120,9 @@ export default function ProductKitComposerScreen() {
           setSellPrice(saved.sellPrice ?? '');
           writeLines(saved.lines ?? []);
           if (saved.requestId) setRequestId(saved.requestId);
+          if (saved.targetWarehouse) setTargetWarehouse(saved.targetWarehouse);
           if (saved.pending) setPending(saved.pending);
+          if (saved.recipePending) setRecipePending(saved.recipePending);
           submitted.current = !!saved.submitted;
           seeded.current = true;
         }
@@ -130,15 +155,44 @@ export default function ProductKitComposerScreen() {
     }
   }, [kit, restoredKey, storageKey]);
   useEffect(() => {
+    if (!recipe || seeded.current || restoredKey !== storageKey) return;
+    const lease = captureDataSession();
+    void Promise.all(
+      recipe.components.map(async (component) => {
+        const product = (await productsApi.getById(component.productId)).data;
+        return { productId: product.id, name: product.name, quantity: String(component.quantity) };
+      }),
+    )
+      .then((items) => {
+        if (!lease.isCurrent() || !mounted.current || seeded.current) return;
+        setName(recipe.name);
+        writeLines(items);
+        seeded.current = true;
+      })
+      .catch(() => {
+        if (lease.isCurrent()) setError('Не удалось загрузить товары состава. Закройте и повторите.');
+      });
+  }, [recipe, restoredKey, storageKey]);
+  useEffect(() => {
     const lease = captureDataSession();
     if (!lease.key || restoredKey !== storageKey || (!name && !lines.length)) return;
     void AsyncStorage.setItem(
       storageKey,
-      JSON.stringify({ name, quantity, sellPrice, lines, requestId, pending, submitted: submitted.current }),
+      JSON.stringify({
+        name,
+        quantity,
+        sellPrice,
+        lines,
+        requestId,
+        targetWarehouse,
+        pending,
+        recipePending,
+        submitted: submitted.current,
+      }),
     ).catch(() => {
       if (lease.isCurrent()) setError('Черновик не сохранён. Не закрывайте экран до подтверждения результата.');
     });
-  }, [storageKey, restoredKey, name, quantity, sellPrice, lines, requestId, pending]);
+  }, [storageKey, restoredKey, name, quantity, sellPrice, lines, requestId, pending, recipePending, targetWarehouse]);
   const bridge: ProductPickerBridge = {
     productLines: lines.map((line) => ({
       productId: line.productId,
@@ -149,7 +203,7 @@ export default function ProductKitComposerScreen() {
     totalLabel: 'В составе',
     showTotal: false,
     addProduct: (product) => {
-      if (busyRef.current || pending) return;
+      if (busyRef.current || pending || recipePending || (recipeId && !recipeEdit)) return;
       writeLines((previous) => {
         const existing = previous.find((line) => line.productId === product.id);
         if (!existing) return [...previous, { productId: product.id, name: product.name, quantity: '1' }];
@@ -160,7 +214,7 @@ export default function ProductKitComposerScreen() {
       });
     },
     decrementProduct: (id) => {
-      if (busyRef.current || pending) return;
+      if (busyRef.current || pending || recipePending || (recipeId && !recipeEdit)) return;
       writeLines((previous) =>
         previous.flatMap((line) => {
           if (line.productId !== id) return [line];
@@ -184,10 +238,25 @@ export default function ProductKitComposerScreen() {
   }, [lines, sourceWarehouse, warehouses, pending]);
   const prepare = () => {
     try {
+      if (recipeId && (!recipe || !seeded.current)) throw new Error('Дождитесь загрузки выбранной версии состава.');
       if (productId && !kit) throw new Error('Дождитесь загрузки актуального состава.');
+      if (recipeEdit) {
+        if (!recipe || !draftRef.current.name.trim()) throw new Error('Укажите название состава.');
+        setRecipePending(
+          recipePending ?? {
+            name: draftRef.current.name.trim(),
+            components: kitComponents(draftRef.current.lines),
+            expectedVersion: recipe.version,
+          },
+        );
+        setConfirmOpen(true);
+        return;
+      }
+      if (!targetWarehouse && !pending) throw new Error('Выберите склад для собранного комплекта.');
       const body = pending ?? {
-        ...kitDraftPayload({ ...draftRef.current, warehouseId }, requestId),
+        ...kitDraftPayload({ ...draftRef.current, warehouseId: targetWarehouse }, requestId),
         ...(kit ? { expectedRevision: kit.revision } : {}),
+        ...(recipe ? { recipeId: recipe.id, recipeVersion: recipe.version } : {}),
       };
       setPending(body);
       setConfirmOpen(true);
@@ -199,7 +268,8 @@ export default function ProductKitComposerScreen() {
     if (!owner.key || !owner.isCurrent() || !mounted.current) return;
     submitted.current = true;
     void (async () => {
-      if (busyRef.current || !pending || (productId && pending.expectedRevision === undefined)) return;
+      if (busyRef.current || (!pending && !recipePending) || (productId && pending?.expectedRevision === undefined))
+        return;
       const lease = owner;
       busyRef.current = true;
       setBusy(true);
@@ -207,9 +277,35 @@ export default function ProductKitComposerScreen() {
       try {
         await AsyncStorage.setItem(
           storageKey,
-          JSON.stringify({ name, quantity, sellPrice, lines, requestId, pending, submitted: true }),
+          JSON.stringify({
+            name,
+            quantity,
+            sellPrice,
+            lines,
+            requestId,
+            targetWarehouse,
+            pending,
+            recipePending,
+            submitted: true,
+          }),
         );
         if (!lease.isCurrent() || !mounted.current) return;
+        if (recipeEdit && recipeId && recipePending) {
+          await productKitsApi.updateRecipe(recipeId, recipePending);
+          if (!lease.isCurrent() || !mounted.current) return;
+          await AsyncStorage.removeItem(storageKey);
+          for (const prefix of [
+            'kit-recipes',
+            'kit-recipe',
+            'kit-recipe-preview',
+            'kit-recipe-composition',
+            'check-templates',
+          ])
+            void queryClient.invalidateQueries({ queryKey: [prefix] });
+          navigation.goBack();
+          return;
+        }
+        if (!pending) return;
         const result =
           productId && pending.expectedRevision !== undefined
             ? await productKitsApi.recompose(productId, { ...pending, expectedRevision: pending.expectedRevision })
@@ -221,6 +317,8 @@ export default function ProductKitComposerScreen() {
           'all-products-check',
           'stock-movements',
           'product-kit',
+          'kit-recipes',
+          'check-templates',
           'product',
           'warehouse-stats',
         ])
@@ -232,10 +330,11 @@ export default function ProductKitComposerScreen() {
           const response = (cause as { response?: { status?: number; data?: { code?: string } } }).response;
           if (
             response?.status === 400 ||
-            (response?.status === 409 && response.data?.code !== 'KIT_REQUEST_CONFLICT')
+            (!recipeEdit && response?.status === 409 && response.data?.code !== 'KIT_REQUEST_CONFLICT')
           ) {
             submitted.current = false;
             setPending(null);
+            setRecipePending(null);
             setConfirmOpen(false);
             setRequestId(randomUUID());
             if (productId) void refetchKit();
@@ -249,7 +348,7 @@ export default function ProductKitComposerScreen() {
       }
     })();
   };
-  const frozen = busy || !!pending;
+  const frozen = busy || !!pending || !!recipePending;
   const inputStyle = [
     styles.input,
     { color: palette.text.primary, borderColor: palette.border.subtle, backgroundColor: palette.bg.card },
@@ -257,7 +356,7 @@ export default function ProductKitComposerScreen() {
   return (
     <View style={[styles.screen, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
-        title={productId ? 'Новый состав комплекта' : 'Собрать комплект'}
+        title={recipeEdit ? 'Изменить сохранённый состав' : productId ? 'Новый состав комплекта' : 'Собрать комплект'}
         onBack={() => navigation.goBack()}
       />
       {!owner.key && (
@@ -268,13 +367,22 @@ export default function ProductKitComposerScreen() {
       {restoredKey === storageKey && (
         <KeyboardAwareScroll contentContainerStyle={styles.content}>
           <Text color={palette.text.secondary}>
-            {productId
-              ? 'Выбранное количество старой партии будет разобрано и собрано новой партией.'
-              : 'Компоненты спишутся только после подтверждения сборки.'}
+            {recipeEdit
+              ? 'Изменения создадут новую версию для будущих сборок. Уже собранные комплекты останутся без изменений.'
+              : productId
+                ? 'Выбранное количество старой партии будет разобрано и собрано новой партией.'
+                : 'Компоненты спишутся только после подтверждения сборки.'}
           </Text>
           {error ? (
             <Text accessibilityRole="alert" color={palette.mode === 'dark' ? colors.red[400] : colors.red[700]}>
               {error}
+            </Text>
+          ) : null}
+          {recipeId ? (
+            <Text color={palette.text.secondary}>
+              Сохранённый состав · версия {recipeVersion}
+              {recipeLoading ? ' · Загрузка…' : ''}
+              {recipeError ? ' · Не удалось загрузить состав. Закройте и повторите.' : ''}
             </Text>
           ) : null}
           {productId && kitLoading ? <Text color={palette.text.secondary}>Загрузка состава…</Text> : null}
@@ -296,37 +404,49 @@ export default function ProductKitComposerScreen() {
             }}
             style={inputStyle}
           />
-          <Text color={palette.text.secondary}>Количество комплектов</Text>
-          <TextInput
-            accessibilityLabel="Количество комплектов"
-            value={quantity}
-            keyboardType="number-pad"
-            editable={!frozen}
-            onChangeText={(value) => {
-              draftRef.current.quantity = value;
-              setQuantity(value);
-            }}
-            style={inputStyle}
-          />
-          <Text color={palette.text.secondary}>Продажная цена за комплект, ₽</Text>
-          <TextInput
-            accessibilityLabel="Цена комплекта"
-            value={sellPrice}
-            keyboardType="decimal-pad"
-            editable={!frozen}
-            onChangeText={(value) => {
-              draftRef.current.sellPrice = value;
-              setSellPrice(value);
-            }}
-            style={inputStyle}
-          />
+          {!recipeEdit && (
+            <>
+              <Text color={palette.text.secondary}>Количество комплектов</Text>
+              <TextInput
+                accessibilityLabel="Количество комплектов"
+                value={quantity}
+                keyboardType="number-pad"
+                editable={!frozen}
+                onChangeText={(value) => {
+                  draftRef.current.quantity = value;
+                  setQuantity(value);
+                }}
+                style={inputStyle}
+              />
+              <Text color={palette.text.secondary}>Продажная цена за комплект, ₽</Text>
+              <TextInput
+                accessibilityLabel="Цена комплекта"
+                value={sellPrice}
+                keyboardType="decimal-pad"
+                editable={!frozen}
+                onChangeText={(value) => {
+                  draftRef.current.sellPrice = value;
+                  setSellPrice(value);
+                }}
+                style={inputStyle}
+              />
+            </>
+          )}
+          {!recipeEdit && (
+            <Button
+              title={`Склад: ${warehouses.find((item) => item.id === targetWarehouse)?.name ?? 'Выберите склад'}`}
+              variant="secondary"
+              disabled={frozen}
+              onPress={() => setTargetPickerOpen(true)}
+            />
+          )}
           <Text color={palette.text.primary} style={{ fontWeight: '600' }}>
             Состав на один комплект
           </Text>
           <Button
             title="Добавить компонент"
             variant="secondary"
-            disabled={frozen}
+            disabled={frozen || (!!recipeId && !recipeEdit)}
             onPress={() => {
               claimProductPickerSession(bridgeRef);
               navigation.navigate('ProductPicker', {});
@@ -344,7 +464,7 @@ export default function ProductKitComposerScreen() {
                 accessibilityLabel={`Количество компонента — ${line.name}`}
                 keyboardType="decimal-pad"
                 value={line.quantity}
-                editable={!frozen}
+                editable={!frozen && (!recipeId || recipeEdit)}
                 onChangeText={(value) =>
                   writeLines((previous) =>
                     previous.map((item) => (item.productId === line.productId ? { ...item, quantity: value } : item)),
@@ -355,7 +475,7 @@ export default function ProductKitComposerScreen() {
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={`Убрать ${line.name}`}
-                disabled={frozen}
+                disabled={frozen || (!!recipeId && !recipeEdit)}
                 onPress={() => writeLines((previous) => previous.filter((item) => item.productId !== line.productId))}
                 style={{ minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' }}
               >
@@ -364,21 +484,62 @@ export default function ProductKitComposerScreen() {
             </View>
           ))}
           <Button
-            title={pending ? 'Повторить сборку' : productId ? 'Проверить новый состав' : 'Проверить сборку'}
-            disabled={busy || !hasPermission('warehouse_manage') || (!!productId && !kit)}
+            title={
+              recipeEdit
+                ? recipePending
+                  ? 'Повторить сохранение'
+                  : 'Проверить состав'
+                : pending
+                  ? 'Повторить сборку'
+                  : productId
+                    ? 'Проверить новый состав'
+                    : 'Проверить сборку'
+            }
+            disabled={
+              busy ||
+              !hasPermission('warehouse_manage') ||
+              (!!productId && !kit) ||
+              (!!recipeId && (!recipe || !seeded.current))
+            }
             loading={busy}
             onPress={prepare}
           />
         </KeyboardAwareScroll>
       )}
+      <BottomSheet
+        visible={targetPickerOpen}
+        onClose={() => setTargetPickerOpen(false)}
+        title="Склад собранных комплектов"
+      >
+        {warehouses.map((item) => (
+          <Button
+            key={item.id}
+            title={item.name}
+            variant="secondary"
+            onPress={() => {
+              setTargetWarehouse(item.id);
+              setTargetPickerOpen(false);
+            }}
+          />
+        ))}
+      </BottomSheet>
       <ConfirmDialog
         visible={restoredKey === storageKey && confirmOpen}
-        title={productId ? 'Собрать новую партию?' : 'Собрать комплект?'}
-        message={`${pending?.quantity} комплектов «${pending?.name}». Компоненты спишутся со складов, собранный товар появится отдельной позицией. Себестоимость рассчитается по компонентам.`}
-        confirmText="Подтвердить сборку"
+        title={
+          recipeEdit ? 'Сохранить новую версию состава?' : productId ? 'Собрать новую партию?' : 'Собрать комплект?'
+        }
+        message={
+          recipeEdit
+            ? `Новая версия «${recipePending?.name}» будет доступна для будущих сборок. Шаблоны сохранят прежнюю версию.`
+            : `${pending?.quantity} комплектов «${pending?.name}». Компоненты спишутся со складов, собранный товар появится отдельной позицией. Себестоимость рассчитается по компонентам.`
+        }
+        confirmText={recipeEdit ? 'Сохранить новую версию' : 'Подтвердить сборку'}
         onClose={() => {
           setConfirmOpen(false);
-          if (!submitted.current) setPending(null);
+          if (!submitted.current) {
+            setPending(null);
+            setRecipePending(null);
+          }
         }}
         onConfirm={confirm}
       />

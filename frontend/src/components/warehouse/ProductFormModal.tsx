@@ -27,13 +27,13 @@ export interface ProductFormData {
   photos?: string[];
   costPrice?: number;
   sellPrice?: number;
-  stock: number;
+  stock?: number;
   minStock: number;
   unit: string;
   /** Round 12 #6: EAN-13/QR/свой код. У существующего товара '' очищает. */
   barcode?: string;
-  isBundle: boolean;
-  bundleItems: BundleItem[];
+  isBundle?: boolean;
+  bundleItems?: BundleItem[];
   warrantyDays: number | null;
   warehouseId?: string;
   /** Ячейка хранения: id — назначить, null — снять (только у существующего товара), не задано — не менять. */
@@ -152,7 +152,7 @@ export default function ProductFormModal({
       toast.error('Укажите положительное количество и корректные цены товара Б/У');
       return;
     }
-    if (isBundle && bundleItems.length === 0) {
+    if (!product?.assemblyId && isBundle && bundleItems.length === 0) {
       toast.error('Добавьте товары в комплект');
       return;
     }
@@ -164,10 +164,8 @@ export default function ProductFormModal({
       packaging: packaging.trim(),
       category: category.trim(),
       ...productPhotoPatch(photos),
-      ...(!product ||
-      !product.costPriceIsPlaceholder ||
-      confirmPrices ||
-      toNumberOrZero(costPrice) !== product.costPrice
+      ...(!product?.assemblyId &&
+      (!product || !product.costPriceIsPlaceholder || confirmPrices || toNumberOrZero(costPrice) !== product.costPrice)
         ? { costPrice: toNumberOrZero(costPrice) }
         : {}),
       ...(!product ||
@@ -176,11 +174,11 @@ export default function ProductFormModal({
       toNumberOrZero(sellPrice) !== product.sellPrice
         ? { sellPrice: toNumberOrZero(sellPrice) }
         : {}),
-      stock: toNumberOrZero(stock),
+      ...(!product?.assemblyId
+        ? { stock: toNumberOrZero(stock), isBundle, bundleItems: isBundle ? bundleItems : [] }
+        : {}),
       minStock: toNumberOrZero(minStock),
       unit,
-      isBundle,
-      bundleItems: isBundle ? bundleItems : [],
       // '' у существующего товара ОЧИЩАЕТ штрихкод (PATCH сетит поле только
       // когда оно пришло); у нового пустое поле просто не отправляем.
       barcode: product ? barcode.trim() : barcode.trim() || undefined,
@@ -337,7 +335,7 @@ export default function ProductFormModal({
             Остаток, себестоимость и состав меняются через сборку и разборку комплекта.
           </p>
         )}
-        {!usedIntake && !product?.assemblyId && (
+        {!usedIntake && product?.isBundle && !product?.assemblyId && (
           <div className="flex items-center gap-3">
             <Switch id="product-bundle" checked={isBundle} onChange={setIsBundle} label="Набор позиций · без сборки" />
             <label htmlFor="product-bundle" className="cursor-pointer text-sm font-medium text-ink-2">

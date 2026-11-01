@@ -10,6 +10,7 @@ require.extensions['.ts'] = (module, filename) =>
     }).outputText,
     filename,
   );
+const { prepareTemplateProducts } = require('../../shared/utils/templateKitApplication');
 const { templateProductCost, templateProductsCost } = require('../../shared/utils/templateProducts');
 const { expandServiceQuantities, toCheckTemplateServiceInput } = require('../../shared/utils/checkLines');
 const { createCheckTemplatesApi } = require('../../shared/api/createServices');
@@ -48,6 +49,13 @@ test('web template apply, edited check input and SaveTemplate retain each server
   let productLines = [];
   const context = {
     user: { id: 'staff' },
+    templateApplyBusy: { current: false },
+    templateApplyEpoch: { current: 0 },
+    setTemplatePreparing() {},
+    templateApplyLive: { current: true },
+    readStoredToken: () => 'owned',
+    prepareTemplateProducts,
+    chooseTemplateKit: async () => null,
     allProducts: [],
     DEFAULT_UNIT: 'шт',
     expandServiceQuantities,
@@ -108,5 +116,5 @@ test('the shared mobile/web template API always advertises source support', asyn
     },
   });
   await api.list();
-  assert.deepEqual(requested, { url: '/check-templates', options: { params: { sourceAware: '1' } } });
+  assert.deepEqual(requested, { url: '/check-templates', options: { params: { sourceAware: '1', kitRecipes: '1' } } });
 });

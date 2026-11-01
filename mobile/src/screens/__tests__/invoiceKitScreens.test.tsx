@@ -14,7 +14,15 @@ let mockIndex = 0,
 let mockManualFailure = false;
 const mockStorage = new Map<string, string>();
 const mockNavigation = { navigate: jest.fn(), replace: jest.fn(), goBack: jest.fn(), isFocused: () => true };
-let mockParams: { supplierId?: string; supplierName?: string; warehouseId?: string; productId?: string } = {};
+let mockParams: {
+  supplierId?: string;
+  supplierName?: string;
+  warehouseId?: string;
+  productId?: string;
+  recipeId?: string;
+  recipeVersion?: number;
+  recipeEdit?: boolean;
+} = {};
 const mockProduct = {
   id: 'product',
   name: 'Фильтр',
@@ -60,7 +68,8 @@ const mockCamera = jest.fn(),
   mockReviewLine = jest.fn(),
   mockManualLine = jest.fn(),
   mockAssemble = jest.fn(),
-  mockRecompose = jest.fn();
+  mockRecompose = jest.fn(),
+  mockUpdateRecipe = jest.fn();
 const mockAlert = jest.fn(),
   mockInvalidate = jest.fn();
 
@@ -139,9 +148,16 @@ jest.mock('@tanstack/react-query', () => ({
         ? undefined
         : queryKey[0] === 'products'
           ? [mockProduct]
-          : queryKey[0] === 'warehouses'
-            ? mockWarehouses
-            : [],
+          : queryKey[0] === 'kit-recipe'
+            ? {
+                id: 'recipe',
+                version: 1,
+                name: 'Старый состав',
+                components: [{ productId: mockProduct.id, quantity: 1.5 }],
+              }
+            : queryKey[0] === 'warehouses'
+              ? mockWarehouses
+              : [],
     isPending: false,
     isError: false,
     refetch: jest.fn(),
@@ -160,8 +176,8 @@ jest.mock('../../api/services', () => ({
     addManualLine: mockManualLine,
     setOrder: jest.fn(),
   },
-  productKitsApi: { assemble: mockAssemble, recompose: mockRecompose, get: jest.fn() },
-  productsApi: {},
+  productKitsApi: { updateRecipe: mockUpdateRecipe, assemble: mockAssemble, recompose: mockRecompose, get: jest.fn() },
+  productsApi: { getById: async () => ({ data: mockProduct }) },
   purchaseOrdersApi: {},
   warehousesApi: {},
 }));
@@ -512,6 +528,54 @@ it('a prepared kit confirmation from the previous account cannot dispatch in a n
   setDataSession({ tenantId: 'other-tenant', userId: 'other-owner', pointId: 'other-point' });
   oldConfirm();
   await flush();
+  expect(mockAssemble).not.toHaveBeenCalled();
+  expect(mockRecompose).not.toHaveBeenCalled();
+});
+
+it('native rebuild uses the pinned old recipe version and immutable composition only after confirmation', async () => {
+  mockParams = { warehouseId: 'main', recipeId: 'recipe', recipeVersion: 1 };
+  render(KitScreen);
+  await flush();
+  render(KitScreen);
+  await flush();
+  const component = nodes(render(KitScreen)).find(
+    (node) => node.props.accessibilityLabel === 'Количество компонента — Фильтр',
+  )!;
+  expect(component.props.value).toBe('1.5');
+  expect(component.props.editable).toBe(false);
+  field(KitScreen, 'Количество комплектов', '3');
+  field(KitScreen, 'Цена комплекта', '222');
+  await press(KitScreen, 'Проверить сборку');
+  expect(mockAssemble).not.toHaveBeenCalled();
+  await confirm(KitScreen);
+  expect(mockAssemble.mock.calls[0][0]).toEqual(
+    expect.objectContaining({
+      recipeId: 'recipe',
+      recipeVersion: 1,
+      quantity: 3,
+      sellPrice: 222,
+      components: [{ productId: mockProduct.id, quantity: 1.5 }],
+    }),
+  );
+});
+
+it('native saved recipe edit creates a new version only on confirmation and never assembles a physical batch', async () => {
+  mockParams = { warehouseId: 'main', recipeId: 'recipe', recipeVersion: 1, recipeEdit: true };
+  mockUpdateRecipe.mockResolvedValue({ data: { id: 'recipe', version: 2 } });
+  render(KitScreen);
+  await flush();
+  render(KitScreen);
+  await flush();
+  expect(nodes(render(KitScreen)).some((node) => node.props.accessibilityLabel === 'Цена комплекта')).toBe(false);
+  field(KitScreen, 'Количество компонента — Фильтр', '2,5');
+  await press(KitScreen, 'Проверить состав');
+  expect(mockUpdateRecipe).not.toHaveBeenCalled();
+  await confirm(KitScreen);
+  expect(mockUpdateRecipe).toHaveBeenCalledWith('recipe', {
+    name: 'Старый состав',
+    expectedVersion: 1,
+    components: [{ productId: mockProduct.id, quantity: 2.5 }],
+  });
   expect(mockAssemble).not.toHaveBeenCalled();
   expect(mockRecompose).not.toHaveBeenCalled();
 });

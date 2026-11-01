@@ -1,4 +1,10 @@
 import {
+  prepareTemplateProducts,
+  type TemplateKitChoiceRequest,
+  type KitBatchChoice,
+} from '../../../shared/utils/templateKitApplication';
+import TemplateKitBatchPicker from '../components/TemplateKitBatchPicker';
+import {
   ordinaryProductIndex,
   splitKitCartLine,
   usedKitSplits,
@@ -1224,6 +1230,35 @@ export default function CheckCreateScreen() {
     setShowTemplatesPicker(true);
   };
 
+  const [templateKitChoice, setTemplateKitChoice] = useState<
+    (TemplateKitChoiceRequest & { resolve: (value: KitBatchChoice[] | null) => void }) | null
+  >(null);
+  const templateApplyBusy = useRef(false);
+  const templateApplyEpoch = useRef(0);
+  const [templatePreparing, setTemplatePreparing] = useState(false);
+  const templateApplyLive = useRef(true);
+  const templateChoiceCancel = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    templateApplyLive.current = true;
+    return () => {
+      templateApplyLive.current = false;
+      templateChoiceCancel.current?.();
+    };
+  }, []);
+  const chooseTemplateKit = (request: TemplateKitChoiceRequest) =>
+    new Promise<KitBatchChoice[] | null>((resolve) => {
+      const finish = (value: KitBatchChoice[] | null) => {
+        templateChoiceCancel.current = null;
+        setTemplateKitChoice(null);
+        resolve(value);
+      };
+      templateChoiceCancel.current = () => finish(null);
+      setTemplateKitChoice({ ...request, resolve: finish });
+    });
+  const templateOwnerKey = captureDataSession().key;
+  useEffect(() => {
+    templateChoiceCancel.current?.();
+  }, [templateOwnerKey]);
   const applyTemplate = async (template: CheckTemplate) => {
     if (
       !canApplyTemplateSnapshot({
@@ -1234,24 +1269,39 @@ export default function CheckCreateScreen() {
     )
       return;
     const templateLease = captureDataSession();
-    let templateCatalog: Product[];
+    if (templateApplyBusy.current) return;
+    templateApplyBusy.current = true;
+    const epoch = ++templateApplyEpoch.current;
+    setTemplatePreparing(true);
+    const currentTemplateSession = () =>
+      templateApplyLive.current && epoch === templateApplyEpoch.current && templateLease.isCurrent();
+    let prepared;
     try {
-      templateCatalog = await Promise.all(
-        template.products.flatMap((line) => {
-          if (!line.productId) return [];
-          const cached = (allProducts ?? []).find((product) => product.id === line.productId);
-          return [
-            cached?.assemblyId !== undefined
-              ? Promise.resolve(cached)
-              : productsApi.getById(line.productId).then((response) => response.data),
-          ];
-        }),
+      prepared = await prepareTemplateProducts(
+        template,
+        async (id, requireFresh) => {
+          if (!currentTemplateSession()) throw new Error('Применение отменено');
+          const cached = !requireFresh
+            ? allProducts?.find((product) => product.id === id && product.assemblyId !== undefined)
+            : undefined;
+          const product = cached ?? (await productsApi.getById(id)).data;
+          if (!currentTemplateSession()) throw new Error('Аккаунт изменился');
+          return product;
+        },
+        (request) => (currentTemplateSession() ? chooseTemplateKit(request) : Promise.resolve(null)),
       );
-    } catch {
-      Alert.alert('Шаблон не применён', 'Не удалось проверить товары. Подключитесь к сети и повторите.');
+    } catch (cause) {
+      if (!currentTemplateSession()) return;
+      Alert.alert(
+        'Шаблон не применён',
+        cause instanceof Error ? cause.message : 'Не удалось проверить товары. Подключитесь к сети и повторите.',
+      );
       return;
+    } finally {
+      templateApplyBusy.current = false;
+      if (templateApplyLive.current) setTemplatePreparing(false);
     }
-    if (!templateLease.isCurrent()) return;
+    if (!prepared || !currentTemplateSession()) return;
     setKitSplits([]);
     // Старый шаблон с «Мойка ×2» разворачиваем в две строки: количества у услуг больше нет,
     // одна строка = одна услуга (иначе статистика считает «×2» за одну работу). Что
@@ -1272,11 +1322,11 @@ export default function CheckCreateScreen() {
       }),
     );
     setProductLines(
-      template.products.map((p) => {
+      prepared.map((p) => {
         // Шаблон unit не хранит — подтягиваем из кэша каталога (как web
         // applyTemplate): иначе строка из шаблона теряла единицу измерения
         // и «Кол. (м)» откатывался к дефолтным «шт».
-        const catalogProduct = templateCatalog.find((ap) => ap.id === p.productId);
+        const catalogProduct = p.catalogProduct;
         return {
           productId: p.productId,
           name: p.name,
@@ -2095,6 +2145,7 @@ export default function CheckCreateScreen() {
         productLines: productLines.map((l) => ({
           productId: l.productId,
           kitSource: l.kitSource,
+          sourceTemplateProduct: l.sourceTemplateProduct,
           name: l.name,
           sellPrice: l.sellPrice,
           quantity: l.quantity,
@@ -4951,6 +5002,26 @@ export default function CheckCreateScreen() {
       </KeyboardAwareScroll>
 
       {/* Master Picker — строка услуги либо весь заказ-наряд (CHECK_MASTER_PICKER_INDEX) */}
+      {templateKitChoice && (
+        <TemplateKitBatchPicker
+          request={templateKitChoice}
+          onResolve={templateKitChoice.resolve}
+          onRebuild={
+            hasPermission('warehouse_manage')
+              ? () => {
+                  const line = templateKitChoice.line;
+                  templateKitChoice.resolve(null);
+                  setShowTemplatesPicker(false);
+                  navigation.navigate('ProductKitComposer', {
+                    warehouseId: pickerWarehouseId || warehouses?.[0]?.id || '',
+                    recipeId: line.kitRecipeId!,
+                    recipeVersion: line.kitRecipeVersion!,
+                  });
+                }
+              : undefined
+          }
+        />
+      )}
       <Modal
         visible={showMasterPicker !== null}
         onClose={() => setShowMasterPicker(null)}
@@ -5313,7 +5384,18 @@ export default function CheckCreateScreen() {
           плоской секцией на корне. Тап по шаблону применяет как раньше
           (applyTemplate без изменений); «Управлять» уводит в раздел
           «Шаблоны» (корневой стек — Касса и так перекрывает таб-бар). */}
-      <Modal visible={showTemplatesPicker} onClose={() => setShowTemplatesPicker(false)} title="Шаблоны чеков">
+      <Modal
+        visible={showTemplatesPicker && !templateKitChoice}
+        onClose={() => {
+          templateApplyEpoch.current++;
+          templateChoiceCancel.current?.();
+          setShowTemplatesPicker(false);
+        }}
+        title="Шаблоны чеков"
+      >
+        {templatePreparing && (
+          <Text style={{ color: palette.text.secondary, paddingVertical: 12 }}>Проверяем товары и партии…</Text>
+        )}
         {templatesPaused && (
           <Text accessibilityRole="alert" style={{ color: palette.text.secondary, paddingVertical: 12 }}>
             Нет соединения. Для применения шаблона нужно обновить цены.
@@ -5363,6 +5445,8 @@ export default function CheckCreateScreen() {
             style={styles.tplManageBtn}
             onPress={() => {
               haptic('tap');
+              templateApplyEpoch.current++;
+              templateChoiceCancel.current?.();
               setShowTemplatesPicker(false);
               navigation.navigate('Templates');
             }}

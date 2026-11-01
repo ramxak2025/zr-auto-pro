@@ -1,3 +1,4 @@
+import { KitRecipeComposition } from './warehouse/ProductKitRecipes';
 import { templatePickerQueryOptions, canApplyTemplateSnapshot } from '../../../shared/utils/templatePickerQuery';
 import { ReactNode, useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -17,7 +18,7 @@ import {
   X,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { checkTemplatesApi, type CheckTemplateServiceInput } from '../api/services';
+import { checkTemplatesApi, productKitsApi, type CheckTemplateServiceInput } from '../api/services';
 import { expandServiceQuantities } from '../../../shared/utils/checkLines';
 import { templateProductCost } from '../../../shared/utils/templateProducts';
 import { useAuth } from '../contexts/AuthContext';
@@ -135,9 +136,10 @@ interface TemplatePickerModalProps {
   onClose: () => void;
   /** Применить шаблон в форму чека (замещает строки — как на mobile). */
   onApply: (template: CheckTemplate) => void;
+  applying?: boolean;
 }
 
-export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePickerModalProps) {
+export function TemplatePickerModal({ isOpen, onClose, onApply, applying = false }: TemplatePickerModalProps) {
   const queryClient = useQueryClient();
   const { hasPermission } = useAuth();
   const canManageShared = hasPermission('templates_shared_manage');
@@ -157,6 +159,13 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
     setViewTemplateId(template?.id ?? null);
     if (template) void refetch();
   };
+  const [replaceVersion, setReplaceVersion] = useState<{
+    template: CheckTemplate;
+    index: number;
+    recipeId: string;
+    version: number;
+    name: string;
+  } | null>(null);
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
   const [templateDraft, setTemplateDraft] = useState('');
   // Подтверждения удаления — ConfirmDialog вместо window.confirm.
@@ -287,7 +296,7 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
     <li key={t.id} className="flex items-center">
       <button
         type="button"
-        disabled={isFetching || isError || isPaused}
+        disabled={applying || isFetching || isError || isPaused}
         onClick={() => {
           if (canApplyTemplateSnapshot({ isFetching, isError, isPaused })) onApply(t);
         }}
@@ -605,6 +614,11 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
           )
         }
       >
+        {applying && (
+          <p role="status" className="py-3 text-sm text-ink-2">
+            Проверяем товары и партии…
+          </p>
+        )}
         {isError ? (
           <div className="flex flex-col items-center gap-3 py-8 text-center" role="alert">
             <p className="text-sm text-ink-2">Не удалось загрузить шаблоны</p>
@@ -710,7 +724,11 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
         )}
       </Modal>
 
-      <Modal isOpen={!!viewTemplate} onClose={() => setViewTemplate(null)} title={viewTemplate?.name ?? 'Шаблон'}>
+      <Modal
+        isOpen={!!viewTemplate && !replaceVersion}
+        onClose={() => setViewTemplate(null)}
+        title={viewTemplate?.name ?? 'Шаблон'}
+      >
         <p className="mb-4 text-sm text-ink-3">Актуальные цены каталога</p>
         {isFetching && (
           <p role="status" className="py-4 text-sm text-ink-3">
@@ -749,11 +767,51 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
                 <div className="flex justify-between gap-3">
                   <span>{line.name}</span>
                   <span className="shrink-0 tabular-nums">
-                    {line.sellPrice} ₽ × {line.quantity}
+                    {line.sellPrice === undefined ? 'Цена после выбора партии' : `${line.sellPrice} ₽`} ×{' '}
+                    {line.quantity}
                   </span>
                 </div>
                 {line.catalogStatus === 'unavailable' && (
                   <p className="text-xs text-ink-3">Нет в каталоге · цена не подтверждена</p>
+                )}
+                {line.kind === 'kitRecipe' && line.kitRecipeId && line.kitRecipeVersion && (
+                  <>
+                    <KitRecipeComposition recipeId={line.kitRecipeId} version={line.kitRecipeVersion} />
+                    <p className="text-xs text-ink-2">
+                      {line.kitResolution?.status === 'resolved'
+                        ? 'Подходящая партия найдена'
+                        : line.kitResolution?.status === 'selection_required'
+                          ? 'Нужно выбрать партии при применении'
+                          : 'Нет достаточной собранной партии · состав сохранён'}
+                    </p>
+                    {(!isSharedTemplate(viewTemplate) || canManageShared) && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={async () => {
+                          try {
+                            if (!line.kitRecipeId) return;
+                            const latest = (await productKitsApi.recipe(line.kitRecipeId)).data;
+                            if (latest.version === line.kitRecipeVersion) {
+                              toast.success(`Используется версия ${latest.version}`);
+                              return;
+                            }
+                            setReplaceVersion({
+                              template: viewTemplate,
+                              index,
+                              recipeId: latest.id,
+                              version: latest.version,
+                              name: latest.name,
+                            });
+                          } catch {
+                            toast.error('Не удалось загрузить новую версию. Повторите.');
+                          }
+                        }}
+                      >
+                        Выбрать актуальный состав
+                      </Button>
+                    )}
+                  </>
                 )}
                 {viewTemplate.costStatus && (
                   <p className="mt-1 text-sm text-ink-2">
@@ -778,6 +836,46 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
         )}
       </Modal>
 
+      <Modal
+        isOpen={!!replaceVersion}
+        onClose={() => setReplaceVersion(null)}
+        title="Заменить версию состава?"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setReplaceVersion(null)}>
+              Отмена
+            </Button>
+            <Button
+              onClick={async () => {
+                if (!replaceVersion) return;
+                try {
+                  await checkTemplatesApi.update(replaceVersion.template.id, {
+                    products: replaceVersion.template.products.map((line, index) =>
+                      index === replaceVersion.index
+                        ? {
+                            kind: 'kitRecipe',
+                            kitRecipeId: replaceVersion.recipeId,
+                            kitRecipeVersion: replaceVersion.version,
+                            name: replaceVersion.name,
+                            quantity: line.quantity,
+                          }
+                        : line,
+                    ),
+                  });
+                  setReplaceVersion(null);
+                  invalidateAll();
+                } catch {
+                  toast.error('Состав не заменён. Обновите шаблоны и повторите.');
+                }
+              }}
+            >
+              Заменить на версию {replaceVersion?.version}
+            </Button>
+          </>
+        }
+      >
+        {replaceVersion && <KitRecipeComposition recipeId={replaceVersion.recipeId} version={replaceVersion.version} />}
+      </Modal>
       <ConfirmDialog
         isOpen={!!deleteFolderTarget}
         onClose={() => setDeleteFolderTarget(null)}

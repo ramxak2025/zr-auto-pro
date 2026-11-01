@@ -1,3 +1,4 @@
+import ProductKitRecipes from '../components/warehouse/ProductKitRecipes';
 import BarcodeLookupButton from '../components/products/BarcodeLookupButton';
 import { loadProductCatalog } from '../../../shared/api/productCatalog';
 import ProductLabelPrint from '../components/products/ProductLabelPrint';
@@ -146,6 +147,8 @@ function ProductsPageContents() {
   const cellParam = params.get('cell') ?? '';
 
   // Modal state
+  const [kitRecipesOpen, setKitRecipesOpen] = useState(false);
+  const [recipeAssembly, setRecipeAssembly] = useState<{ recipeId: string; recipeVersion: number } | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [detailTarget, setDetailTarget] = useState<Product | null>(null);
@@ -672,19 +675,26 @@ function ProductsPageContents() {
 
   const createMutation = useMutation({
     mutationFn: async (data: ProductFormData) => {
+      const initialStock = data.stock;
+      if (initialStock === undefined) throw new Error('Укажите начальный остаток товара');
       if (activeWarehouseKind === 'used') {
-        const { stock, isBundle: _isBundle, bundleItems: _bundleItems, ...fields } = data;
+        const { stock: _stock, isBundle: _isBundle, bundleItems: _bundleItems, ...fields } = data;
         usedRequestId.current ??= newUuid();
         const result = await productsApi.usedIntake({
           ...fields,
-          quantity: stock,
+          quantity: initialStock,
           requestId: usedRequestId.current,
           costPrice: data.costPrice ?? 0,
           sellPrice: data.sellPrice ?? 0,
         });
         return { data: result.data.product };
       }
-      return productsApi.create({ ...data, costPrice: data.costPrice ?? 0, sellPrice: data.sellPrice ?? 0 });
+      return productsApi.create({
+        ...data,
+        stock: initialStock,
+        costPrice: data.costPrice ?? 0,
+        sellPrice: data.sellPrice ?? 0,
+      });
     },
     onSuccess: (_res, data) => {
       toast.success('Товар создан');
@@ -1256,7 +1266,16 @@ function ProductsPageContents() {
               <Button icon={Plus} onClick={openCreate}>
                 {activeWarehouseKind === 'used' ? 'Добавить Б/У' : 'Добавить товар'}
               </Button>
-              <Button variant="secondary" onClick={() => setKitComposerOpen(true)}>
+              <Button variant="secondary" onClick={() => setKitRecipesOpen(true)}>
+                Составы комплектов
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setRecipeAssembly(null);
+                  setKitComposerOpen(true);
+                }}
+              >
                 Собрать комплект
               </Button>
               <input
@@ -1765,9 +1784,20 @@ function ProductsPageContents() {
       )}
 
       {/* Modals */}
+      {kitRecipesOpen && (
+        <ProductKitRecipes
+          onClose={() => setKitRecipesOpen(false)}
+          onAssemble={(recipe) => {
+            setKitRecipesOpen(false);
+            setRecipeAssembly({ recipeId: recipe.id, recipeVersion: recipe.version });
+            setKitComposerOpen(true);
+          }}
+        />
+      )}
       {kitComposerOpen && (
         <ProductKitComposer
           warehouseId={activeWarehouseId}
+          {...(recipeAssembly ?? {})}
           onClose={() => setKitComposerOpen(false)}
           onCompleted={(id) => {
             setKitComposerOpen(false);

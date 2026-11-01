@@ -1,3 +1,11 @@
+import ProductKitComposer from '../components/warehouse/ProductKitComposer';
+import { readStoredToken } from '../utils/sessionToken';
+import {
+  prepareTemplateProducts,
+  type TemplateKitChoiceRequest,
+  type KitBatchChoice,
+} from '../../../shared/utils/templateKitApplication';
+import TemplateKitBatchPicker from '../components/checks/TemplateKitBatchPicker';
 import { ordinaryProductIndex, splitKitCartLine, usedKitSplits, KIT_SPLIT_NOTE } from '../../../shared/utils/kitCart';
 import type { KitSplitIntent } from '../../../shared/api/productKits';
 import { createProductKitsApi } from '../../../shared/api/createServices';
@@ -1183,24 +1191,72 @@ export default function CheckCreatePage() {
 
   // ── Шаблоны чеков ─────────────────────────────────────────────────────
   // Применение ЗАМЕЩАЕТ строки формы (semantics mobile applyTemplate).
+  const [templateKitChoice, setTemplateKitChoice] = useState<
+    (TemplateKitChoiceRequest & { resolve: (value: KitBatchChoice[] | null) => void }) | null
+  >(null);
+  const templateApplyBusy = useRef(false);
+  const templateApplyEpoch = useRef(0);
+  const [templatePreparing, setTemplatePreparing] = useState(false);
+  const templateApplyLive = useRef(true);
+  const templateChoiceCancel = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    templateApplyLive.current = true;
+    return () => {
+      templateApplyLive.current = false;
+      templateChoiceCancel.current?.();
+    };
+  }, []);
+  const chooseTemplateKit = (request: TemplateKitChoiceRequest) =>
+    new Promise<KitBatchChoice[] | null>((resolve) => {
+      const finish = (value: KitBatchChoice[] | null) => {
+        templateChoiceCancel.current = null;
+        setTemplateKitChoice(null);
+        resolve(value);
+      };
+      templateChoiceCancel.current = () => finish(null);
+      setTemplateKitChoice({ ...request, resolve: finish });
+    });
+  const [templateRebuild, setTemplateRebuild] = useState<{ recipeId: string; recipeVersion: number } | null>(null);
+  const templateOwnerKey = `${user?.tenantId}:${user?.id}:${user?.currentPointId}:${readStoredToken()}`;
+  useEffect(() => {
+    templateChoiceCancel.current?.();
+  }, [templateOwnerKey]);
   const applyTemplate = async (template: CheckTemplate) => {
-    let templateCatalog: Product[];
+    if (templateApplyBusy.current) return;
+    templateApplyBusy.current = true;
+    const epoch = ++templateApplyEpoch.current;
+    setTemplatePreparing(true);
+    const templateToken = readStoredToken();
+    const currentTemplateSession = () =>
+      templateApplyLive.current && epoch === templateApplyEpoch.current && templateToken === readStoredToken();
+    let prepared;
     try {
-      templateCatalog = await Promise.all(
-        template.products.flatMap((line) => {
-          if (!line.productId) return [];
-          const cached = (allProducts ?? []).find((product) => product.id === line.productId);
-          return [
-            cached?.assemblyId !== undefined
-              ? Promise.resolve(cached)
-              : productsApi.getById(line.productId).then((response) => response.data),
-          ];
-        }),
+      prepared = await prepareTemplateProducts(
+        template,
+        async (id, requireFresh) => {
+          if (!currentTemplateSession()) throw new Error('Применение отменено');
+          const cached = !requireFresh
+            ? allProducts?.find((product) => product.id === id && product.assemblyId !== undefined)
+            : undefined;
+          const product = cached ?? (await productsApi.getById(id)).data;
+          if (!currentTemplateSession()) throw new Error('Аккаунт изменился');
+          return product;
+        },
+        (request) => (currentTemplateSession() ? chooseTemplateKit(request) : Promise.resolve(null)),
       );
-    } catch {
-      toast.error('Не удалось проверить товары шаблона. Подключитесь к сети и повторите.');
+    } catch (cause) {
+      if (!currentTemplateSession()) return;
+      toast.error(
+        cause instanceof Error
+          ? cause.message
+          : 'Не удалось проверить товары шаблона. Подключитесь к сети и повторите.',
+      );
       return;
+    } finally {
+      templateApplyBusy.current = false;
+      if (templateApplyLive.current) setTemplatePreparing(false);
     }
+    if (!prepared || !currentTemplateSession()) return;
     setKitSplits([]);
     setServiceLines(
       // Старый шаблон с «×2» раскладываем в две строки; неразвёрнутые (дробное количество, > 100) остаются legacy «×N».
@@ -1213,8 +1269,8 @@ export default function CheckCreatePage() {
       })),
     );
     setProductLines(
-      template.products.map((p) => {
-        const catalogProduct = templateCatalog.find((ap) => ap.id === p.productId);
+      prepared.map((p) => {
+        const catalogProduct = p.catalogProduct;
         return {
           productId: p.productId || '',
           name: p.name,
@@ -2619,9 +2675,42 @@ export default function CheckCreatePage() {
       />
 
       {/* Шаблоны чеков: выбор + управление и «Сохранить как шаблон» */}
+      {templateKitChoice && (
+        <TemplateKitBatchPicker
+          request={templateKitChoice}
+          onResolve={templateKitChoice.resolve}
+          onRebuild={
+            hasPermission('warehouse_manage')
+              ? () => {
+                  const line = templateKitChoice.line;
+                  templateKitChoice.resolve(null);
+                  setShowTemplatesPicker(false);
+                  if (line.kitRecipeId && line.kitRecipeVersion)
+                    setTemplateRebuild({ recipeId: line.kitRecipeId, recipeVersion: line.kitRecipeVersion });
+                }
+              : undefined
+          }
+        />
+      )}
+      {templateRebuild && (
+        <ProductKitComposer
+          warehouseId={pickerWarehouseId}
+          {...templateRebuild}
+          onClose={() => setTemplateRebuild(null)}
+          onCompleted={() => {
+            setTemplateRebuild(null);
+            void queryClient.invalidateQueries({ queryKey: ['check-templates'] });
+          }}
+        />
+      )}
       <TemplatePickerModal
-        isOpen={showTemplatesPicker}
-        onClose={() => setShowTemplatesPicker(false)}
+        isOpen={showTemplatesPicker && !templateKitChoice && !templateRebuild}
+        onClose={() => {
+          templateApplyEpoch.current++;
+          templateChoiceCancel.current?.();
+          setShowTemplatesPicker(false);
+        }}
+        applying={templatePreparing}
         onApply={applyTemplate}
       />
       <SaveTemplateModal

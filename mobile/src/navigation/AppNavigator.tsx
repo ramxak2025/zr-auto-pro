@@ -277,7 +277,13 @@ export type RootStackParamList = {
    */
   DirectSupplyCreate: { supplierId: string; supplierName?: string };
   SupplierInvoiceReview: { supplierId: string; supplierName?: string };
-  ProductKitComposer: { warehouseId: string; productId?: string };
+  ProductKitComposer: {
+    warehouseId: string;
+    productId?: string;
+    recipeId?: string;
+    recipeVersion?: number;
+    recipeEdit?: boolean;
+  };
   ProductDetail: { product?: Product; productId?: string; edit?: boolean };
   SupplyReceive: { orderId: string; po?: PurchaseOrder };
   /**
@@ -341,7 +347,13 @@ export type TabParamList = {
 // выше в дереве категорий. Старый внутренний state `activePath` теперь
 // читается из route.params.
 export type ProductsStackParamList = {
-  ProductKitComposer: { warehouseId: string; productId?: string };
+  ProductKitComposer: {
+    warehouseId: string;
+    productId?: string;
+    recipeId?: string;
+    recipeVersion?: number;
+    recipeEdit?: boolean;
+  };
   // `editProduct` is set by ProductDetailScreen's «Изменить» on the route it
   // pops back to — ProductsScreen consumes it once to open its edit modal,
   // reusing the form instead of duplicating it.

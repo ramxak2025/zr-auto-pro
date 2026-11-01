@@ -1,3 +1,4 @@
+import ProductKitRecipes from '../components/ProductKitRecipes';
 import { loadProductBarcodeMatches } from '../../../shared/utils/productBarcodeLookup';
 import ProductLabelPrint from '../components/products/ProductLabelPrint';
 import { loadProductCatalog } from '../../../shared/api/productCatalog';
@@ -467,6 +468,7 @@ function ProductsScreenContents() {
   // #60 — «Удаление на складе». manage ⇒ delete; либо явное warehouse_delete.
   const canDeleteWarehouse = hasPermission('warehouse_manage') || hasPermission('warehouse_delete');
 
+  const [kitRecipesOpen, setKitRecipesOpen] = useState(false);
   const [search, setSearch] = useState('');
   const warehouseScroll = useWarehouseScroll();
   // Весь каталог склада одной страницей — см. PRODUCT_LIST_LIMIT.
@@ -3016,6 +3018,29 @@ function ProductsScreenContents() {
         </View>
       </Modal>
 
+      {kitRecipesOpen && (
+        <ProductKitRecipes
+          onClose={() => setKitRecipesOpen(false)}
+          onEdit={(recipe) => {
+            setKitRecipesOpen(false);
+            navigation.navigate('ProductKitComposer', {
+              warehouseId: activeWarehouseId || '',
+              recipeId: recipe.id,
+              recipeVersion: recipe.version,
+              recipeEdit: true,
+            });
+          }}
+          onAssemble={(recipe) => {
+            setKitRecipesOpen(false);
+            navigation.navigate('ProductKitComposer', {
+              warehouseId: activeWarehouseId || '',
+              recipeId: recipe.id,
+              recipeVersion: recipe.version,
+            });
+          }}
+        />
+      )}
+
       {/* Warehouse Operations - bottom-sheet action list (#2/#7
           consistency). Pull-to-dismiss + blur backdrop. heightRatio
           auto-fits the 3-4 rows. */}
@@ -3027,6 +3052,24 @@ function ProductsScreenContents() {
         }
         heightRatio={0.82}
       >
+        {canManageWarehouse && activeWarehouseId ? (
+          <TouchableOpacity
+            accessibilityRole="button"
+            style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
+            onPress={() => {
+              setShowOpsModal(false);
+              setKitRecipesOpen(true);
+            }}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>Составы комплектов</Text>
+              <Text style={[styles.opsItemDesc, { color: palette.text.secondary }]}>
+                Собрать ещё по сохранённому составу
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+          </TouchableOpacity>
+        ) : null}
         {canManageWarehouse && activeWarehouseId ? (
           <TouchableOpacity
             style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}

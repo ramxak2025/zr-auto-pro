@@ -226,6 +226,7 @@ function reviewHarness() {
     assemble: [],
     recompose: [],
     disassemble: [],
+    updateRecipe: [],
     completed: [],
   };
   const product = {
@@ -383,6 +384,18 @@ function reviewHarness() {
       },
     },
     productKitsApi: {
+      updateRecipe: async (id, body) => {
+        logs.updateRecipe.push({ id, body: clone(body) });
+        return { data: { id, version: 2 } };
+      },
+      recipe: async (id, version) => ({
+        data: {
+          id,
+          version: version ?? 2,
+          name: 'Старый состав',
+          components: [{ productId: product.id, quantity: 1.5 }],
+        },
+      }),
       get: async () => ({ data: kit }),
       assemble: async (body) => {
         logs.assemble.push(clone(body));
@@ -448,9 +461,16 @@ function reviewHarness() {
                 ]
               : queryKey[0] === 'warehouses'
                 ? warehouses
-                : queryKey[0] === 'product-kit'
-                  ? kit
-                  : [],
+                : queryKey[0] === 'kit-recipe'
+                  ? {
+                      id: queryKey[1],
+                      version: queryKey[2] ?? 2,
+                      name: 'Старый состав',
+                      components: [{ productId: product.id, quantity: 1.5 }],
+                    }
+                  : queryKey[0] === 'product-kit'
+                    ? kit
+                    : [],
         isPending: false,
         isLoading: false,
         isError: false,
@@ -968,6 +988,186 @@ test('real web barcode lookup passes explicit warehouse, preserves ambiguity and
     });
     assert.equal(results[0].status, 'ambiguous');
     assert.deepEqual(results[0].matches, matches);
+  } finally {
+    Renderer.act(() => tree.unmount());
+  }
+});
+
+test('actual recipe rebuild pins the old immutable version after newer versions exist and never creates stock before confirmation', async () => {
+  const h = reviewHarness();
+  const Composer = load('frontend/src/components/warehouse/ProductKitComposer.tsx', h.mocks, h.globals).default;
+  let tree;
+  await Renderer.act(async () => {
+    tree = Renderer.create(
+      React.createElement(Composer, {
+        warehouseId: 'main',
+        recipeId: 'saved-recipe',
+        recipeVersion: 1,
+        onClose() {},
+        onCompleted() {},
+      }),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+  });
+  try {
+    assert.equal(h.logs.assemble.length, 0);
+    const field = tree.root
+      .findAllByType('input')
+      .find((node) => node.props['aria-label'] === 'Количество компонента — Фильтр');
+    assert.equal(field.props.value, '1.5');
+    assert.equal(field.props.disabled, true);
+    await uiValue(tree, 'Количество комплектов', '3');
+    await uiValue(tree, 'Цена комплекта', '222');
+    await uiClick(tree, 'Проверить сборку');
+    assert.equal(h.logs.assemble.length, 0);
+    await uiClick(tree, 'Подтвердить сборку');
+    assert.equal(h.logs.assemble.length, 1);
+    assert.equal(h.logs.assemble[0].recipeId, 'saved-recipe');
+    assert.equal(h.logs.assemble[0].recipeVersion, 1);
+    assert.equal(h.logs.assemble[0].quantity, 3);
+    assert.deepEqual(h.logs.assemble[0].components, [{ productId: h.product.id, quantity: 1.5 }]);
+  } finally {
+    Renderer.act(() => tree.unmount());
+  }
+});
+
+test('actual canonical batch picker refuses partial quantities and submits explicit allocation without truncation', async () => {
+  const h = reviewHarness();
+  const Picker = load(
+    'frontend/src/components/checks/TemplateKitBatchPicker.tsx',
+    { ...h.mocks, './ProductPickerDrawer': h.mocks['../checks/ProductPickerDrawer'] },
+    h.globals,
+  ).default;
+  const results = [];
+  const products = [
+    { ...h.product, id: 'a', assemblyId: 'a', stock: 2, sellPrice: 100 },
+    { ...h.product, id: 'b', assemblyId: 'b', stock: 2, sellPrice: 200 },
+  ];
+  let tree;
+  await Renderer.act(async () => {
+    tree = Renderer.create(
+      React.createElement(Picker, {
+        request: { line: { kind: 'kitRecipe', name: 'ТО', quantity: 3, kitRecipeVersion: 1 }, candidates: products },
+        onResolve: (value) => results.push(value),
+      }),
+    );
+  });
+  try {
+    await uiClick(tree, 'Выбрать через каталог кассы');
+    await Renderer.act(async () => tree.root.findByType('picker').props.onSelectProduct(products[0]));
+    await uiClick(tree, 'Применить весь шаблон');
+    assert.equal(results.length, 0);
+    await uiValue(tree, 'Количество партии — a', '3');
+    await uiClick(tree, 'Применить весь шаблон');
+    assert.equal(results.length, 0, 'must not truncate 3 to stock2');
+    await uiValue(tree, 'Количество партии — a', '1');
+    await uiClick(tree, 'Выбрать через каталог кассы');
+    await Renderer.act(async () => tree.root.findByType('picker').props.onSelectProduct(products[1]));
+    await uiValue(tree, 'Количество партии — b', '2');
+    await uiClick(tree, 'Применить весь шаблон');
+    assert.deepEqual(results, [
+      [
+        { productId: 'a', quantity: 1 },
+        { productId: 'b', quantity: 2 },
+      ],
+    ]);
+  } finally {
+    Renderer.act(() => tree.unmount());
+  }
+});
+
+test('actual physical product form saves metadata with empty projected composition and omits read-only assembly fields', () => {
+  const file = path.join(root, 'frontend/src/components/warehouse/ProductFormModal.tsx');
+  const ast = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let submit;
+  const visit = (node) => {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === 'handleSubmit') submit = node;
+    ts.forEachChild(node, visit);
+  };
+  visit(ast);
+  const ctx = {
+    product: { id: 'kit', assemblyId: 'assembly', isBundle: true, costPrice: 10, sellPrice: 20 },
+    isBundle: true,
+    bundleItems: [],
+    name: 'Новое имя',
+    brand: '',
+    article: '',
+    packaging: '',
+    category: '',
+    photos: [],
+    costPrice: '0.000001',
+    sellPrice: '20',
+    stock: '2',
+    minStock: '0',
+    unit: 'компл',
+    barcode: '',
+    warrantyDays: '',
+    storageCellId: '',
+    initialCellId: '',
+    defaultWarehouseId: 'main',
+    confirmPrices: false,
+    usedIntake: false,
+    uploadingPhotos: false,
+    isLoading: false,
+    productPhotoPatch: () => ({ photos: [], photo: null }),
+    toNumberOrZero: Number,
+  };
+  let result;
+  const errors = [];
+  ctx.onSubmit = (value) => (result = value);
+  ctx.toast = { error: (value) => errors.push(value) };
+  const code = ts.transpileModule(submit.getText(ast), {
+    compilerOptions: { target: ts.ScriptTarget.ES2020 },
+  }).outputText;
+  const action = new Function(...Object.keys(ctx), `${code};return handleSubmit;`)(...Object.values(ctx));
+  action({ preventDefault() {} });
+  assert.deepEqual(errors, []);
+  assert.equal(result.name, 'Новое имя');
+  for (const field of ['stock', 'costPrice', 'isBundle', 'bundleItems']) assert.equal(field in result, false, field);
+});
+
+test('actual saved-composition edit creates version2 through CAS without changing packed stock, price, or pinned templates', async () => {
+  const h = reviewHarness();
+  let saved = 0;
+  const Composer = load('frontend/src/components/warehouse/ProductKitComposer.tsx', h.mocks, h.globals).default;
+  let tree;
+  await Renderer.act(async () => {
+    tree = Renderer.create(
+      React.createElement(Composer, {
+        warehouseId: 'main',
+        recipeId: 'recipe',
+        recipeVersion: 1,
+        recipeEdit: true,
+        onCompleted() {
+          assert.fail('recipe edit must not create a batch');
+        },
+        onRecipeSaved() {
+          saved++;
+        },
+        onClose() {},
+      }),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+  });
+  try {
+    assert.equal(
+      tree.root.findAllByType('input').some((node) => node.props['aria-label'] === 'Цена комплекта'),
+      false,
+    );
+    await uiValue(tree, 'Количество компонента — Фильтр', '2,5');
+    await uiClick(tree, 'Проверить состав');
+    assert.equal(h.logs.updateRecipe.length, 0);
+    await uiClick(tree, 'Сохранить новую версию');
+    assert.deepEqual(h.logs.updateRecipe, [
+      {
+        id: 'recipe',
+        body: { name: 'Старый состав', expectedVersion: 1, components: [{ productId: h.product.id, quantity: 2.5 }] },
+      },
+    ]);
+    assert.equal(saved, 1);
+    assert.equal(h.logs.assemble.length, 0);
+    assert.equal(h.logs.recompose.length, 0);
+    assert.equal(h.logs.disassemble.length, 0);
   } finally {
     Renderer.act(() => tree.unmount());
   }
