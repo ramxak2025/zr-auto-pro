@@ -21,7 +21,11 @@ const nativeSource = fs.readFileSync(
 const nativeJs = ts.transpileModule(nativeSource, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, esModuleInterop: true },
 }).outputText;
-const nativeRequire = (name) => (name === '../../../shared/utils/productLabels' ? labels : require(name));
+const nativeRequire = (name) => {
+  if (name === '../../../shared/utils/productLabels') return labels;
+  if (name === 'react-native') return { Platform: { OS: 'ios' } };
+  return require(name);
+};
 new Function('require', 'module', 'exports', nativeJs)(nativeRequire, nativeModule, nativeModule.exports);
 const native = nativeModule.exports;
 const product = {
