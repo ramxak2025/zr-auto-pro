@@ -818,3 +818,64 @@ test(
       }),
     ),
 );
+
+test(
+  'new id-less identical ordinary replacement never inherits removed captured provenance or original-source bonus',
+  options,
+  () =>
+    fixture((f) =>
+      kitFixture(f, async (k) => {
+        await f.q(
+          "INSERT INTO motivation_rules(tenant_id,target_kind,product_id,percent,before_discount) VALUES($1,'product',$2,10,true)",
+          [f.tenant, k.a.id],
+        );
+        await f.q('INSERT INTO product_commissions(tenant_id,user_id,product_id,percent) VALUES($1,$2,$3,5)', [
+          f.tenant,
+          f.owner,
+          k.a.id,
+        ]);
+        const assembled = await k.assemble(),
+          x = splitFlows(f, k, assembled);
+        await f.run(() => f.products.update(k.a.id, f.tenant, { costPrice: 9000 }, f.owner, f.point));
+        const sale = await x.create(x.input({ assigneeIds: [f.owner], assigneesConfirmed: true }));
+        const captured = sale.products.find((line) => line.kitSource.sourceProductId === k.a.id),
+          other = sale.products.find((line) => line.kitSource.sourceProductId === k.b.id);
+        assert.equal(sale.productSalaryTotal, 150);
+        await f.q('INSERT INTO product_commissions(tenant_id,user_id,product_id,percent) VALUES($1,$2,$3,20)', [
+          f.tenant,
+          f.owner,
+          captured.productId,
+        ]);
+        const ordinary = {
+          productId: captured.productId,
+          name: captured.name,
+          quantity: captured.quantity,
+          sellPrice: captured.sellPrice,
+          costPrice: captured.costPrice,
+        };
+        const edited = await x.edit(sale.id, {
+          products: [ordinary, other],
+          kitSplits: sale.kitSplits,
+          discount: 2000,
+        });
+        const replacement = edited.products.find((line) => line.productId === captured.productId);
+        assert.equal(replacement.kitSource, undefined);
+        assert.notEqual(replacement.id, captured.id);
+        assert.equal(replacement.costPrice, 4000);
+        assert.equal(edited.productSalaryTotal, 600);
+        assert.equal(
+          (
+            await f.q("SELECT count(*)::int n FROM motivation_accruals WHERE check_id=$1 AND scheme='revenue_v2'", [
+              sale.id,
+            ])
+          )[0].n,
+          0,
+        );
+        assert.equal(
+          (await f.q("SELECT count(*)::int n FROM kit_operations WHERE check_id=$1 AND kind='split'", [sale.id]))[0].n,
+          1,
+        );
+        assert.equal(await k.stock(assembled.productId), 0);
+      }),
+    ),
+);

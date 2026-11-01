@@ -104,21 +104,16 @@ export async function prepareKitCheckProducts<T extends KitCheckLine>(
     savedSources = priorLines;
     products = products.map((line) => {
       if (line.kitSource) return line;
-      const candidates = priorLines.filter(
-        (old) =>
-          old.product_id === line.productId &&
-          (line.id
-            ? old.id === line.id
-            : old.name === line.name &&
-              Number(old.quantity) === (line.quantity || 1) &&
-              Number(old.sell_price) === (line.sellPrice || 0)),
-      );
-      if (candidates.length === 1) return { ...line, kitSource: candidates[0].kit_source as KitSourceReference };
-      if (candidates.length > 1)
+      // A new id-less ordinary replacement must never regain captured lineage
+      // merely because SKU/name/quantity/price happen to match a removed line.
+      if (!line.id) return line;
+      const previous = priorLines.find((old) => old.id === line.id);
+      if (previous && previous.product_id !== line.productId)
         throw new ConflictException({
           code: 'KIT_PROVENANCE_REQUIRED',
-          message: 'Обновите строки комплекта: необходимо сохранить происхождение компонентов',
+          message: 'Обновите строку комплекта. Замену добавьте отдельной новой строкой',
         });
+      if (previous) return { ...line, kitSource: previous.kit_source as KitSourceReference };
       return line;
     });
   }
