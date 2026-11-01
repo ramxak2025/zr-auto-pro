@@ -1,3 +1,4 @@
+import type { TemplateKitResolution } from '../api/productKits';
 // ═══════════════════════════════════════════════════════════════════════════════
 //  Shared Types — used by both Web and Mobile apps
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2147,6 +2148,8 @@ export interface TemplateProductSource {
   templateId: string;
   productIndex: number;
   version: string;
+  /** Required for a concrete batch chosen from a recipe template. */
+  expectedAssemblyRevision?: number;
 }
 
 export interface CheckProductLine {
@@ -4272,14 +4275,19 @@ export interface CheckTemplate {
     catalogStatus?: 'current' | 'unavailable' | 'manual';
   }>;
   products: Array<{
+    kind?: 'kitRecipe';
+    kitRecipeId?: string;
+    kitRecipeVersion?: number;
+    kitResolution?: TemplateKitResolution;
     sourceTemplateProduct?: TemplateProductSource;
     productId?: string;
     name: string;
-    sellPrice: number;
+    /** Absent while a recipe has no explicitly selected batch. */
+    sellPrice?: number;
     costPrice?: number;
     quantity: number;
     costStatus?: 'known' | 'unknown';
-    catalogStatus?: 'current' | 'unavailable' | 'manual';
+    catalogStatus?: 'current' | 'unavailable' | 'manual' | 'selection_required' | 'shortage';
   }>;
   /** Only present for warehouse_manage. Unknown never means zero. */
   costStatus?: 'known' | 'unknown';

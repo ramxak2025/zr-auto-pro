@@ -2101,7 +2101,7 @@ export function createCheckPhotosApi(api: HttpClient) {
 export function createCheckTemplatesApi(api: HttpClient) {
   return {
     // Both clients preserve server product sources through apply/save/offline.
-    list: () => api.get<CheckTemplate[]>('/check-templates', { params: { sourceAware: '1' } }),
+    list: () => api.get<CheckTemplate[]>('/check-templates', { params: { sourceAware: '1', kitRecipes: '1' } }),
     /**
      * `folderId` — put the new template into a folder in the matching scope.
      * `shared: true` — publish as a tenant-wide template; requires the explicit
@@ -2114,7 +2114,7 @@ export function createCheckTemplatesApi(api: HttpClient) {
       products: CheckTemplate['products'];
       folderId?: string | null;
       shared?: boolean;
-    }) => api.post<CheckTemplate>('/check-templates', data),
+    }) => api.post<CheckTemplate>('/check-templates', { ...data, supportsKitRecipes: true }),
     /** `folderId: null` moves the template back to the root (no folder). */
     update: (
       id: string,
@@ -2123,7 +2123,7 @@ export function createCheckTemplatesApi(api: HttpClient) {
         folderId?: string | null;
         shared?: boolean;
       },
-    ) => api.put<CheckTemplate>(`/check-templates/${id}`, data),
+    ) => api.put<CheckTemplate>(`/check-templates/${id}`, { ...data, supportsKitRecipes: true }),
     remove: (id: string) => api.delete(`/check-templates/${id}`),
     /** The current employee's private folders and all tenant-shared folders. */
     folders: {
@@ -3273,6 +3273,7 @@ export function createProductKitsApi(api: HttpClient) {
   return {
     get: (productId: string) => api.get<PhysicalProductKit>(`/product-kits/${productId}`),
     recipes: () => api.get<KitRecipe[]>('/product-kits/recipes'),
+    recipe: (id: string, version?: number) => api.get<KitRecipe>(`/product-kits/recipes/${id}`, { params: { version } }),
     createRecipe: (data: Pick<KitRecipe, 'name' | 'components'>) => api.post<KitRecipe>('/product-kits/recipes', data),
     updateRecipe: (id: string, data: Pick<KitRecipe, 'name' | 'components'> & { expectedVersion: number }) =>
       api.patch<KitRecipe>(`/product-kits/recipes/${id}`, data),
