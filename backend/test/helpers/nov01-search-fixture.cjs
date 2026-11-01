@@ -1,3 +1,4 @@
+const { approvedFixture } = require('./nov01-fixture-identity.cjs');
 const assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
 const { Pool } = require('pg');
@@ -11,11 +12,7 @@ const options = { skip: !live, timeout: 30000 };
 const status = (n) => (error) => error.getStatus?.() === n;
 
 async function fixture(work, appPoolMax = 5) {
-  const url = new URL(live);
-  assert.equal(url.hostname, '127.0.0.1');
-  assert.equal(url.port, '65480');
-  assert.equal(url.pathname, '/autexa_nov01_search_test');
-  assert.equal(url.username, 'nov01_search_fixture');
+  const expected = approvedFixture(live, 'search');
   const admin = new Pool({ connectionString: live, max: 5 });
   const appUrl = new URL(live);
   appUrl.username = 'autexa_app';
@@ -56,10 +53,12 @@ async function fixture(work, appPoolMax = 5) {
     );
     return { id };
   };
+  let verified = false;
   try {
     const [identity] = await q('SELECT current_database() AS db,current_user AS usr');
-    assert.equal(identity.db, 'autexa_nov01_search_test');
-    assert.equal(identity.usr, 'nov01_search_fixture');
+    assert.equal(identity.db, expected.database);
+    assert.equal(identity.usr, expected.role);
+    verified = true;
     assert.equal(
       (await app.query('SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname=current_user')).rows[0].rolbypassrls,
       false,
@@ -96,7 +95,7 @@ async function fixture(work, appPoolMax = 5) {
       product,
     });
   } finally {
-    await q('DELETE FROM tenants WHERE id=ANY($1::uuid[])', [[tenant, foreign]]);
+    if (verified) await q('DELETE FROM tenants WHERE id=ANY($1::uuid[])', [[tenant, foreign]]);
     await pool.end();
   }
 }

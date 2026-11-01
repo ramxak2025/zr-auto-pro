@@ -1,12 +1,14 @@
+const { approvedFixture } = require('./helpers/nov01-fixture-identity.cjs');
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os');
 const {randomUUID}=require('node:crypto'),{spawnSync}=require('node:child_process'),{Pool}=require('pg');
 const live=process.env.NOV01_INVENTORY_LIVE_DB;
 test('212 migration binds legacy batches only to matching captured compositions and preserves inventory/check costs', {skip:!live,timeout:30000},async()=>{
- const url=new URL(live);assert.equal(url.hostname,'127.0.0.1');assert.equal(url.port,'65479');assert.equal(url.pathname,'/autexa_nov01_inventory_test');assert.equal(url.username,'nov01_fixture');
+ const expected=approvedFixture(live,'inventory'),url=new URL(live);
  const admin=new Pool({connectionString:url.toString(),max:1}),dbName='autexa_nov02_kit_schema_'+randomUUID().replaceAll('-','').slice(0,12),scratch=fs.mkdtempSync(path.join(os.tmpdir(),'autexa-nov02-kit-migration-'));
- let db;
+ let db,created=false;
  try {
-  await admin.query('CREATE DATABASE '+dbName);url.pathname='/'+dbName;
+  const identity=(await admin.query('SELECT current_database() AS db,current_user AS usr')).rows[0];assert.equal(identity.db,expected.database);assert.equal(identity.usr,expected.role);
+  await admin.query('CREATE DATABASE '+dbName);created=true;url.pathname='/'+dbName;
   fs.mkdirSync(path.join(scratch,'migrations'));
   for(const file of fs.readdirSync(path.join(__dirname,'../migrations')).filter(f=>f.endsWith('.sql')&&f<'211'))fs.symlinkSync(path.join(__dirname,'../migrations',file),path.join(scratch,'migrations',file));
   const env={...process.env,DATABASE_URL:url.toString()};delete env.DB_APP_PASSWORD;
@@ -37,5 +39,5 @@ test('212 migration binds legacy batches only to matching captured compositions 
   const lines=(await db.query('SELECT products FROM check_templates WHERE id=$1',[tpl])).rows[0].products;
   assert.equal(lines[0].kind,'kitRecipe');assert.equal(lines[0].kitRecipeId,batches.find(a=>a.product_id===old).recipe_id);assert.equal(lines[0].productId,undefined);assert.deepEqual(lines[1],ordinary);
   const saved=(await db.query('SELECT cost_price,total_cost,kit_exact_unit_cost FROM check_product_lines WHERE check_id=$1',[check])).rows[0];assert.equal(saved.cost_price,'50.00');assert.equal(saved.total_cost,'50.00');assert.equal(saved.kit_exact_unit_cost,'49.99500');
- }finally{if(db)await db.end();await admin.query('DROP DATABASE IF EXISTS '+dbName);await admin.end();fs.rmSync(scratch,{recursive:true,force:true});}
+ }finally{if(db)await db.end();if(created)await admin.query('DROP DATABASE IF EXISTS '+dbName);await admin.end();fs.rmSync(scratch,{recursive:true,force:true});}
 });
