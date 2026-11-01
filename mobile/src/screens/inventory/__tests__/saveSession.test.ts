@@ -97,3 +97,16 @@ it('a point-only data epoch change also prevents a captured request before trans
   await expect(old.updateStock('product-A', body)).rejects.toMatchObject({ code: 'ERR_CANCELED' });
   expect(h.sent).toHaveLength(0);
 });
+
+it('exact barcode lookup uses the captured account and explicit warehouse, and refuses a later data epoch', async () => {
+  const h = setup();
+  const session = h.helper.captureInventorySession();
+  await session.lookupBarcode({ barcode: 'AX00000001', warehouseId: 'warehouse-A', page: 1, limit: 100 });
+  expect(h.sent).toHaveLength(1);
+  expect(h.sent[0].url).toBe('/products/lookup-barcode');
+  expect(h.sent[0].headers.Authorization).toBe('Bearer token-A');
+  expect(h.sent[0].params).toEqual({ barcode: 'AX00000001', warehouseId: 'warehouse-A', page: 1, limit: 100 });
+  h.data.setDataSession(owner('other-point'));
+  await expect(session.lookupBarcode({ barcode: 'AX00000001', warehouseId: 'warehouse-A' })).rejects.toThrow('expired');
+  expect(h.sent).toHaveLength(1);
+});

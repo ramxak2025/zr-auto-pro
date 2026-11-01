@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { View, Text, TextInput, TouchableOpacity, Switch, Alert, StyleSheet, ActivityIndicator } from 'react-native';
 import { SvgXml } from 'react-native-svg';
 import { Ionicons } from '@expo/vector-icons';
@@ -36,8 +36,14 @@ export default function ProductLabelPrint({ visible, onClose, products, onGenera
   const [showPrice, setShowPrice] = useState(false);
   const [previewId, setPreviewId] = useState('');
   const [busy, setBusy] = useState(false);
+  const wasOpen = useRef(false);
   useEffect(() => {
-    if (!visible) return;
+    if (!visible) {
+      wasOpen.current = false;
+      return;
+    }
+    const preserveChoices = wasOpen.current;
+    wasOpen.current = true;
     setItems(
       products.map(({ id, name, sellPrice, barcode, internalBarcode }) => ({
         id,
@@ -47,8 +53,15 @@ export default function ProductLabelPrint({ visible, onClose, products, onGenera
         internalBarcode,
       })),
     );
-    setChoices(
-      Object.fromEntries(products.map((product) => [product.id, { copies: 1, source: defaultLabelSource(product) }])),
+    setChoices((previous) =>
+      Object.fromEntries(
+        products.map((product) => [
+          product.id,
+          preserveChoices && previous[product.id]
+            ? previous[product.id]
+            : { copies: 1, source: defaultLabelSource(product) },
+        ]),
+      ),
     );
     setPreviewId(products[0]?.id ?? '');
   }, [visible, products]);

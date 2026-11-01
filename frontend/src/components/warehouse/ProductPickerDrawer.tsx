@@ -1,3 +1,4 @@
+import BarcodeLookupButton from '../products/BarcodeLookupButton';
 import ProcurementProductPicker from '../checks/ProductPickerDrawer';
 import type { ProcurementPickerOptions } from '../purchaseOrders/useProcurementPickerDrafts';
 import { useMemo, useState } from 'react';
@@ -90,6 +91,8 @@ function PickerBody({
   emptyTitle = 'Нет товаров',
   emptyDescription,
 }: BodyProps) {
+  const [barcodeLimit, setBarcodeLimit] = useState(SEARCH_CAP);
+  const [barcodeMatches, setBarcodeMatches] = useState<Product[] | null>(null);
   const [search, setSearch] = useState('');
   const [path, setPath] = useState<string[]>([]);
   const selected = useMemo(() => new Set(selectedIds ?? []), [selectedIds]);
@@ -126,11 +129,17 @@ function PickerBody({
   const hasCells = useMemo(() => products.some((p) => p.storageCellCode), [products]);
 
   const results = useMemo(() => {
+    if (barcodeMatches) return barcodeMatches;
     if (!q) return null;
-    return smartSearch(products, q, (p) => [p.name, p.article, p.barcode, p.category, p.storageCellCode], {
-      typos: true,
-    });
-  }, [products, q]);
+    return smartSearch(
+      products,
+      q,
+      (p) => [p.name, p.article, p.brand, p.barcode, p.internalBarcode, p.category, p.storageCellCode],
+      {
+        typos: true,
+      },
+    );
+  }, [products, q, barcodeMatches]);
 
   const pick = (p: Product) => {
     onSelect(p);
@@ -204,16 +213,50 @@ function PickerBody({
 
   return (
     <div className="space-y-3">
+      <BarcodeLookupButton
+        disabled={isLoading || isError}
+        warehouseId={
+          products.length && products.every((product) => product.warehouseId === products[0].warehouseId)
+            ? products[0].warehouseId || undefined
+            : undefined
+        }
+        onResolved={(result) => {
+          const eligible = result.matches.filter((product) => products.some((item) => item.id === product.id));
+          if (result.status === 'found' && eligible.length === 1) pick(eligible[0]);
+          else {
+            setBarcodeLimit(SEARCH_CAP);
+            setBarcodeMatches(eligible);
+          }
+        }}
+      />
+      {barcodeMatches && (
+        <p role="status" className="text-xs text-ink-2">
+          Выберите нужный товар из совпадений штрихкода.
+          <button
+            type="button"
+            className="ml-2 underline"
+            onClick={() => {
+              setBarcodeMatches(null);
+              setSearch('');
+            }}
+          >
+            Весь каталог
+          </button>
+        </p>
+      )}
       <SearchInput
         value={search}
-        onChange={setSearch}
+        onChange={(value) => {
+          setBarcodeMatches(null);
+          setSearch(value);
+        }}
         placeholder={hasCells ? 'Название, папка или ячейка…' : 'Название или папка…'}
         aria-label="Поиск товара"
       />
 
       <QueryState
-        isLoading={isLoading}
-        isError={isError}
+        isLoading={isLoading && !barcodeMatches}
+        isError={isError && !barcodeMatches}
         onRetry={onRetry}
         loader={loader}
         isEmpty={!isLoading && !isError && products.length === 0}
@@ -225,8 +268,19 @@ function PickerBody({
             <p className="py-10 text-center text-sm text-ink-3">По запросу «{search.trim()}» ничего не найдено</p>
           ) : (
             <>
-              <ul className="space-y-1.5">{results.slice(0, SEARCH_CAP).map((p) => renderProduct(p, true))}</ul>
-              {results.length > SEARCH_CAP && (
+              <ul className="space-y-1.5">
+                {results.slice(0, barcodeMatches ? barcodeLimit : SEARCH_CAP).map((p) => renderProduct(p, true))}
+              </ul>
+              {barcodeMatches && barcodeMatches.length > barcodeLimit && (
+                <button
+                  type="button"
+                  className="rounded-md px-3 py-2 text-sm text-accent-text"
+                  onClick={() => setBarcodeLimit((value) => value + SEARCH_CAP)}
+                >
+                  Показать ещё совпадения
+                </button>
+              )}
+              {!barcodeMatches && results.length > SEARCH_CAP && (
                 <p className="flex items-center gap-1.5 pt-1 text-xs text-ink-3">
                   <Search className="h-3.5 w-3.5" aria-hidden="true" />
                   Показаны первые {SEARCH_CAP} из {countLabel(results.length, ['товара', 'товаров', 'товаров'])} —

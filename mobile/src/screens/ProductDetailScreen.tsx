@@ -1,3 +1,4 @@
+import ProductLabelPrint from '../components/products/ProductLabelPrint';
 import { formatKitUnitCost } from '../../../shared/utils/productKitDraft';
 import ProductPhotoGallery from '../components/ProductPhotoGallery';
 import ProductShareButton from '../components/ProductShareButton';
@@ -174,6 +175,8 @@ export default function ProductDetailScreen() {
   const productId = passedProduct?.id ?? (route.params as ProductDetailParams).productId ?? '';
 
   const [refreshing, setRefreshing] = useState(false);
+  const [labelsOpen, setLabelsOpen] = useState(false);
+  const [generatingBarcode, setGeneratingBarcode] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
 
   // ── Edit-on-detail state ────────────────────────────────────────────────
@@ -254,6 +257,21 @@ export default function ProductDetailScreen() {
     retry: (failureCount, err: any) => (err?.response?.status === 404 ? false : failureCount < 2),
     staleTime: 60_000,
   });
+  const labelProducts = useMemo(() => (product ? [product] : []), [product]);
+  const generateLabelCodes = async (ids: string[]) => {
+    const lease = captureDataSession();
+    setGeneratingBarcode(true);
+    try {
+      const { data } = await productsApi.internalBarcodes(ids);
+      if (!lease.isCurrent()) throw new Error('Сессия изменилась. Откройте товар заново.');
+      queryClient.invalidateQueries({ queryKey: ['product', productId] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
+      return data.products;
+    } finally {
+      setGeneratingBarcode(false);
+    }
+  };
 
   // Price-change ledger (newest first). Typed via the new productsApi.priceHistory.
   const { data: priceHistory, isLoading: priceLoading } = useQuery<ProductPriceHistoryEntry[]>({
@@ -1038,6 +1056,25 @@ export default function ProductDetailScreen() {
             </TouchableOpacity>
           ) : null}
 
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginVertical: 12 }}>
+            <TouchableOpacity accessibilityRole="button" onPress={() => setLabelsOpen(true)} style={{ padding: 12 }}>
+              <Text color={palette.accent.primaryText}>Этикетки</Text>
+            </TouchableOpacity>
+            {canManageWarehouse && !product.internalBarcode && (
+              <TouchableOpacity
+                accessibilityRole="button"
+                disabled={generatingBarcode}
+                onPress={() =>
+                  void generateLabelCodes([product.id]).catch(() =>
+                    Alert.alert('Штрихкод не создан', 'Подключитесь к сети и повторите.'),
+                  )
+                }
+                style={{ padding: 12 }}
+              >
+                <Text color={palette.accent.primaryText}>{generatingBarcode ? 'Создание…' : 'Создать штрихкод'}</Text>
+              </TouchableOpacity>
+            )}
+          </View>
           {/* INFO card — cell / supplier / barcode / unit / warranty */}
           <SectionHeader title="Информация" />
           <View style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
@@ -1071,6 +1108,13 @@ export default function ProductDetailScreen() {
               value={product.barcode || 'Не указан'}
               palette={palette}
               mono={!!product.barcode}
+            />
+            <InfoRow
+              icon="barcode-outline"
+              label="Внутренний штрихкод"
+              value={product.internalBarcode || 'Не создан'}
+              palette={palette}
+              mono={!!product.internalBarcode}
             />
             <InfoRow icon="scale-outline" label="Единица измерения" value={unitLabel(product.unit)} palette={palette} />
             <InfoRow
@@ -1300,6 +1344,12 @@ export default function ProductDetailScreen() {
       {/* Камера-скан для поля «Штрихкод» (round 12 #6a). Открывается ТОЛЬКО
           когда другие модалки экрана закрыты — сиблинг-Modal конфликтов iOS
           нет. Одноразовый скан: код падает в поле, сканер закрывается. */}
+      <ProductLabelPrint
+        visible={labelsOpen}
+        onClose={() => setLabelsOpen(false)}
+        products={labelProducts}
+        onGenerateInternal={canManageWarehouse ? generateLabelCodes : undefined}
+      />
       <BarcodeScanner
         visible={barcodeScanOpen}
         onClose={() => setBarcodeScanOpen(false)}

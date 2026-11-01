@@ -39,9 +39,14 @@ export function inventoryRows(
 ): InventoryRow[] {
   const query = search.trim().toLowerCase();
   if (query) {
-    return smartSearch(products, query, (p) => [p.name, p.article, p.barcode, p.category, p.storageCellCode], {
-      typos: true,
-    }).map((product) => ({ type: 'product', key: product.id, product }));
+    return smartSearch(
+      products,
+      query,
+      (p) => [p.name, p.article, p.brand, p.barcode, p.internalBarcode, p.category, p.storageCellCode],
+      {
+        typos: true,
+      },
+    ).map((product) => ({ type: 'product', key: product.id, product }));
   }
   const level = buildProductFolderLevel(products, path, folders);
   return [

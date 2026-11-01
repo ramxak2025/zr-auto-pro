@@ -836,3 +836,139 @@ test('an uncertain disassembly retains its exact request across close even if th
     Renderer.act(() => tree.unmount());
   }
 });
+
+test('real web product detail opens label settings and generates a server internal code without replacing factory code', async () => {
+  const product = {
+    id: 'product',
+    name: 'Фильтр',
+    sellPrice: 100,
+    costPrice: 20,
+    stock: 3,
+    minStock: 0,
+    barcode: '4601234567893',
+    internalBarcode: null,
+    photos: [],
+    unit: 'шт',
+    warehouseId: 'main',
+  };
+  const calls = [],
+    changes = [];
+  const Details = load('frontend/src/components/warehouse/ProductDetailModal.tsx', {
+    '@tanstack/react-query': {
+      useQueryClient: () => ({ invalidateQueries() {} }),
+      useQuery: () => ({ data: [], isPending: false }),
+      useInfiniteQuery: () => ({ data: { pages: [{ data: [] }] }, isPending: false }),
+    },
+    'react-router-dom': { useNavigate: () => () => {} },
+    '../../contexts/AuthContext': { useAuth: () => ({ hasPermission: () => true }) },
+    '../../api/services': {
+      productsApi: {
+        internalBarcodes: async (ids) => {
+          calls.push(ids);
+          return { data: { products: [{ id: 'product', internalBarcode: 'AX00000001' }] } };
+        },
+      },
+      stockMovementsApi: {},
+    },
+    '../Modal': { __esModule: true, default: 'modal' },
+    '../products/ProductLabelPrint': { __esModule: true, default: 'label-print' },
+    '../QueryState': { __esModule: true, default: 'query-state' },
+    './ProductGallery': { __esModule: true, default: 'gallery' },
+    './ProductShareButton': { __esModule: true, default: 'share-button' },
+    './ProductKitPanel': { __esModule: true, default: 'kit-panel' },
+    './StorageCellBadge': { __esModule: true, default: 'cell-badge' },
+    '../../ui/Button': { Button: 'button' },
+    '../../ui/Badge': { Badge: 'badge' },
+    '../../ui/Money': { Money: 'money' },
+    '../../ui/Skeleton': { Skeleton: 'skeleton' },
+    '../../ui/Tabs': { Tabs: 'tabs', TabPanel: 'tab-panel' },
+    '../../hooks/useTenantTimezone': { useTenantTimezone: () => 'Europe/Moscow' },
+  }).default;
+  let tree;
+  Renderer.act(() => {
+    tree = Renderer.create(
+      React.createElement(Details, {
+        product,
+        canManage: true,
+        onClose() {},
+        onEdit() {},
+        onWriteoff() {},
+        onInventory() {},
+        onDelete() {},
+        onProductChanged: (value) => changes.push(value),
+      }),
+    );
+  });
+  try {
+    const button = tree.root.findAllByType('button').find((node) => node.children.join('') === 'Этикетки');
+    assert.ok(button);
+    Renderer.act(() => button.props.onClick());
+    const labels = tree.root.findByType('label-print');
+    assert.equal(labels.props.open, true);
+    assert.equal(labels.props.products[0].id, 'product');
+    await Renderer.act(async () => labels.props.onGenerateInternal(['product']));
+    assert.deepEqual(calls, [['product']]);
+    assert.equal(changes[0].internalBarcode, 'AX00000001');
+    assert.equal(changes[0].barcode, '4601234567893');
+    assert.equal(product.barcode, '4601234567893');
+  } finally {
+    Renderer.act(() => tree.unmount());
+  }
+});
+
+test('real web barcode lookup passes explicit warehouse, preserves ambiguity and ignores a cancelled result', async () => {
+  const matches = [
+    { id: 'a', name: 'Фильтр' },
+    { id: 'b', name: 'Фильтр' },
+  ];
+  let respond;
+  const calls = [],
+    results = [];
+  const Lookup = load('frontend/src/components/products/BarcodeLookupButton.tsx', {
+    '../../api/services': {
+      productsApi: {
+        lookupBarcode: (params) => {
+          calls.push(params);
+          return new Promise((resolve) => {
+            respond = () => resolve({ data: { status: 'ambiguous', matches, total: 2, page: 1, limit: 100 } });
+          });
+        },
+      },
+    },
+    '../../ui/Button': { Button: 'button' },
+    '../../ui/Input': { Input: 'input' },
+    '../../ui/Field': { Field: 'field' },
+  }).default;
+  let tree;
+  Renderer.act(() => {
+    tree = Renderer.create(
+      React.createElement(Lookup, { warehouseId: 'A', onResolved: (result) => results.push(result) }),
+    );
+  });
+  const toggle = () => tree.root.findAllByType('button').find((node) => node.children.join('') === 'Штрихкод');
+  const submit = () => tree.root.findByType('form').props.onSubmit({ preventDefault() {}, stopPropagation() {} });
+  try {
+    Renderer.act(() => toggle().props.onClick());
+    Renderer.act(() => tree.root.findByType('input').props.onChange({ target: { value: 'AX00000001' } }));
+    Renderer.act(submit);
+    assert.equal(calls[0].warehouseId, 'A');
+    assert.equal(calls[0].barcode, 'AX00000001');
+    Renderer.act(() => toggle().props.onClick());
+    await Renderer.act(async () => {
+      respond();
+      await new Promise((resolve) => setImmediate(resolve));
+    });
+    assert.deepEqual(results, [], 'closing the field cancels its pending lookup continuation');
+    Renderer.act(() => toggle().props.onClick());
+    Renderer.act(() => tree.root.findByType('input').props.onChange({ target: { value: 'factory' } }));
+    Renderer.act(submit);
+    await Renderer.act(async () => {
+      respond();
+      await new Promise((resolve) => setImmediate(resolve));
+    });
+    assert.equal(results[0].status, 'ambiguous');
+    assert.deepEqual(results[0].matches, matches);
+  } finally {
+    Renderer.act(() => tree.unmount());
+  }
+});

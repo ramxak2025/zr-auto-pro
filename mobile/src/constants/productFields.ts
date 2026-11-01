@@ -23,30 +23,9 @@
  * ячейки: `?fields=` отдаёт только перечисленные ключи.
  */
 export const PRODUCT_LIST_FIELDS =
-  'id,name,stock,minStock,sellPrice,costPrice,photo,photos,category,unit,warehouseId,supplierId,warrantyDays,barcode,storageCellId,storageCellCode,assemblyId,assemblyRevision,assemblyExactCost,internalBarcode,isBundle';
+  'id,name,article,brand,stock,minStock,sellPrice,costPrice,photo,photos,category,unit,warehouseId,supplierId,warrantyDays,barcode,storageCellId,storageCellCode,assemblyId,assemblyRevision,assemblyExactCost,internalBarcode,isBundle';
 
-/**
- * ПОЛНЫЙ КАТАЛОГ СКЛАДА ОДНОЙ СТРАНИЦЕЙ.
- *
- * ПОЧЕМУ НЕ 500. Экран «Склад», инвентаризация и пикер папок строят дерево
- * папок, счётчики, стоимость остатков и сессию пересчёта ИЗ ВЫДАЧИ. Сервер
- * сортирует по названию, поэтому лимит 500 молча срезал алфавитный ХВОСТ:
- * товар за 500-й позицией не попадал ни в список, ни в свою папку, ни в
- * счётчик, ни в стоимость склада, ни в поиск по штрих-коду — при этом
- * находился обычным поиском (он серверный, по всей таблице) и был виден в
- * пикере Кассы. Ровно это владелец описал словами «товар на складе иногда не
- * показывается, хотя он там есть». Пагинации у экрана нет и она бы не помогла:
- * дерево папок и суммы считаются по всему массиву и врали бы, пока человек не
- * домотает до конца.
- *
- * ЗНАЧЕНИЕ = потолок сервера (backend/src/common/cap-limit.ts: capLimit(...,
- * 100, 10000)). Просить больше бессмысленно — сервер всё равно срежет, а
- * честная цифра не вводит в заблуждение. Каталоги крупнее ловит плашка
- * усечения на экране.
- *
- * КРИТИЧНО: значение входит в ключ кеша ['products', { search, limit,
- * warehouseId }] и обязано быть одинаковым в ProductsScreen, InventoryScreen,
- * FolderPickerModal и прогреве AuthContext — иначе прогретый при входе слот
- * осиротеет и первое открытие «Склада» станет холодным.
+/** Legacy cache-key limit retained across list, folder picker and login prefetch.
+ * Actual requests use loadProductCatalog pagination; this is not a completeness limit.
  */
 export const PRODUCT_LIST_LIMIT = 10000;

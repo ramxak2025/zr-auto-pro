@@ -1,9 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
+import ProductLabelPrint from '../products/ProductLabelPrint';
+import toast from 'react-hot-toast';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   AlertTriangle,
+  Barcode,
+  Printer,
   ArrowLeftRight,
   ClipboardCheck,
   MapPin,
@@ -102,6 +106,9 @@ export default function ProductDetailModal({
   // Non-managers can only ever see the Info tab (cost + price history leak
   // costPrice, so those tabs are hidden entirely for them).
   const [tab, setTab] = useState<DetailTab>('info');
+  const [labelsOpen, setLabelsOpen] = useState(false);
+  const [generatingBarcode, setGeneratingBarcode] = useState(false);
+  const labelProducts = useMemo(() => [product], [product]);
   const [kitOverlay, setKitOverlay] = useState(false);
   const isLow = product.stock <= product.minStock;
   const uLabel = unitLabel(product.unit);
@@ -148,6 +155,20 @@ export default function ProductDetailModal({
     }
   }, [movementsQuery.error, product.id, queryClient]);
 
+  const generateLabelCodes = async (ids: string[]) => {
+    setGeneratingBarcode(true);
+    try {
+      const { data } = await productsApi.internalBarcodes(ids);
+      const code = data.products.find((item) => item.id === product.id);
+      if (code) onProductChanged?.({ ...product, internalBarcode: code.internalBarcode });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
+      return data.products;
+    } finally {
+      setGeneratingBarcode(false);
+    }
+  };
+
   const infoTile = (label: string, value: React.ReactNode, tone?: 'bad' | 'accent') => (
     <div className={cn('rounded-lg p-3', tone === 'bad' ? 'bg-bad-soft' : 'bg-surface-2')}>
       <p className="text-xs text-ink-3">{label}</p>
@@ -166,7 +187,7 @@ export default function ProductDetailModal({
     <Modal
       isOpen
       onClose={() => {
-        if (!kitOverlay) onClose();
+        if (!kitOverlay && !labelsOpen) onClose();
       }}
       title={product.name}
       description={product.category || 'Без папки'}
@@ -188,6 +209,24 @@ export default function ProductDetailModal({
         />
 
         <TabPanel idPrefix="product-detail" tabKey="info" active={tab === 'info'} className="space-y-4">
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" icon={Printer} onClick={() => setLabelsOpen(true)}>
+              Этикетки
+            </Button>
+            {canManage && !product.internalBarcode && (
+              <Button
+                variant="secondary"
+                loading={generatingBarcode}
+                onClick={() =>
+                  void generateLabelCodes([product.id]).catch(() =>
+                    toast.error('Не удалось создать штрихкод. Подключитесь к сети и повторите.'),
+                  )
+                }
+              >
+                Создать штрихкод
+              </Button>
+            )}
+          </div>
           <ProductGallery photos={productPhotoUrls(product)} name={product.name} />
           {canManage && <ProductShareButton id={product.id} name={product.name} />}
           {product.assemblyId && (
@@ -251,7 +290,8 @@ export default function ProductDetailModal({
                     {product.assemblyId ? 'Собранный комплект' : 'Набор позиций · без сборки'}
                   </Badge>
                 )}
-                {product.barcode && <Badge tone="neutral">Штрихкод {product.barcode}</Badge>}
+                {product.barcode && <Badge tone="neutral">Заводской {product.barcode}</Badge>}
+                {product.internalBarcode && <Badge tone="neutral">Внутренний {product.internalBarcode}</Badge>}
                 {product.storageCellCode && (
                   <StorageCellBadge code={product.storageCellCode} name={product.storageCellName} size="md" withLabel />
                 )}
@@ -499,6 +539,12 @@ export default function ProductDetailModal({
           </QueryState>
         </TabPanel>
       </div>
+      <ProductLabelPrint
+        open={labelsOpen}
+        onClose={() => setLabelsOpen(false)}
+        products={labelProducts}
+        onGenerateInternal={canManage ? generateLabelCodes : undefined}
+      />
     </Modal>
   );
 }

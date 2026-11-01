@@ -1,3 +1,5 @@
+import { loadProductBarcodeMatches } from '../../../shared/utils/productBarcodeLookup';
+import { captureDataSession } from '../contexts/dataSession';
 import { productFolderParts, productFolderPath } from '../../../shared/utils/productFolders';
 import { smartSearch } from '../../../shared/utils/smartSearch';
 import { loadProductCatalog } from '../../../shared/api/productCatalog';
@@ -83,6 +85,10 @@ export interface WarehouseSwitcherInline {
 }
 
 interface ProductPickerModalProps {
+  exactMatches?: Product[];
+  notice?: string;
+  /** Explicit receiving/inventory restriction; ordinary POS lookup covers all point warehouses. */
+  lookupWarehouseId?: string;
   visible: boolean;
   onClose: () => void;
   /** iOS native dismissal completion, for presenting a subsequent modal. */
@@ -216,6 +222,9 @@ const PickerProductRow = React.memo(function PickerProductRow({
 });
 
 export default function ProductPickerModal({
+  exactMatches,
+  notice,
+  lookupWarehouseId,
   visible,
   onClose,
   onDismiss,
@@ -238,6 +247,11 @@ export default function ProductPickerModal({
   // is the debounced value that drives the heavy filter useMemo. The 200 ms
   // debounce keeps the FlashList stable while the user is still typing, so
   // the rows don't reflow on every character.
+  const [barcodeMatches, setBarcodeMatches] = useState<Product[] | null>(null);
+  const scanEpoch = useRef(0);
+  const scanBusy = useRef(false);
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
   const [localSearch, setLocalSearch] = useState('');
   const [productSearch, setProductSearch] = useState('');
   // Active folder filter chip. `null` === «Все» (no folder filter). Selecting
@@ -257,6 +271,10 @@ export default function ProductPickerModal({
 
   // ── Barcode scanner (expo-camera CameraView with barcode hint) ────────────
   const [showScanner, setShowScanner] = useState(false);
+  const closeScanner = () => {
+    scanEpoch.current++;
+    setShowScanner(false);
+  };
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   // Round 12 #6в — скан = мгновенное добавление. Continuous-сессия: cooldown
   // между принятыми кодами (CameraView шлёт onBarcodeScanned каждый кадр),
@@ -272,6 +290,8 @@ export default function ProductPickerModal({
       perm = await requestCameraPermission();
     }
     if (perm?.granted) {
+      scanEpoch.current++;
+      setBarcodeMatches(null);
       scanCooldownRef.current = 0;
       scanAddCountRef.current = 0;
       setScanFeedback(null);
@@ -282,6 +302,7 @@ export default function ProductPickerModal({
   }, [cameraPermission, requestCameraPermission]);
 
   const handleSearchChange = useCallback((text: string) => {
+    setBarcodeMatches(null);
     setLocalSearch(text);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => setProductSearch(text), 200);
@@ -326,7 +347,7 @@ export default function ProductPickerModal({
   } = useQuery<Product[]>({
     queryKey: warehouseId ? ['all-products-check', { warehouseId }] : ['all-products-check'],
     queryFn: () => loadProductCatalog(productsApi.getAll, { warehouseId: warehouseId || undefined }),
-    enabled: visible,
+    enabled: visible && !exactMatches,
     // Reuse only the cache of this warehouse while refreshing. A previous
     // warehouse must never appear under the newly selected warehouse label.
     //
@@ -363,45 +384,56 @@ export default function ProductPickerModal({
     if (visible) refetch();
   }, [visible, refetch]);
 
-  // Round 12 #6в: exact-match по barcode загруженного списка → товар СРАЗУ
-  // уходит в чек/заказ через onSelectProduct (МИМО lastTapRef-дебаунса —
-  // cooldown continuous-сессии уже отсекает дребезг кадров), сканер остаётся
-  // открытым — «пикать подряд». Промах — прежнее поведение: код в поиск
-  // (клиентский фильтр ниже матчит и barcode), haptic warning, сканер
-  // закрывается, чтобы показать кандидатов. Session-bridge Кассы не задет —
-  // это тот же родительский колбэк, что и у тапа по строке. Определён ПОСЛЕ
-  // запроса allProducts (dep-массив читается на рендере — TDZ).
+  // Server exact lookup includes internal codes and keeps duplicate matches explicit.
   const handleBarCodeScanned = useCallback(
-    ({ data }: { data: string }) => {
+    async ({ data }: { data: string }) => {
       const needle = (data || '').trim();
-      if (!needle) return;
+      if (!needle || scanBusy.current) return;
       const now = Date.now();
       if (now - scanCooldownRef.current < SCAN_COOLDOWN_MS) return;
       scanCooldownRef.current = now;
-      const products = Array.isArray(allProducts) ? allProducts : [];
-      const match = products.find((p) => String(p.barcode || '').trim() === needle);
-      if (match) {
-        haptic('success');
-        onSelectProduct(match);
-        scanAddCountRef.current += 1;
-        setScanFeedback(`+1 ${match.name} · ${scanAddCountRef.current}`);
-        return; // камера остаётся открытой — следующий товар
+      const epoch = scanEpoch.current;
+      const lease = captureDataSession();
+      scanBusy.current = true;
+      try {
+        const result = await loadProductBarcodeMatches(productsApi.lookupBarcode, {
+          barcode: needle,
+          ...(lookupWarehouseId ? { warehouseId: lookupWarehouseId } : {}),
+        });
+        if (!lease.isCurrent() || epoch !== scanEpoch.current || !visibleRef.current) return;
+        if (result.status === 'found') {
+          const match = result.matches[0];
+          haptic('success');
+          onSelectProduct(match);
+          scanAddCountRef.current++;
+          setScanFeedback(`+1 ${match.name} · добавлено ${scanAddCountRef.current}`);
+          return;
+        }
+        setShowScanner(false);
+        setActiveCategory(null);
+        setBarcodeMatches(result.matches);
+        setLocalSearch('');
+        setProductSearch('');
+        setScanFeedback(
+          result.status === 'ambiguous'
+            ? 'Этот штрихкод у нескольких товаров. Выберите нужный.'
+            : 'Штрихкод не найден.',
+        );
+      } catch {
+        if (lease.isCurrent() && epoch === scanEpoch.current && visibleRef.current)
+          setScanFeedback('Не удалось проверить код. Подключитесь к сети и повторите.');
+      } finally {
+        scanBusy.current = false;
       }
-      haptic('warning');
-      setShowScanner(false);
-      // A scan is a precise lookup — clear any active folder chip so the
-      // scanned item surfaces regardless of which folder it lives in.
-      setActiveCategory(null);
-      setLocalSearch(needle);
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-      debounceRef.current = setTimeout(() => setProductSearch(needle), 200);
     },
-    [allProducts, onSelectProduct],
+    [onSelectProduct, lookupWarehouseId],
   );
 
   // Switching warehouse changes the product set; a category chip from the
   // previous warehouse may not exist here, so clear the folder filter.
   useEffect(() => {
+    scanEpoch.current++;
+    setBarcodeMatches(null);
     setActiveCategory(null);
   }, [warehouseId]);
 
@@ -422,7 +454,7 @@ export default function ProductPickerModal({
   // Single flat product list, filtered by the active chip AND the search text
   // together. No folder drill-in/out — the whole warehouse is one list.
   const visibleProducts = useMemo(() => {
-    let list = Array.isArray(allProducts) ? allProducts : [];
+    let list = exactMatches ?? barcodeMatches ?? (Array.isArray(allProducts) ? allProducts : []);
     if (activeCategory) {
       list = list.filter((p) => {
         const cat = productFolderPath(p.category);
@@ -430,12 +462,17 @@ export default function ProductPickerModal({
       });
     }
     if (productSearch) {
-      list = smartSearch(list, productSearch, (p) => [p.name, p.article, p.barcode, p.category, p.storageCellCode], {
-        typos: true,
-      });
+      list = smartSearch(
+        list,
+        productSearch,
+        (p) => [p.name, p.article, p.brand, p.barcode, p.internalBarcode, p.category, p.storageCellCode],
+        {
+          typos: true,
+        },
+      );
     }
     return list;
-  }, [allProducts, activeCategory, productSearch]);
+  }, [allProducts, activeCategory, productSearch, barcodeMatches, exactMatches]);
 
   // Running cart — derived from the parent's truth via `getCartQty`. We only
   // have an ADD callback (`onSelectProduct`) + a qty READER (`getCartQty`),
@@ -495,6 +532,8 @@ export default function ProductPickerModal({
   }, [visible, cardTranslateY]);
 
   const handleClose = useCallback(() => {
+    scanEpoch.current++;
+    setBarcodeMatches(null);
     setLocalSearch('');
     setProductSearch('');
     setActiveCategory(null);
@@ -615,8 +654,8 @@ export default function ProductPickerModal({
   // fires when there is NO data to show (cold cache + both fetch attempts
   // failed); with stale data present the list stays up and the background
   // refetch failure is silent (stale-while-revalidate contract).
-  const showInitialSkeleton = visible && allProducts === undefined && isLoading;
-  const showErrorState = visible && allProducts === undefined && isError;
+  const showInitialSkeleton = visible && !exactMatches && !barcodeMatches && allProducts === undefined && isLoading;
+  const showErrorState = visible && !exactMatches && !barcodeMatches && allProducts === undefined && isError;
   const queryResolvedEmpty = visible && Array.isArray(allProducts) && allProducts.length === 0;
   const hasActiveFilter = !!productSearch || !!activeCategory;
 
@@ -729,6 +768,9 @@ export default function ProductPickerModal({
               </View>
             ) : null}
 
+            {(notice || (barcodeMatches && scanFeedback)) && (
+              <Text style={{ color: palette.text.secondary, paddingVertical: 8 }}>{notice || scanFeedback}</Text>
+            )}
             {/* Search */}
             <View style={[styles.searchWrap, { backgroundColor: palette.bg.muted }]}>
               <Ionicons name="search-outline" size={16} color={palette.text.tertiary} />
@@ -750,15 +792,15 @@ export default function ProductPickerModal({
                 >
                   <Ionicons name="close-circle-outline" size={18} color={palette.text.tertiary} />
                 </TouchableOpacity>
-              ) : (
+              ) : !exactMatches ? (
                 <TouchableOpacity onPress={openScanner} hitSlop={8} accessibilityLabel="Сканировать штрих-код">
                   <Ionicons name="barcode-outline" size={20} color={colors.primary[500]} />
                 </TouchableOpacity>
-              )}
+              ) : null}
             </View>
 
             {/* Full-screen barcode scanner modal */}
-            <RNModal visible={showScanner} animationType="slide" onRequestClose={() => setShowScanner(false)}>
+            <RNModal visible={showScanner} animationType="slide" onRequestClose={closeScanner}>
               <View style={styles.scannerContainer}>
                 {showScanner && cameraPermission?.granted ? (
                   <CameraView
@@ -782,7 +824,7 @@ export default function ProductPickerModal({
                     </View>
                   ) : null}
                 </View>
-                <TouchableOpacity style={styles.scannerCancelBtn} onPress={() => setShowScanner(false)}>
+                <TouchableOpacity style={styles.scannerCancelBtn} onPress={closeScanner}>
                   <Ionicons name="close" size={22} color={colors.white} />
                   <Text style={styles.scannerCancelText}>Отмена</Text>
                 </TouchableOpacity>

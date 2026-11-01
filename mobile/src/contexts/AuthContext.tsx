@@ -376,14 +376,14 @@ function prefetchAfterLogin(qc: QueryClient, user: User): void {
         qc.prefetchQuery({
           queryKey: ['products', { search: '', limit: PRODUCT_LIST_LIMIT, warehouseId: main.id }],
           queryFn: async () => {
-            const res = await productsApi.getAll({
-              search: '',
-              page: 1,
-              limit: PRODUCT_LIST_LIMIT,
-              warehouseId: main.id,
-              fields: PRODUCT_LIST_FIELDS,
-            } as Parameters<typeof productsApi.getAll>[0] & { fields: string });
-            return res.data;
+            const products = await loadProductCatalog(
+              (params) =>
+                productsApi.getAll({ ...params, fields: PRODUCT_LIST_FIELDS } as Parameters<
+                  typeof productsApi.getAll
+                >[0] & { fields: string }),
+              { search: '', ...(main.id ? { warehouseId: main.id } : {}) },
+            );
+            return { data: products, total: products.length, page: 1, limit: Math.max(products.length, 1) };
           },
           staleTime: 5 * 60_000,
         }).catch(() => {});

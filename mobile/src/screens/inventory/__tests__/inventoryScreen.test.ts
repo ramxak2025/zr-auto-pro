@@ -1,3 +1,4 @@
+import { loadProductBarcodeMatches } from '../../../../../shared/utils/productBarcodeLookup';
 import fs from 'fs';
 import path from 'path';
 import ts from 'typescript';
@@ -97,6 +98,10 @@ function harness(products = [a, b]) {
     setWarehouseMenu: jest.fn(),
     setShowScanner: jest.fn(),
     scannerScope: { current: null },
+    barcodeEpoch: { current: 0 },
+    ambiguousScope: { current: null },
+    setBarcodeMatches: jest.fn(),
+    loadProductBarcodeMatches,
     focusId: { current: null },
     scrollTimer: { current: null },
     scrollToFocused: jest.fn(),
@@ -110,6 +115,23 @@ function harness(products = [a, b]) {
     return { data: { requestId: body.requestId, stock: body.quantity } };
   });
   const loadProducts = jest.fn(async () => products);
+  const lookupBarcode = jest.fn(async (params: { barcode: string; warehouseId?: string }) => {
+    const matches = products.filter(
+      (product) =>
+        (product.barcode === params.barcode || product.internalBarcode === params.barcode) &&
+        (!params.warehouseId || product.warehouseId === params.warehouseId),
+    );
+    return {
+      data: {
+        status:
+          matches.length > 1 ? ('ambiguous' as const) : matches.length ? ('found' as const) : ('not_found' as const),
+        matches,
+        total: matches.length,
+        page: 1,
+        limit: 100,
+      },
+    };
+  });
   scope.captureInventorySession = () => {
     const captured = epoch,
       capturedData = dataEpoch;
@@ -118,6 +140,7 @@ function harness(products = [a, b]) {
       isCurrent: () => captured === epoch && capturedData === dataEpoch,
       updateStock: transport,
       loadProducts,
+      lookupBarcode,
     };
   };
   for (const name of [
@@ -127,6 +150,7 @@ function harness(products = [a, b]) {
     'commit',
     'handleApply',
     'chooseWarehouse',
+    'applyScannedProduct',
     'handleScanned',
     'refresh',
   ]) {
@@ -137,13 +161,14 @@ function harness(products = [a, b]) {
     requests,
     transport,
     loadProducts,
+    lookupBarcode,
     get drafts() {
       return (scope.draftsRef as { current: Record<string, InventoryDrafts> }).current;
     },
     count: scope.setCount as (p: Product, raw: string) => void,
     apply: scope.handleApply as () => void,
     choose: scope.chooseWarehouse as (id: string) => void,
-    scan: scope.handleScanned as (code: string) => void,
+    scan: scope.handleScanned as (code: string) => Promise<void>,
     commit: scope.commit as (entries: Entry[], operation: Operation) => Promise<void>,
     get buttons() {
       return buttons;
@@ -329,16 +354,15 @@ it('request conflict never replaces the UUID or clears the uncertain operation',
   expect(h.drafts.A.a.pending?.requestId).toBe('request-1');
   expect(h.loadProducts).not.toHaveBeenCalled();
 });
-it('scanner uses the current ref, preserves fractional counts, and consumes each scan callback once', () => {
+it('scanner uses the current ref, preserves fractional counts, and consumes each scan callback once', async () => {
   const h = harness();
   h.count(a, '0,5');
   const scanner = h.scope.scannerScope as { current: unknown };
   scanner.current = { session: h.session(), warehouseId: 'A' };
-  h.scan('barcode-a');
-  h.scan('barcode-a');
+  await Promise.all([h.scan('barcode-a'), h.scan('barcode-a')]);
   expect(h.drafts.A.a.raw).toBe('1.5');
   scanner.current = { session: h.session(), warehouseId: 'A' };
-  h.scan('barcode-a');
+  await h.scan('barcode-a');
   expect(h.drafts.A.a.raw).toBe('2.5');
 });
 it('read-only permissions and a pending warehouse cannot dispatch writes', () => {
@@ -592,3 +616,37 @@ it.each(['resolved', 'rejected'])(
     expect(h.transport.mock.calls[1][1]).toBe(original);
   },
 );
+
+it('exact scanner keeps duplicate factory codes explicit and restricts lookup to the captured warehouse', async () => {
+  const second = { ...b, barcode: a.barcode };
+  const foreign = { ...a, id: 'foreign', warehouseId: 'B' };
+  const h = harness([a, second, foreign]);
+  const scanner = h.scope.scannerScope as { current: unknown };
+  scanner.current = { session: h.session(), warehouseId: 'A' };
+  await h.scan(a.barcode!);
+  expect(h.lookupBarcode).toHaveBeenCalledWith(expect.objectContaining({ warehouseId: 'A', barcode: a.barcode }));
+  expect(h.drafts).toEqual({});
+  expect(h.scope.setBarcodeMatches).toHaveBeenCalledWith([a, second]);
+  (h.scope.applyScannedProduct as (product: Product, context: unknown) => void)(
+    second,
+    (h.scope.ambiguousScope as { current: unknown }).current,
+  );
+  expect(h.drafts.A.b.raw).toBe('1');
+  expect(h.drafts.A.a).toBeUndefined();
+});
+it('internal barcode lookup does not invent a product/count on network failure or expired session', async () => {
+  const internal = { ...a, internalBarcode: 'AX00000001' };
+  const h = harness([internal]);
+  const scanner = h.scope.scannerScope as { current: unknown };
+  scanner.current = { session: h.session(), warehouseId: 'A' };
+  await h.scan('AX00000001');
+  expect(h.drafts.A.a.raw).toBe('1');
+  h.lookupBarcode.mockRejectedValueOnce(Error('offline'));
+  scanner.current = { session: h.session(), warehouseId: 'A' };
+  await h.scan('AX00000001');
+  expect(h.drafts.A.a.raw).toBe('1');
+  scanner.current = { session: h.session(), warehouseId: 'A' };
+  h.newEpoch();
+  await h.scan('AX00000001');
+  expect(h.drafts.A.a.raw).toBe('1');
+});

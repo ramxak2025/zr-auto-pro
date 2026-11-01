@@ -1,3 +1,4 @@
+import BarcodeLookupButton from '../products/BarcodeLookupButton';
 import {
   useProcurementPickerDrafts,
   type ProcurementPickerOptions,
@@ -74,6 +75,8 @@ export default function ProductPickerDrawer({
   selectedWarehouseId,
   onSelectWarehouse,
 }: ProductPickerDrawerProps) {
+  const [barcodeLimit, setBarcodeLimit] = useState(MAX_VISIBLE_ROWS);
+  const [barcodeMatches, setBarcodeMatches] = useState<Product[] | null>(null);
   const [search, setSearch] = useState('');
   const editor = useProcurementPickerDrafts(purchaseOrder);
   const editingProduct = editor.active;
@@ -95,6 +98,7 @@ export default function ProductPickerDrawer({
 
   useEffect(() => {
     if (open) {
+      setBarcodeMatches(null);
       setSearch('');
       setActivePath(restoredProductRef.current ? productFolderParts(restoredProductRef.current.category) : []);
     }
@@ -115,11 +119,17 @@ export default function ProductPickerDrawer({
 
   const searchResults = useMemo(() => {
     const q = search.trim().toLowerCase();
+    if (barcodeMatches) return barcodeMatches;
     if (!q) return [];
-    return smartSearch(products, q, (p) => [p.name, p.article, p.barcode, p.category, p.storageCellCode], {
-      typos: true,
-    });
-  }, [products, search]);
+    return smartSearch(
+      products,
+      q,
+      (p) => [p.name, p.article, p.brand, p.barcode, p.internalBarcode, p.category, p.storageCellCode],
+      {
+        typos: true,
+      },
+    );
+  }, [products, search, barcodeMatches]);
 
   const handleSelect = (product: Product) => {
     if (purchaseOrder) {
@@ -131,7 +141,7 @@ export default function ProductPickerDrawer({
     if (closeOnSelect) onClose();
   };
 
-  const searching = search.trim().length > 0;
+  const searching = !!barcodeMatches || search.trim().length > 0;
   const showWarehouses = !!warehouses && warehouses.length > 1;
 
   const overflowHint = (n: number) =>
@@ -180,6 +190,18 @@ export default function ProductPickerDrawer({
                 </Badge>
               )}
             </span>
+            {barcodeMatches && (
+              <span className="block text-xs text-ink-2">
+                {[
+                  warehouses?.find((warehouse) => warehouse.id === product.warehouseId)?.name ?? 'Склад',
+                  product.article,
+                  product.brand,
+                  product.internalBarcode,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </span>
+            )}
             {searching && product.category && (
               <span className="block truncate text-xs text-ink-3">{product.category}</span>
             )}
@@ -247,6 +269,7 @@ export default function ProductPickerDrawer({
       onClose={() =>
         editor.close(onClose, (product) => {
           restoredProductRef.current = product;
+          setBarcodeMatches(null);
           setSearch('');
           setActivePath(productFolderParts(product.category));
           if (product.warehouseId) onSelectWarehouse?.(product.warehouseId);
@@ -294,11 +317,56 @@ export default function ProductPickerDrawer({
           />
         )}
 
+        <BarcodeLookupButton
+          disabled={(!!purchaseOrder || priceKind === 'cost') && (isLoading || isError)}
+          warehouseId={
+            purchaseOrder || priceKind === 'cost'
+              ? (selectedWarehouseId ??
+                (products.length && products.every((product) => product.warehouseId === products[0].warehouseId)
+                  ? products[0].warehouseId || undefined
+                  : undefined))
+              : undefined
+          }
+          onResolved={(result) => {
+            const matches =
+              purchaseOrder || priceKind === 'cost'
+                ? result.matches.filter((product) => products.some((eligible) => eligible.id === product.id))
+                : result.matches;
+            setActivePath([]);
+            if (result.status === 'found' && matches.length === 1 && !purchaseOrder) handleSelect(matches[0]);
+            else {
+              setBarcodeLimit(MAX_VISIBLE_ROWS);
+              setBarcodeMatches(matches);
+            }
+          }}
+        />
+        {barcodeMatches && (
+          <p role="status" className="text-xs text-ink-2">
+            {barcodeMatches.length > 1
+              ? 'Этот штрихкод у нескольких товаров. Выберите нужный.'
+              : barcodeMatches.length
+                ? 'Выберите товар.'
+                : 'Для этого действия нет доступных товаров.'}
+            <button
+              type="button"
+              className="ml-2 underline"
+              onClick={() => {
+                setBarcodeMatches(null);
+                setSearch('');
+              }}
+            >
+              Весь каталог
+            </button>
+          </p>
+        )}
         <Input
           ref={searchRef}
           type="search"
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) => {
+            setBarcodeMatches(null);
+            setSearch(e.target.value);
+          }}
           placeholder={hasCells ? 'Название, категория или ячейка…' : 'Название или категория…'}
           aria-label="Поиск товара"
           leftIcon={Search}
@@ -344,7 +412,7 @@ export default function ProductPickerDrawer({
         )}
 
         {restoredProduct && <ul aria-label="Незавершённая позиция">{renderProduct(restoredProduct)}</ul>}
-        {isLoading ? (
+        {isLoading && !barcodeMatches ? (
           <ul className="space-y-1" aria-busy="true" aria-label="Загрузка товаров">
             {Array.from({ length: 8 }).map((_, i) => (
               <li key={i} className="flex items-center gap-3 px-2 py-2">
@@ -354,7 +422,7 @@ export default function ProductPickerDrawer({
               </li>
             ))}
           </ul>
-        ) : isError ? (
+        ) : isError && !barcodeMatches ? (
           <ErrorRow message="Не удалось загрузить товары" onRetry={onRetry} />
         ) : searching ? (
           searchResults.length === 0 ? (
@@ -366,8 +434,18 @@ export default function ProductPickerDrawer({
             />
           ) : (
             <ul className="-mx-2 divide-y divide-line">
-              {searchResults.slice(0, MAX_VISIBLE_ROWS).map(renderVisibleProduct)}
-              {overflowHint(searchResults.length)}
+              {searchResults.slice(0, barcodeMatches ? barcodeLimit : MAX_VISIBLE_ROWS).map(renderVisibleProduct)}
+              {barcodeMatches
+                ? barcodeMatches.length > barcodeLimit && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setBarcodeLimit((value) => value + MAX_VISIBLE_ROWS)}
+                    >
+                      Показать ещё совпадения
+                    </Button>
+                  )
+                : overflowHint(searchResults.length)}
             </ul>
           )
         ) : (

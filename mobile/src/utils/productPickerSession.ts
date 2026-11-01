@@ -37,7 +37,7 @@ export interface ProductPickerBridge {
   /** One catalog match (invoice review) closes the focused picker and all folder levels. */
   closeOnSelect?: boolean;
   /** Текущие строки товаров чека — источник qty-бейджей и нижнего бара. */
-  productLines: Pick<CheckProductLine, 'productId' | 'quantity' | 'sellPrice'>[];
+  productLines: Pick<CheckProductLine, 'productId' | 'quantity' | 'sellPrice' | 'kitSource'>[];
   /** Контекст закупки использует тот же пикер с закупочной ценой. */
   priceKind?: 'sell' | 'cost';
   /** Opt-in supplier-order editing; absent for cash and other picker clients. */

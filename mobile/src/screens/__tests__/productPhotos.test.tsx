@@ -13,6 +13,8 @@ const mockCameraPermission = jest.fn();
 const mockUpload = jest.fn();
 const mockUpdate = jest.fn();
 const mockCreate = jest.fn();
+const mockInternalBarcodes = jest.fn();
+let mockCatalog: unknown[] = [];
 const mockUsedIntake = jest.fn();
 const mockSettings = jest.fn();
 const mockSheet = jest.fn();
@@ -34,6 +36,8 @@ const mockNavigation = {
 const mockProduct = {
   id: 'product-A',
   name: 'Фильтр',
+  barcode: '4601234567893',
+  internalBarcode: null,
   photo: '/uploads/old.jpg',
   assemblyId: null,
   photos: ['/uploads/old.jpg'],
@@ -165,7 +169,12 @@ jest.mock('xlsx', () => ({}));
 jest.mock('../../api/services', () => ({
   warehouseCategoriesApi: { create: (...args: unknown[]) => mockCreateProductFolder(...args) },
   servicesApi: { folders: { create: (...args: unknown[]) => mockCreateServiceFolder(...args) } },
-  productsApi: { create: mockCreate, update: mockUpdate, usedIntake: mockUsedIntake },
+  productsApi: {
+    create: mockCreate,
+    update: mockUpdate,
+    usedIntake: mockUsedIntake,
+    internalBarcodes: mockInternalBarcodes,
+  },
   uploadsApi: { upload: mockUpload },
   warehousesApi: {},
   stockMovementsApi: {},
@@ -202,7 +211,7 @@ jest.mock('@tanstack/react-query', () => ({
               : kind === 'product'
                 ? mockRoute.params.product
                 : kind === 'products'
-                  ? { data: [], total: 0 }
+                  ? { data: mockCatalog, total: mockCatalog.length }
                   : kind === 'service-folders'
                     ? mockServiceFolders
                     : kind === 'service-visibility-config'
@@ -416,6 +425,10 @@ beforeEach(() => {
   jest.clearAllMocks();
   Platform.OS = 'ios';
   mockRoute = { params: {} };
+  mockCatalog = [];
+  mockInternalBarcodes.mockResolvedValue({
+    data: { products: [{ id: mockProduct.id, internalBarcode: 'AX00000001' }] },
+  });
   setDataSession({ tenantId: 'tenant', userId: 'admin', pointId: 'A' });
   mockGallery.mockResolvedValue(select());
   mockCamera.mockResolvedValue(select());
@@ -769,4 +782,47 @@ it('permission resolving after a form closes does not open camera or report deni
   await flush();
   expect(mockCamera).not.toHaveBeenCalled();
   expect(mockAlert).not.toHaveBeenCalled();
+});
+
+it('real native product detail opens labels and generates only the immutable internal code by server ID', async () => {
+  mockRoute.params.product = mockProduct;
+  let tree = render(ProductDetailScreen);
+  await press(nodes(tree).find((node) => node.type === 'TouchableOpacity' && words(node) === 'Этикетки'));
+  tree = render(ProductDetailScreen);
+  const dialog = nodes(tree).find(
+    (node) =>
+      node.props.visible === true &&
+      typeof node.props.onGenerateInternal === 'function' &&
+      Array.isArray(node.props.products),
+  )!;
+  expect(dialog).toBeDefined();
+  const result = await (dialog.props.onGenerateInternal as (ids: string[]) => Promise<unknown>)([mockProduct.id]);
+  expect(result).toEqual([{ id: mockProduct.id, internalBarcode: 'AX00000001' }]);
+  expect(mockInternalBarcodes).toHaveBeenCalledWith([mockProduct.id]);
+  expect(mockProduct.barcode).toBe('4601234567893');
+  expect(mockUpdate).not.toHaveBeenCalled();
+});
+it('real warehouse multi-select opens labels for selected products without a stock/product write', async () => {
+  const item = { ...mockProduct, category: '' };
+  mockCatalog = [item];
+  let tree = render(ProductsScreen);
+  const list = nodes(tree).find((node) => node.type === 'FlashList' && typeof node.props.renderItem === 'function')!;
+  expect(list).toBeDefined();
+  const row = (list.props.renderItem as (arg: { item: typeof item }) => Element)({ item });
+  (row.props.onLongPress as (product: typeof item) => void)(item);
+  tree = render(ProductsScreen);
+  await press(nodes(tree).find((node) => node.type === 'TouchableOpacity' && words(node) === 'Этикетки'));
+  await flush();
+  tree = render(ProductsScreen);
+  const dialog = nodes(tree).find(
+    (node) =>
+      node.props.visible === true &&
+      Array.isArray(node.props.products) &&
+      typeof node.props.onGenerateInternal === 'function',
+  )!;
+  expect(dialog).toBeDefined();
+  expect((dialog.props.products as (typeof item)[]).map((product) => product.id)).toEqual([item.id]);
+  expect(mockInternalBarcodes).not.toHaveBeenCalled();
+  expect(mockUpdate).not.toHaveBeenCalled();
+  expect(mockCreate).not.toHaveBeenCalled();
 });

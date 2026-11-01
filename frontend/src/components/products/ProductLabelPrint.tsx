@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { FileText, Printer, Barcode } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { Drawer } from '../../ui/Drawer';
@@ -34,8 +34,14 @@ export default function ProductLabelPrint({ open, onClose, products, onGenerateI
   const [showPrice, setShowPrice] = useState(false);
   const [previewId, setPreviewId] = useState('');
   const [busy, setBusy] = useState(false);
+  const wasOpen = useRef(false);
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      wasOpen.current = false;
+      return;
+    }
+    const preserveChoices = wasOpen.current;
+    wasOpen.current = true;
     setItems(
       products.map(({ id, name, sellPrice, barcode, internalBarcode }) => ({
         id,
@@ -45,8 +51,15 @@ export default function ProductLabelPrint({ open, onClose, products, onGenerateI
         internalBarcode,
       })),
     );
-    setChoices(
-      Object.fromEntries(products.map((product) => [product.id, { copies: 1, source: defaultLabelSource(product) }])),
+    setChoices((previous) =>
+      Object.fromEntries(
+        products.map((product) => [
+          product.id,
+          preserveChoices && previous[product.id]
+            ? previous[product.id]
+            : { copies: 1, source: defaultLabelSource(product) },
+        ]),
+      ),
     );
     setPreviewId(products[0]?.id ?? '');
   }, [open, products]);

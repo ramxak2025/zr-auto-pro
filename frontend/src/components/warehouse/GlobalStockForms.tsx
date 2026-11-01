@@ -21,7 +21,9 @@ import { countLabel, parseNumberInput } from './format';
 
 /** Поиск по названию и по коду ячейки: кладовщик идёт по стеллажу и вводит адрес. */
 const matchesProduct = (p: Product, q: string) =>
-  p.name.toLowerCase().includes(q) || (p.storageCellCode ?? '').toLowerCase().includes(q);
+  [p.name, p.article, p.brand, p.barcode, p.internalBarcode, p.storageCellCode].some((value) =>
+    (value ?? '').toLowerCase().includes(q),
+  );
 
 /** «… · A-01-03» после остатка; без ячейки не рисуется, строка выглядит как раньше. */
 function CellSuffix({ code }: { code?: string | null }) {

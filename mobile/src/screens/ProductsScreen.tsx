@@ -1,3 +1,6 @@
+import { loadProductBarcodeMatches } from '../../../shared/utils/productBarcodeLookup';
+import ProductLabelPrint from '../components/products/ProductLabelPrint';
+import { loadProductCatalog } from '../../../shared/api/productCatalog';
 import { formatKitUnitCost } from '../../../shared/utils/productKitDraft';
 import ProductPhotoGallery from '../components/ProductPhotoGallery';
 import { randomUUID } from 'expo-crypto';
@@ -542,6 +545,9 @@ function ProductsScreenContents() {
   // the camera; a decoded code is matched against the loaded list's `barcode`
   // field (PRODUCT_LIST_FIELDS includes it) and opens that product, or offers
   // to create one when nothing matches.
+  const [barcodeMatches, setBarcodeMatches] = useState<Product[] | null>(null);
+  const barcodeEpoch = useRef(0);
+  const [labelTargets, setLabelTargets] = useState<Product[] | null>(null);
   const [showScanner, setShowScanner] = useState(false);
 
   // Inventory modal state
@@ -734,17 +740,14 @@ function ProductsScreenContents() {
     // the new slot's fresh data arrives in the background.
     queryKey: ['products', { search, limit, warehouseId: activeWarehouseId ?? null }],
     queryFn: async () => {
-      const res = await productsApi.getAll({
-        search,
-        page: 1,
-        limit,
-        // Project to the columns the list actually renders. Cast because
-        // `fields` is a pass-through axios query param, not part of the
-        // shared PaginationParams contract (which we must not touch).
-        fields: PRODUCT_LIST_FIELDS,
-        ...(activeWarehouseId ? { warehouseId: activeWarehouseId } : {}),
-      } as Parameters<typeof productsApi.getAll>[0] & { fields: string });
-      return res.data;
+      const products = await loadProductCatalog(
+        (params) =>
+          productsApi.getAll({ ...params, fields: PRODUCT_LIST_FIELDS } as Parameters<typeof productsApi.getAll>[0] & {
+            fields: string;
+          }),
+        { search: search, ...(activeWarehouseId ? { warehouseId: activeWarehouseId } : {}) },
+      );
+      return { data: products, total: products.length, page: 1, limit: Math.max(products.length, 1) };
     },
     // Defence-in-depth: the global QueryClient already sets
     // placeholderData = prev=>prev, but writing it here too makes the
@@ -1165,7 +1168,7 @@ function ProductsScreenContents() {
       const filtered = smartSearch(
         allProducts,
         inventorySearch,
-        (p) => [p.name, p.article, p.barcode, p.category, p.storageCellCode],
+        (p) => [p.name, p.article, p.brand, p.barcode, p.internalBarcode, p.category, p.storageCellCode],
         { typos: true },
       );
       return { invSubfolders: new Map<string, { count: number }>(), invCurrentProducts: filtered };
@@ -1597,43 +1600,77 @@ function ProductsScreenContents() {
     [navigation],
   );
 
-  // Barcode scan → find the matching product (by `barcode`) in the loaded list
-  // and open it; offer to create one when nothing matches. We match against
-  // the already-loaded warehouse list (no barcode lookup endpoint exists), so
-  // a code from a product on ANOTHER warehouse won't resolve here.
+  // Exact lookup distinguishes an authoritative miss from duplicates and network failure.
+  // Warehouse operations retain the currently selected warehouse context.
+  const openSelectedLabels = async () => {
+    if (selectedProductIds.size > 200) {
+      Alert.alert('Этикетки', 'Выберите не больше 200 товаров.');
+      return;
+    }
+    const lease = captureDataSession();
+    try {
+      const targets = await Promise.all(
+        [...selectedProductIds].map(
+          async (id) => allProducts.find((product) => product.id === id) ?? (await productsApi.getById(id)).data,
+        ),
+      );
+      if (lease.isCurrent()) setLabelTargets(targets);
+    } catch {
+      if (lease.isCurrent()) Alert.alert('Этикетки', 'Не удалось загрузить выбранные товары. Повторите по сети.');
+    }
+  };
+  const barcodeWarehouseRef = useRef(activeWarehouseId);
+  barcodeWarehouseRef.current = activeWarehouseId;
   const handleBarcodeScanned = useCallback(
-    (code: string) => {
+    async (code: string) => {
       setShowScanner(false);
       const needle = code.trim();
-      const match = allProducts.find((p) => String(p.barcode || '').trim() === needle);
-      if (match) {
-        haptic('success');
-        navigation.navigate('ProductDetail', { product: match });
-        return;
-      }
-      haptic('warning');
-      Alert.alert('Товар не найден', `Штрих-код ${needle} не привязан ни к одному товару этого склада.`, [
-        { text: 'Отмена', style: 'cancel' },
-        ...(canManageWarehouse && activeWarehouse?.kind === 'main'
-          ? [
-              {
-                text: 'Создать товар',
-                // Round 12 #6б: отсканированный код предзаполняет поле
-                // «Штрихкод» новой карточки — setFormBarcode ставится ПОСЛЕ
-                // openCreate (тот сбрасывает форму, включая barcode).
-                onPress: () => {
-                  openCreate();
-                  setFormBarcode(needle);
+      if (!needle) return;
+      const request = ++barcodeEpoch.current;
+      const lease = captureDataSession();
+      try {
+        const result = await loadProductBarcodeMatches(productsApi.lookupBarcode, {
+          barcode: needle,
+          ...(activeWarehouseId ? { warehouseId: activeWarehouseId } : {}),
+        });
+        if (
+          !lease.isCurrent() ||
+          request !== barcodeEpoch.current ||
+          barcodeWarehouseRef.current !== activeWarehouseId ||
+          navigation.isFocused?.() === false
+        )
+          return;
+        if (result.status === 'found') {
+          haptic('success');
+          navigation.navigate('ProductDetail', { product: result.matches[0] });
+          return;
+        }
+        if (result.status === 'ambiguous') {
+          setBarcodeMatches(result.matches);
+          return;
+        }
+        haptic('warning');
+        Alert.alert('Товар не найден', `Штрих-код ${needle} не привязан к товару этого склада.`, [
+          { text: 'Отмена', style: 'cancel' },
+          ...(canManageWarehouse && activeWarehouse?.kind === 'main'
+            ? [
+                {
+                  text: 'Создать товар',
+                  onPress: () => {
+                    if (!lease.isCurrent() || barcodeWarehouseRef.current !== activeWarehouseId) return;
+                    openCreate();
+                    setFormBarcode(needle);
+                  },
                 },
-              },
-            ]
-          : []),
-      ]);
+              ]
+            : []),
+        ]);
+      } catch {
+        if (lease.isCurrent() && request === barcodeEpoch.current)
+          Alert.alert('Штрихкод не проверен', 'Подключитесь к сети и повторите. Товар не добавлен.');
+      }
     },
-    // `openCreate` is a stable screen-scope function; allProducts/activeWarehouse
-    // change with data — intentionally included so the latest list is matched.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [allProducts, navigation, activeWarehouse, hasPermission],
+    [activeWarehouseId, activeWarehouse, canManageWarehouse, navigation],
   );
 
   // ProductDetailScreen's «Изменить» reuses THIS screen's edit modal: it sets
@@ -3229,8 +3266,43 @@ function ProductsScreenContents() {
         <TrashScreen onClose={() => setShowTrashModal(false)} />
       </RNModal>
 
+      {labelTargets && (
+        <ProductLabelPrint
+          visible
+          onClose={() => setLabelTargets(null)}
+          products={labelTargets}
+          onGenerateInternal={
+            canManageWarehouse
+              ? async (ids) => {
+                  const { data } = await productsApi.internalBarcodes(ids);
+                  queryClient.invalidateQueries({ queryKey: ['products'] });
+                  queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
+                  return data.products;
+                }
+              : undefined
+          }
+        />
+      )}
+      <ProductPickerModal
+        visible={!!barcodeMatches}
+        onClose={() => setBarcodeMatches(null)}
+        exactMatches={barcodeMatches ?? undefined}
+        notice="Этот штрихкод у нескольких товаров. Выберите нужный."
+        title="Совпадения штрихкода"
+        onSelectProduct={(product) => {
+          setBarcodeMatches(null);
+          navigation.navigate('ProductDetail', { product });
+        }}
+      />
       {/* Barcode scanner — header «Сканировать» → найти товар по штрих-коду. */}
-      <BarcodeScanner visible={showScanner} onClose={() => setShowScanner(false)} onScanned={handleBarcodeScanned} />
+      <BarcodeScanner
+        visible={showScanner}
+        onClose={() => {
+          barcodeEpoch.current++;
+          setShowScanner(false);
+        }}
+        onScanned={handleBarcodeScanned}
+      />
 
       {/* Inventory modal — pageSheet on iOS so the sheet drops in from
           the top of the screen leaving the previous content visible
@@ -3551,6 +3623,8 @@ function ProductsScreenContents() {
       {/* Inventory Product Picker */}
       <ProductPickerModal
         visible={showInventoryPicker}
+        warehouseId={activeWarehouseId}
+        lookupWarehouseId={activeWarehouseId || undefined}
         onClose={handleInventoryPickerClose}
         onSelectProduct={addInventoryProduct}
         title="Добавить товар в инвентаризацию"
@@ -3561,6 +3635,8 @@ function ProductsScreenContents() {
       {/* Writeoff Product Picker */}
       <ProductPickerModal
         visible={showWriteoffPicker}
+        warehouseId={activeWarehouseId}
+        lookupWarehouseId={activeWarehouseId || undefined}
         onClose={() => setShowWriteoffPicker(false)}
         onSelectProduct={selectWriteoffProduct}
         title="Выберите товар для списания"
@@ -3724,6 +3800,8 @@ function ProductsScreenContents() {
       {/* Correction Product Picker */}
       <ProductPickerModal
         visible={showCorrectionPicker}
+        warehouseId={activeWarehouseId}
+        lookupWarehouseId={activeWarehouseId || undefined}
         onClose={() => setShowCorrectionPicker(false)}
         onSelectProduct={selectCorrectionProduct}
         title="Выберите товар для корректировки"
@@ -4454,6 +4532,16 @@ function ProductsScreenContents() {
           ]}
         >
           <View style={styles.bulkBarRow}>
+            {selectedProductIds.size > 0 && selectedFolderNames.size === 0 && (
+              <TouchableOpacity
+                accessibilityRole="button"
+                style={[styles.bulkMoveBtn, { backgroundColor: palette.accent.primary }]}
+                onPress={() => void openSelectedLabels()}
+              >
+                <Ionicons name="print-outline" size={18} color={colors.white} />
+                <Text style={styles.bulkDeleteBtnText}>Этикетки</Text>
+              </TouchableOpacity>
+            )}
             {canManageWarehouse && (
               <TouchableOpacity
                 style={[styles.bulkMoveBtn, !bulkMoveEligible && styles.bulkDeleteBtnDisabled]}
