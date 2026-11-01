@@ -160,8 +160,15 @@ jobs:
           cache: npm
           cache-dependency-path: mobile/package-lock.json
       - run: npm ci --legacy-peer-deps
-      - name: Internal owner-home build isolation
-        run: node --test tests/owner-home-internal-config.test.cjs
+      - name: Internal build and native module isolation
+        run: >-
+          node --test
+          tests/owner-home-internal-config.test.cjs
+          tests/inventory-internal-config.test.cjs
+          tests/inventory-native-isolation.test.cjs
+          tests/inventory-push-isolation.test.cjs
+          tests/notifications-module-boundary.test.cjs
+          tests/product-label-native-loader.test.cjs
       - run: npm run typecheck
       - run: npm run lint
       - name: Tests

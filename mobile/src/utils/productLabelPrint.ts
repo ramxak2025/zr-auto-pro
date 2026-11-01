@@ -1,4 +1,5 @@
 import JsBarcode from 'jsbarcode';
+import { Platform } from 'react-native';
 import { labelPagePoints, type PreparedProductLabels } from '../../../shared/utils/productLabels';
 
 /** Plain-object mode uses no DOM, canvas, SVG native module or printer SDK. */
@@ -30,12 +31,10 @@ interface LabelPrintDependencies {
   sharing: Pick<typeof import('expo-sharing'), 'isAvailableAsync' | 'shareAsync'>;
 }
 async function dependencies(): Promise<LabelPrintDependencies> {
-  const [print, sharing, native] = await Promise.all([
-    import('expo-print'),
-    import('expo-sharing'),
-    import('react-native'),
-  ]);
-  return { print, sharing, platform: native.Platform.OS };
+  // Metro's namespace import eagerly reads every React Native export, including
+  // deprecated native modules that are absent in this binary. Read Platform only.
+  const [print, sharing] = await Promise.all([import('expo-print'), import('expo-sharing')]);
+  return { print, sharing, platform: Platform.OS };
 }
 
 export async function exportProductLabelsPdf(labels: PreparedProductLabels, deps?: LabelPrintDependencies) {

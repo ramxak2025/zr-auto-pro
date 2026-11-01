@@ -1,3 +1,5 @@
+jest.mock('react-native', () => ({ Platform: { OS: 'ios' } }));
+
 import {
   encodeProductLabelCode,
   exportProductLabelsPdf,
