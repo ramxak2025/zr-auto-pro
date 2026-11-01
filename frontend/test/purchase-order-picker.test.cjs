@@ -237,6 +237,36 @@ function selectProduct(tree) {
   );
 }
 
+test('web catalog search combines fields and recovers keyboard/typo only on zero matches without selecting', () => {
+  const target = { ...product, name: 'Шланг топливный', category: 'Магистраль', article: 'AB-123' };
+  const other = { ...product, id: 'other', name: 'Насос', category: 'Двигатель' };
+  let selected = 0;
+  let tree;
+  Renderer.act(() => {
+    tree = Renderer.create(
+      React.createElement(Drawer, {
+        open: true,
+        products: [target, other],
+        onClose() {},
+        onSelectProduct() {
+          selected++;
+        },
+      }),
+    );
+  });
+  try {
+    for (const query of ['магистраль шланг', 'AB123', 'ikfyu', 'шлнаг']) {
+      const search = tree.root.findAllByType('input').find((node) => node.props['aria-label'] === 'Поиск товара');
+      Renderer.act(() => setInput(search, query));
+      assert.match(text(tree.root), /Шланг топливный/);
+      assert.doesNotMatch(text(tree.root), /Насос/);
+    }
+    assert.equal(selected, 0);
+  } finally {
+    Renderer.act(() => tree.unmount());
+  }
+});
+
 test('supplier picker confirms current keyboard quantity/price, reopens snapshots, supports comma/zero and preserves draft on save error', async () => {
   const tree = createPage();
   try {

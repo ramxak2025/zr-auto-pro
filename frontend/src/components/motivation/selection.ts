@@ -1,5 +1,6 @@
 import type { MotivationTarget, Product } from '../../../../shared/types';
 import { productFolderParts, productFolderPath } from '../../../../shared/utils/productFolders';
+import { smartSearch } from '../../../../shared/utils/smartSearch';
 
 export interface MotivationChoice {
   target: MotivationTarget;
@@ -83,10 +84,7 @@ export function buildMotivationChoices(
 }
 
 export function filterMotivationChoices(choices: MotivationChoice[], search: string): MotivationChoice[] {
-  const terms = search.toLocaleLowerCase('ru').trim().split(/\s+/).filter(Boolean);
-  return choices.filter((choice) =>
-    terms.every((term) => `${choice.title} ${choice.detail}`.toLocaleLowerCase('ru').includes(term)),
-  );
+  return smartSearch(choices, search, (choice) => [choice.title, choice.detail], { typos: true });
 }
 
 export function parseMotivationPercent(value: string): number | null {

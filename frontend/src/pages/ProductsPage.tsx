@@ -1,4 +1,5 @@
 import LowStockView from './LowStockPage';
+import { smartSearch } from '../../../shared/utils/smartSearch';
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -516,10 +517,11 @@ function ProductsPageContents() {
   // Плоский список без папок: результаты поиска и/или товары одной ячейки. Поиск идёт и по коду ячейки.
   const flatResults = useMemo(() => {
     if (!searchText && !showingCellFilter) return [];
-    const q = searchText.toLowerCase();
-    return allProducts.filter((p) => {
-      if (showingCellFilter && (cellParam === 'none' ? !!p.storageCellId : p.storageCellId !== cellParam)) return false;
-      return !q || p.name.toLowerCase().includes(q) || (p.storageCellCode ?? '').toLowerCase().includes(q);
+    const candidates = showingCellFilter
+      ? allProducts.filter((p) => (cellParam === 'none' ? !p.storageCellId : p.storageCellId === cellParam))
+      : allProducts;
+    return smartSearch(candidates, searchText, (p) => [p.name, p.article, p.barcode, p.category, p.storageCellCode], {
+      typos: true,
     });
   }, [searchText, showingCellFilter, cellParam, allProducts]);
 

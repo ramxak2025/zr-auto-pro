@@ -1,4 +1,5 @@
 import { productFolderParts, productFolderPath } from '../../../shared/utils/productFolders';
+import { smartSearch } from '../../../shared/utils/smartSearch';
 import { loadProductCatalog } from '../../../shared/api/productCatalog';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -429,14 +430,9 @@ export default function ProductPickerModal({
       });
     }
     if (productSearch) {
-      const q = productSearch.toLowerCase();
-      list = list.filter(
-        (p) =>
-          p.name.toLowerCase().includes(q) ||
-          (p.category && p.category.toLowerCase().includes(q)) ||
-          // Round 12 #6в: скан-промах кладёт код в поиск — матчим и barcode.
-          (p.barcode && String(p.barcode).toLowerCase().includes(q)),
-      );
+      list = smartSearch(list, productSearch, (p) => [p.name, p.article, p.barcode, p.category, p.storageCellCode], {
+        typos: true,
+      });
     }
     return list;
   }, [allProducts, activeCategory, productSearch]);

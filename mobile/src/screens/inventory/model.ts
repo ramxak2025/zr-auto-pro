@@ -1,6 +1,6 @@
 import type { Product } from '../../../../shared/types';
 import { buildProductFolderLevel } from '../../../../shared/utils/productFolders';
-import { cellCodeMatchesQuery } from '../../utils/storageCellsUi';
+import { smartSearch } from '../../../../shared/utils/smartSearch';
 
 /** Inventory is an absolute count. Keep the original text, never round or strip it. */
 export function parseInventoryQuantity(raw: string): number | null {
@@ -39,16 +39,9 @@ export function inventoryRows(
 ): InventoryRow[] {
   const query = search.trim().toLowerCase();
   if (query) {
-    return products
-      .filter(
-        (p) =>
-          p.name.toLowerCase().includes(query) ||
-          String(p.barcode ?? '')
-            .toLowerCase()
-            .includes(query) ||
-          cellCodeMatchesQuery(p.storageCellCode, query),
-      )
-      .map((product) => ({ type: 'product', key: product.id, product }));
+    return smartSearch(products, query, (p) => [p.name, p.article, p.barcode, p.category, p.storageCellCode], {
+      typos: true,
+    }).map((product) => ({ type: 'product', key: product.id, product }));
   }
   const level = buildProductFolderLevel(products, path, folders);
   return [

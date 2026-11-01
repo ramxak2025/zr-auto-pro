@@ -22,6 +22,7 @@ import { focusRing } from '../../ui/tokens';
 import { ErrorRow } from '../dashboard/shared';
 import { formatQtyUnit } from '../../utils/units';
 import { productFolderParts, buildProductFolderLevel } from '../../../../shared/utils/productFolders';
+import { smartSearch } from '../../../../shared/utils/smartSearch';
 
 export interface ProductPickerDrawerProps {
   open: boolean;
@@ -115,13 +116,9 @@ export default function ProductPickerDrawer({
   const searchResults = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return [];
-    return products.filter(
-      (p) =>
-        p.name.toLowerCase().includes(q) ||
-        (p.barcode && p.barcode.toLowerCase().includes(q)) ||
-        (p.category && p.category.toLowerCase().includes(q)) ||
-        (p.storageCellCode && p.storageCellCode.toLowerCase().includes(q)),
-    );
+    return smartSearch(products, q, (p) => [p.name, p.article, p.barcode, p.category, p.storageCellCode], {
+      typos: true,
+    });
   }, [products, search]);
 
   const handleSelect = (product: Product) => {

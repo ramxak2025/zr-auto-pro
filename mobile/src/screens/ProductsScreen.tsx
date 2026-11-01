@@ -1,4 +1,5 @@
 import type { ProductsStackParamList } from '../navigation/AppNavigator';
+import { smartSearch } from '../../../shared/utils/smartSearch';
 import LowStockView from './dashboard/LowStockView';
 import { captureDataSession } from '../contexts/dataSession';
 import React, { useCallback, useMemo, useRef, useState } from 'react';
@@ -1132,7 +1133,12 @@ function ProductsScreenContents() {
   // Inventory folder structure (separate from main warehouse)
   const { invSubfolders, invCurrentProducts } = useMemo(() => {
     if (inventorySearch) {
-      const filtered = allProducts.filter((p) => p.name.toLowerCase().includes(inventorySearch.toLowerCase()));
+      const filtered = smartSearch(
+        allProducts,
+        inventorySearch,
+        (p) => [p.name, p.article, p.barcode, p.category, p.storageCellCode],
+        { typos: true },
+      );
       return { invSubfolders: new Map<string, { count: number }>(), invCurrentProducts: filtered };
     }
 
@@ -1830,7 +1836,7 @@ function ProductsScreenContents() {
   };
 
   const filteredInventoryItems = inventorySearch
-    ? inventoryItems.filter((item) => item.name.toLowerCase().includes(inventorySearch.toLowerCase()))
+    ? smartSearch(inventoryItems, inventorySearch, (item) => [item.name], { typos: true })
     : inventoryItems;
 
   // --- Writeoff handlers ---

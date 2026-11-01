@@ -207,6 +207,9 @@ it('drills through normalized nested and empty API folders; search spans the who
   expect(inventoryRows(products, ['Масла', 'Моторные', '5W30'], '', folders).map((r) => r.key)).toEqual(['nested']);
   expect(inventoryRows(products, ['Масла'], 'barcode-other', folders).map((r) => r.key)).toEqual(['other']);
   expect(inventoryRows(products, ['Масла'], ' a-01 ', folders).length).toBe(3);
+  expect(inventoryRows(products, [], '5w30 товар', folders).map((r) => r.key)).toEqual(['nested']);
+  expect(inventoryRows(products, [], 'barcodeother', folders).map((r) => r.key)).toEqual(['other']);
+  expect(inventoryRows(products, [], 'другое barcodeother', folders).map((r) => r.key)).toEqual(['other']);
 });
 it('warehouse drafts stay isolated and survive switching and filtering', () => {
   const h = harness();

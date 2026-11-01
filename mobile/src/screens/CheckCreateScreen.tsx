@@ -1,3 +1,4 @@
+import { matchSearch, smartSearch } from '../../../shared/utils/smartSearch';
 import { checkProductPayload, savedProductLineIds } from './checkCreate/productPayload';
 import { defaultConfirmedPerformers, explicitlyAssignedPerformers, performerPayload } from './checkCreate/performers';
 import { checkDateParts, selectedCheckDate } from '../../../shared/utils/checkDateTime';
@@ -1072,7 +1073,7 @@ export default function CheckCreateScreen() {
       for (const car of client.cars) {
         const carPlateNorm = normalizePlateForSearch(car.plateNumber || '', plateMode);
         const matchesPlate = sn && carPlateNorm.includes(sn);
-        const matchesName = fnQuery.length >= 2 && client.fullName?.toLowerCase().includes(fnQuery);
+        const matchesName = fnQuery.length >= 2 && matchSearch(fnQuery, [client.fullName]);
         if (!sn || matchesPlate || matchesName) {
           results.push({ client, car });
         }
@@ -1131,8 +1132,7 @@ export default function CheckCreateScreen() {
   const filteredServices = useMemo(() => {
     const services = selectableServices;
     if (!serviceSearch) return services;
-    const q = serviceSearch.toLowerCase();
-    return services.filter((s) => s.name.toLowerCase().includes(q));
+    return smartSearch(services, serviceSearch, (s) => [s.name, s.category], { typos: true });
   }, [selectableServices, serviceSearch]);
 
   // ── Check Templates ────────────────────────────────────────────────────────

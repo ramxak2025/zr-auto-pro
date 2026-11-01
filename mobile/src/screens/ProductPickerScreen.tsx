@@ -67,7 +67,7 @@ import {
   subscribeProductPickerSession,
 } from '../utils/productPickerSession';
 import { formatQty, unitLabel } from '../utils/units';
-import { cellCodeMatchesQuery } from '../utils/storageCellsUi';
+import { smartSearch } from '../../../shared/utils/smartSearch';
 import type { Product } from '../../../shared/types';
 import { TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
@@ -412,22 +412,9 @@ export default function ProductPickerScreen() {
     const products = Array.isArray(allProducts) ? allProducts : [];
     const q = debouncedSearch.trim().toLowerCase();
     if (q) {
-      const rows: PickerListRow[] = [];
-      for (const p of products) {
-        if (
-          p.name.toLowerCase().includes(q) ||
-          (p.category && p.category.toLowerCase().includes(q)) ||
-          // Round 12 #6в: скан-промах кладёт код в поиск — матчим и barcode,
-          // чтобы частичный/чужой код всё же находил кандидатов.
-          (p.barcode && String(p.barcode).toLowerCase().includes(q)) ||
-          // Ячейка хранения (2026-09-30): код адреса тоже ищется — «A-1-2» находит товар
-          // на полке (регистр и лишние пробелы не важны, как на сервере).
-          (p.storageCellCode ? cellCodeMatchesQuery(p.storageCellCode, q) : false)
-        ) {
-          rows.push({ type: 'product', key: p.id, product: p });
-        }
-      }
-      return rows;
+      return smartSearch(products, q, (p) => [p.name, p.article, p.barcode, p.category, p.storageCellCode], {
+        typos: true,
+      }).map((product) => ({ type: 'product' as const, key: product.id, product }));
     }
 
     const { subfolders: folders, currentProducts: prods } = buildProductFolderLevel(

@@ -390,6 +390,32 @@ test('cash opt-out still adds immediately, quick plus/minus remain direct, stale
   releaseProductPickerSession(cash);
 });
 
+test('native catalog search finds all words across fields, compact article and keyboard/typo fallback without selecting', () => {
+  jest.useFakeTimers();
+  const original = { ...mockProduct };
+  try {
+    mockProduct.category = 'Расходники';
+    mockProduct.article = 'AB-123';
+    openPicker();
+    for (const query of ['расходники шланг', 'AB123', 'ikfyu', 'шлнаг']) {
+      const search = nodes(render('picker')).find(
+        (node) => node.type === 'TextInput' && node.props.returnKeyType === 'search',
+      )!;
+      (search.props.onChangeText as (value: string) => void)(query);
+      jest.advanceTimersByTime(250);
+      const list = nodes(render('picker')).find((node) => node.type === 'FlashList')!;
+      expect(list.props.data).toEqual([{ type: 'product', key: 'product', product: mockProduct }]);
+    }
+    expect(getProductPickerSession()!.productLines).toHaveLength(0);
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(mockExecute).not.toHaveBeenCalled();
+  } finally {
+    Object.assign(mockProduct, original);
+    delete mockProduct.article;
+    jest.useRealTimers();
+  }
+});
+
 test('direct receipt uses durable supplier target, exact latest fields/zero/retail omission and per-line cents', async () => {
   let tree = render('direct');
   expect(mockRecoveryFilter).toEqual({ operation: 'delivery-create', sourceId: 'supplier', contextId: 'supplier' });

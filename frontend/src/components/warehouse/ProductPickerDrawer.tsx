@@ -13,6 +13,7 @@ import SearchInput from '../SearchInput';
 import QueryState from '../QueryState';
 import { formatQty, unitLabel } from '../../utils/units';
 import { countLabel } from './format';
+import { smartSearch } from '../../../../shared/utils/smartSearch';
 
 export interface ProductPickerDrawerProps {
   open: boolean;
@@ -126,12 +127,9 @@ function PickerBody({
 
   const results = useMemo(() => {
     if (!q) return null;
-    return products.filter(
-      (p) =>
-        p.name.toLowerCase().includes(q) ||
-        (p.category ?? '').toLowerCase().includes(q) ||
-        (p.storageCellCode ?? '').toLowerCase().includes(q),
-    );
+    return smartSearch(products, q, (p) => [p.name, p.article, p.barcode, p.category, p.storageCellCode], {
+      typos: true,
+    });
   }, [products, q]);
 
   const pick = (p: Product) => {
