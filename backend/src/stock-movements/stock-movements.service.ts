@@ -1,3 +1,4 @@
+import { kitConflict } from '../product-kits/kit-stock';
 import { loadStockHistory, StockHistoryQuery } from './stock-history';
 import {
   Injectable,
@@ -85,7 +86,7 @@ export class StockMovementsService {
     // 169 — товар обязан лежать на складе ФИЛИАЛА сессии: движение по чужому
     // товару = «не найден» (существование чужой строки не подтверждаем).
     const { rows } = await client.query(
-      `SELECT p.id, p.tenant_id, p.warehouse_id, p.cost_price FROM products p WHERE p.id=$1 AND p.tenant_id=$2
+      `SELECT p.id, p.tenant_id, p.warehouse_id, p.cost_price, p.assembly_id FROM products p WHERE p.id=$1 AND p.tenant_id=$2
          AND ($3::uuid IS NULL OR EXISTS (SELECT 1 FROM warehouses wpt
                 WHERE wpt.id = p.warehouse_id AND wpt.point_id = $3::uuid))
        LIMIT 1`,
@@ -94,6 +95,7 @@ export class StockMovementsService {
     if (rows.length === 0) {
       throw new BadRequestException({ message: 'Товар не найден' });
     }
+    if (rows[0].assembly_id) throw kitConflict();
     return rows[0];
   }
 

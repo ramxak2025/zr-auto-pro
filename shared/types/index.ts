@@ -1906,6 +1906,9 @@ export interface Product {
   stock: number;
   minStock: number;
   unit?: string;
+  /** Non-null only for physical, snapshotted assemblies; legacy isBundle remains metadata. */
+  assemblyId?: string | null;
+  assemblyRevision?: number;
   isBundle?: boolean;
   bundleItems?: BundleItem[];
   supplierId?: string;
@@ -3513,7 +3516,9 @@ export type StockMovementType =
   | 'sale_correction'
   | 'sale_annulment'
   | 'sale_restore'
-  | 'legacy_baseline';
+  | 'legacy_baseline'
+  | 'kit_assembly'
+  | 'kit_disassembly';
 
 export interface StockMovement {
   id: string;

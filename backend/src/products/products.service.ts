@@ -1,3 +1,4 @@
+import { kitConflict } from '../product-kits/kit-stock';
 import { productPhotos, validateProductPhotos } from './product-photos';
 import { lockMotivation } from '../motivation/motivation-rules';
 import {
@@ -101,6 +102,8 @@ export class ProductsService {
       minStock: parseFloat(row.min_stock) || 0,
       unit: row.unit || 'шт',
       isBundle: row.is_bundle || false,
+      assemblyId: row.assembly_id ?? null,
+      assemblyRevision: row.assembly_revision ?? 0,
       bundleItems: row.bundle_items || [],
       supplierId: row.supplier_id,
       warehouseId: row.warehouse_id ?? null,
@@ -515,9 +518,18 @@ export class ProductsService {
 
     // Get current prices (и остаток, склад) before update for price history
     const { rows: current } = await db.query(
-      'SELECT cost_price, sell_price, stock, warehouse_id FROM products WHERE id=$1 AND tenant_id=$2',
+      'SELECT cost_price, sell_price, stock, warehouse_id, assembly_id, bundle_items FROM products WHERE id=$1 AND tenant_id=$2',
       [id, tenantID],
     );
+
+    if (
+      current[0]?.assembly_id &&
+      ((dto.costPrice !== undefined && Number(dto.costPrice) !== Number(current[0].cost_price)) ||
+        (dto.stock !== undefined && Number(dto.stock) !== Number(current[0].stock)) ||
+        (dto.isBundle !== undefined && dto.isBundle !== true) ||
+        (dto.bundleItems !== undefined && JSON.stringify(dto.bundleItems) !== JSON.stringify(current[0].bundle_items)))
+    )
+      throw kitConflict();
 
     // NEW-3: валидируем значение остатка ДО любой записи (то же правило, что в
     // applyStockPatch), чтобы невалидный минус отклонял ВЕСЬ запрос до того, как
@@ -1518,11 +1530,12 @@ export class ProductsService {
       // половины товара на складе нет.
       const names = normalized.map((r) => r.name);
       const { rows: existingRows } = await this.pool.query(
-        `SELECT id, name FROM products
+        `SELECT id, name, assembly_id FROM products
           WHERE tenant_id = $1 AND name = ANY($2::text[]) AND deleted_at IS NULL
             AND warehouse_id IS NOT DISTINCT FROM $3::uuid`,
         [tenantID, names, importWarehouseId],
       );
+      if (existingRows.some((row) => row.assembly_id)) throw kitConflict();
       const existingMap = new Map<string, string>();
       for (const row of existingRows) existingMap.set(row.name, row.id);
 
@@ -1741,7 +1754,7 @@ export class ProductsService {
 
       // 169 — товар обязан лежать на складе филиала сессии (чужой — «не найден»).
       const { rows } = await client.query(
-        `SELECT stock, warehouse_id, cost_price, cost_price_is_placeholder, deleted_at FROM products WHERE id=$1 AND tenant_id=$2
+        `SELECT stock, warehouse_id, cost_price, cost_price_is_placeholder, deleted_at, assembly_id FROM products WHERE id=$1 AND tenant_id=$2
            AND ($3::uuid IS NULL OR EXISTS (SELECT 1 FROM warehouses wpt
                   WHERE wpt.id = products.warehouse_id AND wpt.point_id = $3::uuid))
          FOR UPDATE`,
@@ -1771,6 +1784,7 @@ export class ProductsService {
         }
       }
 
+      if (rows[0].assembly_id) throw kitConflict();
       const stockBefore = parseFloat(rows[0].stock) || 0;
       const productWarehouseId = (rows[0].warehouse_id as string | null) ?? null;
       if (

@@ -1,3 +1,4 @@
+import { checkKitWrite } from '../product-kits/kit-stock';
 import { PoolClient } from 'pg';
 import { inventoryFeatureEnabled } from '../common/inventory-features';
 
@@ -137,6 +138,7 @@ export async function captureCheckProductHistory(
   if (!rows.length) return null;
   const check = rows[0] as CheckFact;
   if (!check.product_history_version && !inventoryFeatureEnabled(tenantId)) return null;
+  await checkKitWrite(client);
   const facts = await lineFacts(client, checkId);
   const ids = [...new Set([...facts.keys(), ...newProductIds])].sort();
   const products = ids.length

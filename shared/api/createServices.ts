@@ -1,3 +1,4 @@
+import type { AssembleKitRequest, KitOperationResult, PhysicalProductKit, KitRecipe } from './productKits';
 import type { SupplierInvoiceDocument, ConfirmSupplierInvoice } from './supplierInvoices';
 import type { TodayEarnings, DashboardAttention } from '../types';
 import type {
@@ -3216,5 +3217,18 @@ export function createSupplierInvoicesApi(api: HttpClient) {
     setOrder: (id: string, expectedVersion: number, orderId: string|null) =>
       api.patch<SupplierInvoiceDocument>(`/supplier-invoices/${id}/context`, {expectedVersion,orderId}),
     confirm: (id: string, data: ConfirmSupplierInvoice) => api.post<{id:string}>(`/supplier-invoices/${id}/confirm`, data),
+  };
+}
+
+export function createProductKitsApi(api: HttpClient) {
+  return {
+    get: (productId:string) => api.get<PhysicalProductKit>(`/product-kits/${productId}`),
+    recipes: () => api.get<KitRecipe[]>('/product-kits/recipes'),
+    createRecipe: (data:Pick<KitRecipe,'name'|'components'>) => api.post<KitRecipe>('/product-kits/recipes',data),
+    updateRecipe: (id:string,data:Pick<KitRecipe,'name'|'components'> & {expectedVersion:number}) => api.patch<KitRecipe>(`/product-kits/recipes/${id}`,data),
+    assemble: (data:AssembleKitRequest) => api.post<KitOperationResult>('/product-kits/assemble',data),
+    disassemble: (productId:string,data:{requestId:string;expectedRevision:number;quantity:number}) =>
+      api.post<{assemblyId:string;revision:number;operationId:string;sources:Array<{sourceProductId:string;productId:string;quantity:number;costPrice:number}>}>(`/product-kits/${productId}/disassemble`,data),
+    recompose: (productId:string,data:AssembleKitRequest & {expectedRevision:number}) => api.post<KitOperationResult & {previousAssemblyId:string;previousRevision:number}>(`/product-kits/${productId}/recompose`,data),
   };
 }

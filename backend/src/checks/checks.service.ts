@@ -1,3 +1,4 @@
+import { decrementKitAwareCheckStock } from '../product-kits/kit-stock';
 import { captureCheckProductHistory, finishCheckProductHistory } from './check-product-events';
 import { checkMotivationAmounts } from './check-display-profit';
 import { validateJournalFilters } from './journal-filters';
@@ -534,7 +535,12 @@ export class ChecksService {
     for (const r of prodRows) {
       const qty = parseFloat(r.qty) || 0;
       if (qty <= 0) continue;
-      await client.query(STOCK_DECREMENT_IN_CHECK_POINT_SQL, [qty, r.product_id, tenantID, checkId]);
+      await decrementKitAwareCheckStock(client, STOCK_DECREMENT_IN_CHECK_POINT_SQL, [
+        qty,
+        r.product_id,
+        tenantID,
+        checkId,
+      ]);
     }
 
     await finishCheckProductHistory(client, productHistory);
@@ -3463,7 +3469,7 @@ export class ChecksService {
         // требованию владельца): оверселл записывает дефицит, а не блокирует
         // продажу. Симметрично восстановлению стока при возврате/удалении чека.
         if (prod.productId && !effectiveIsDeferred) {
-          await client.query(STOCK_DECREMENT_IN_CHECK_POINT_SQL, [
+          await decrementKitAwareCheckStock(client, STOCK_DECREMENT_IN_CHECK_POINT_SQL, [
             prod.quantity || 1,
             prod.productId,
             tenantID,
@@ -5935,7 +5941,7 @@ export class ChecksService {
       }
       for (const [productId, qty] of Object.entries(newAgg)) {
         if (qty <= 0) continue;
-        await client.query(STOCK_DECREMENT_IN_CHECK_POINT_SQL, [qty, productId, tenantID, id]);
+        await decrementKitAwareCheckStock(client, STOCK_DECREMENT_IN_CHECK_POINT_SQL, [qty, productId, tenantID, id]);
       }
 
       await finishCheckProductHistory(client, productHistory);
@@ -6301,7 +6307,12 @@ export class ChecksService {
         });
       }
       for (const x of toDeduct) {
-        await client.query(STOCK_DECREMENT_IN_CHECK_POINT_SQL, [x.qty, x.productId, tenantID, id]);
+        await decrementKitAwareCheckStock(client, STOCK_DECREMENT_IN_CHECK_POINT_SQL, [
+          x.qty,
+          x.productId,
+          tenantID,
+          id,
+        ]);
       }
     }
 
