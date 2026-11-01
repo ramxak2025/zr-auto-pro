@@ -1470,6 +1470,9 @@ export default function SupplierDetailPage() {
               </Button>
             </div>
 
+            <p className="mb-2 text-xs text-ink-3">
+              Новая розница: пусто — сохранить текущую цену, 0 — установить ноль.
+            </p>
             {deliveryForm.items.length === 0 ? (
               <button
                 type="button"
@@ -1488,6 +1491,7 @@ export default function SupplierDetailPage() {
                 {deliveryForm.items.map((item, index) => {
                   const product = products.find((p) => p.id === item.productId);
                   const name = product?.name || 'Товар';
+                  const currentRetail = deliveryContextByProduct.get(item.productId)?.sellPrice;
                   return (
                     <li key={item.productId} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2.5">
                       <div className="min-w-0 flex-1 basis-40">
@@ -1543,7 +1547,17 @@ export default function SupplierDetailPage() {
                         onClick={() => removeDeliveryItem(index)}
                       />
                       <div className="grid w-full grid-cols-1 gap-2 border-t border-line pt-2 sm:grid-cols-2">
-                        <Field label="Розничная цена" hint="Пусто — сохранить текущую, 0 — установить ноль">
+                        <Field label="Новая розничная цена">
+                          <p className="mb-1.5 text-xs text-ink-2">
+                            Текущая:{' '}
+                            {deliveryPurchaseContext.isLoading
+                              ? 'загрузка…'
+                              : deliveryPurchaseContext.isError
+                                ? 'не удалось загрузить'
+                                : currentRetail !== undefined
+                                  ? formatPurchaseOrderMoney(currentRetail)
+                                  : 'недоступна'}
+                          </p>
                           <Input
                             size="sm"
                             inputMode="decimal"

@@ -240,7 +240,7 @@ export default function PurchaseOrderDetailPage() {
       initDeltas[it.id] = String(outstanding(it));
       // По умолчанию — цена из заказа (снимок costPrice); владелец правит по факту.
       initPrices[it.id] = it.costPrice ? String(it.costPrice) : '';
-      initSellPrices[it.id] = it.sellPrice == null ? '' : String(it.sellPrice);
+      initSellPrices[it.id] = '';
     }
     setDeltas(initDeltas);
     setPrices(initPrices);
@@ -490,21 +490,36 @@ export default function PurchaseOrderDetailPage() {
       ? ([
           {
             key: 'sellPrice',
-            header: 'Розница',
+            header: 'Новая розница',
             numeric: true,
             interactive: true,
-            render: (it) => (
-              <Input
-                size="sm"
-                inputMode="decimal"
-                aria-label={`Розничная цена — ${it.name}`}
-                value={sellPrices[it.id] ?? ''}
-                disabled={outstanding(it) === 0}
-                placeholder="Сохранить"
-                onChange={(e) => setSellPrices((prev) => ({ ...prev, [it.id]: e.target.value }))}
-                className="w-28 text-right tabular-nums"
-              />
-            ),
+            render: (it) => {
+              const currentRetail = receiptContextByProduct.get(it.productId)?.sellPrice;
+              return (
+                <div className="space-y-1.5">
+                  <p className="text-xs text-ink-2">
+                    Текущая:{' '}
+                    {receiptContextQuery.isLoading
+                      ? 'загрузка…'
+                      : receiptContextQuery.isError
+                        ? 'не удалось загрузить'
+                        : currentRetail !== undefined
+                          ? formatMoney(currentRetail, 2)
+                          : 'недоступна'}
+                  </p>
+                  <Input
+                    size="sm"
+                    inputMode="decimal"
+                    aria-label={`Розничная цена — ${it.name}`}
+                    value={sellPrices[it.id] ?? ''}
+                    disabled={outstanding(it) === 0}
+                    placeholder="Сохранить"
+                    onChange={(e) => setSellPrices((prev) => ({ ...prev, [it.id]: e.target.value }))}
+                    className="w-28 text-right tabular-nums"
+                  />
+                </div>
+              );
+            },
           },
           {
             key: 'previousPurchase',
@@ -738,6 +753,11 @@ export default function PurchaseOrderDetailPage() {
           divider={false}
         />
         <DataTable bare rows={items} rowKey={(it) => it.id} columns={columns} caption="Позиции заказа" />
+        {receiveMode && (
+          <p className="px-4 py-2 text-xs text-ink-3">
+            Новая розница: пусто — сохранить текущую цену, 0 — установить ноль.
+          </p>
+        )}
         {receiveMode && (
           <CardFooter>
             <span className="text-sm font-medium text-ink-2">Стоимость накладной</span>

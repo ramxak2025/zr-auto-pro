@@ -58,6 +58,8 @@ jest.mock('react-native-safe-area-context', () => ({
 jest.mock('expo-image', () => ({ Image: 'Image' }));
 jest.mock('../../api/axios', () => ({ getImageUrl: (path: string) => path }));
 jest.mock('../../hooks/useTabBarHeight', () => ({ useTabBarHeight: () => 108 }));
+jest.mock('../../components/Button', () => ({ Button: 'Button' }));
+jest.mock('../../components/KeyboardAware', () => ({ KeyboardAwareScroll: 'KeyboardAwareScroll' }));
 jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 jest.mock('../../platform/Typography', () => ({ Text: 'Text' }));
 jest.mock('../../contexts/AuthContext', () => ({
@@ -74,7 +76,7 @@ jest.mock('../../contexts/AuthContext', () => ({
 jest.mock('../../contexts/dataSession', () => ({ captureDataSession: () => ({ isCurrent: () => true }) }));
 jest.mock('../../contexts/ThemeContext', () => ({
   useColors: () => ({
-    bg: { canvas: '#fff', card: '#fff' },
+    bg: { canvas: '#fff', card: '#fff', muted: '#f3f4f6' },
     border: { subtle: '#ddd' },
     text: { primary: '#111', secondary: '#555', tertiary: '#777' },
     accent: { primary: '#2563eb', primarySoft: '#eaf0ff', primaryText: '#1d4ed8' },
@@ -141,11 +143,7 @@ it('renders the saved-account list and Add form without raw text children, then 
   tree = renderSheet();
   expect(textContent(tree)).toContain('Добавить аккаунт');
   const primary = elements(tree).find(
-    (element) =>
-      element.props.accessibilityRole !== 'alert' &&
-      typeof element.props.onPress === 'function' &&
-      element.props.disabled === false &&
-      textContent(element).includes('Продолжить'),
+    (element) => element.type === 'Button' && element.props.disabled === false && element.props.title === 'Продолжить',
   );
   expect(primary).toBeDefined();
   for (const pressable of elements(tree).filter((element) => element.type === 'Pressable')) {
@@ -165,19 +163,98 @@ it('renders the saved-account list and Add form without raw text children, then 
   (inputs[1].props.onChangeText as (value: string) => void)('password');
   tree = renderSheet();
   const continueButton = elements(tree).find(
-    (element) => element.type === 'Pressable' && textContent(element).includes('Продолжить'),
+    (element) => element.type === 'Button' && element.props.title === 'Продолжить',
   );
   const submission = (continueButton?.props.onPress as () => Promise<void>)();
   tree = renderSheet();
   const busyButton = elements(tree).find(
-    (element) =>
-      element.type === 'Pressable' &&
-      element.props.disabled === true &&
-      React.Children.toArray(element.props.children).some(
-        (child) => React.isValidElement(child) && child.type === 'ActivityIndicator',
-      ),
+    (element) => element.type === 'Button' && element.props.disabled === true && element.props.loading === true,
   );
   expect(busyButton).toBeDefined();
   resolveLogin({ status: 'authenticated' });
   await submission;
+});
+
+function openForm(reauth = false) {
+  if (reauth) {
+    mockSavedAccounts[0].active = false;
+    mockSavedAccounts[0].needsReauth = true;
+  }
+  const tree = renderSheet();
+  const entry = elements(tree).find((element) =>
+    reauth
+      ? typeof element.props.accessibilityLabel === 'string' &&
+        element.props.accessibilityLabel.includes(', войти снова')
+      : element.props.accessibilityRole === 'button' && textContent(element).includes('Добавить аккаунт'),
+  );
+  (entry!.props.onPress as () => void)();
+  return renderSheet();
+}
+
+function input(tree: React.ReactNode, label: string) {
+  return elements(tree).find((element) => element.type === 'TextInput' && element.props.accessibilityLabel === label)!;
+}
+
+function submit(tree: React.ReactNode) {
+  return (elements(tree).find((element) => element.type === 'Button')!.props.onPress as () => Promise<void>)();
+}
+
+it.each(['8 (999) 123-45-67', '+7 (999) 123-45-67', '9991234567'])(
+  'masks pasted %s and submits a complete phone with the password unchanged',
+  async (raw) => {
+    let tree = openForm();
+    (input(tree, 'Телефон').props.onChangeText as (value: string) => void)(raw);
+    (input(tree, 'Пароль').props.onChangeText as (value: string) => void)(' pass word ');
+    tree = renderSheet();
+    expect(input(tree, 'Телефон').props.value).toBe('+7 (999) 123-45-67');
+    expect(input(tree, 'Телефон').props.keyboardType).toBe('phone-pad');
+    expect(input(tree, 'Пароль').props.autoCapitalize).toBe('none');
+    mockAddAccount.mockResolvedValue({ status: 'authenticated' });
+    await submit(tree);
+    expect(mockAddAccount).toHaveBeenCalledWith('+7 (999) 123-45-67', ' pass word ', undefined);
+  },
+);
+
+it('blocks incomplete phone before any auth call, allows editing and reports password/server errors inline', async () => {
+  let tree = openForm();
+  (input(tree, 'Телефон').props.onChangeText as (value: string) => void)('8999');
+  await submit(renderSheet());
+  tree = renderSheet();
+  expect(textContent(tree)).toContain('Введите номер целиком: +7 и 10 цифр.');
+  expect(mockAddAccount).not.toHaveBeenCalled();
+  (input(tree, 'Телефон').props.onChangeText as (value: string) => void)('89991234567');
+  await submit(renderSheet());
+  tree = renderSheet();
+  expect(textContent(tree)).toContain('Введите пароль.');
+  (input(tree, 'Пароль').props.onChangeText as (value: string) => void)('password');
+  mockAddAccount.mockRejectedValue({ response: { data: { message: 'Неверный телефон или пароль' } } });
+  await submit(renderSheet());
+  tree = renderSheet();
+  expect(textContent(tree)).toContain('Неверный телефон или пароль');
+  expect(input(tree, 'Телефон').props.value).toBe('+7 (999) 123-45-67');
+  expect(input(tree, 'Пароль').props.value).toBe('password');
+  expect(elements(tree).find((element) => element.type === 'Button')!.props.loading).toBe(false);
+});
+
+it('uses the same masked form for reauthentication and only targets the selected saved account', async () => {
+  let tree = openForm(true);
+  expect(textContent(tree)).toContain('Сервис Ромашка');
+  (input(tree, 'Телефон').props.onChangeText as (value: string) => void)('89991234567');
+  (input(tree, 'Пароль').props.onChangeText as (value: string) => void)('password');
+  tree = renderSheet();
+  const eye = elements(tree).find((element) => element.props.accessibilityLabel === 'Показать пароль')!;
+  (eye.props.onPress as () => void)();
+  tree = renderSheet();
+  expect(input(tree, 'Пароль').props.secureTextEntry).toBe(false);
+  mockAddAccount.mockResolvedValue({ status: 'authenticated' });
+  await submit(tree);
+  expect(mockAddAccount).toHaveBeenCalledWith('+7 (999) 123-45-67', 'password', { reauthAccountId: 'saved-account' });
+});
+
+it('keeps adding disabled at three saved accounts', () => {
+  mockSavedAccounts.push(...[2, 3].map((id) => ({ ...mockSavedAccounts[0], id: `account-${id}`, active: false })));
+  const add = elements(renderSheet()).find(
+    (element) => textContent(element).includes('Добавить аккаунт') && element.type === 'Pressable',
+  )!;
+  expect(add.props.disabled).toBe(true);
 });

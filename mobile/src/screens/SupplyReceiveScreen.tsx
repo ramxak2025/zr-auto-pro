@@ -64,6 +64,7 @@ import { roundQty } from '../utils/units';
 import type { PurchaseReceiptContext } from '../../../shared/types';
 import { useProcurementRecovery } from '../hooks/useProcurementRecovery';
 import { sumReceiptLineCents } from '../../../shared/utils/procurementInput';
+import { formatMoney as formatCatalogPrice } from '../../../shared/utils/formatters';
 import { ProcurementRecoveryPanel } from '../components/ProcurementRecoveryPanel';
 
 type PayMode = 'debt' | 'paid';
@@ -82,7 +83,7 @@ interface LineState {
   qty: number;
   /** Закупочная цена за единицу (free-text, чтобы 12.5 печаталось чисто). */
   priceText: string;
-  /** Current retail price; blank preserves it, while "0" is an explicit zero. */
+  /** New retail price; blank preserves the catalog price, while "0" is explicit. */
   sellPriceText: string;
   /** Включена ли строка в накладную (можно «вычеркнуть» лишнюю). */
   included: boolean;
@@ -169,7 +170,7 @@ export default function SupplyReceiveScreen() {
       init[it.id] = {
         qty: out,
         priceText: it.costPrice ? String(it.costPrice) : '',
-        sellPriceText: it.sellPrice == null ? '' : String(it.sellPrice),
+        sellPriceText: '',
         included: out > 0,
       };
     }
@@ -478,7 +479,8 @@ export default function SupplyReceiveScreen() {
           <Ionicons name="cube-outline" size={16} color={colors.primary[600]} />
           <Text style={[styles.hintText, { color: palette.text.secondary }]}>
             Сверьте количество и впишите закупочную цену по каждой позиции. Лишнее можно вычеркнуть. Заказ от{' '}
-            {formatPoDate(po.orderedAt || po.createdAt)}.
+            {formatPoDate(po.orderedAt || po.createdAt)}.{'\n'}Новая розница: пусто — сохранить текущую цену, 0 —
+            установить ноль.
           </Text>
         </View>
 
@@ -654,9 +656,20 @@ export default function SupplyReceiveScreen() {
                         <Text style={[styles.priceCurrency, { color: palette.text.tertiary }]}>₽/шт</Text>
                       </View>
                     </View>
-                    <View style={[styles.priceWrap, { borderColor: palette.border.subtle, marginTop: spacing[2] }]}>
-                      <Text style={[styles.priceCurrency, { color: palette.text.tertiary }]}>Розница</Text>
+                    <Text style={[styles.excludedHint, { color: palette.text.secondary }]}>
+                      Текущая розничная:{' '}
+                      {receiptContextsQuery.isLoading
+                        ? 'загрузка…'
+                        : receiptContextsQuery.isError
+                          ? 'не удалось загрузить'
+                          : receiptContextByProduct.has(it.productId)
+                            ? formatCatalogPrice(receiptContextByProduct.get(it.productId)!.sellPrice, 2)
+                            : 'недоступна'}
+                    </Text>
+                    <View style={[styles.priceWrap, { borderColor: palette.border.subtle }]}>
+                      <Text style={[styles.priceCurrency, { color: palette.text.tertiary }]}>Новая розница</Text>
                       <TextInput
+                        accessibilityLabel={`Новая розничная цена — ${it.name}`}
                         value={ls?.sellPriceText ?? ''}
                         onChangeText={(t) => setSellPrice(it.id, t)}
                         style={[styles.priceInput, { color: palette.text.primary }]}
