@@ -461,3 +461,136 @@ test(
       }),
     ),
 );
+
+test(
+  'review exclusions preserve raw evidence; manual picker rows replay safely and never teach supplier aliases',
+  options,
+  () =>
+    fixture((f) =>
+      invoiceFixture(f, async (i) => {
+        const p = await f.product();
+        i.state.response = annotation([
+          ['Наименование', 'Артикул', 'Кол-во', 'Цена', 'Ед.'],
+          ['Шина', 'TIRE1', '2', '900', 'шт'],
+          ['Ложный итог', '', '1', '55', 'шт'],
+        ]);
+        let doc = await f.run(() => i.service.prepare(i.supplier, f.actor));
+        doc = await f.run(() => i.service.addPage(doc.id, i.image, f.actor));
+        doc = await f.run(() => i.service.extract(doc.id, doc.version, f.actor));
+        const goodId = doc.lines[0].id,
+          badId = doc.lines[1].id,
+          raw = { ...doc.lines[1] };
+        assert.equal(raw.origin, 'ocr');
+        assert.equal(raw.sourcePageIndex, 0);
+        assert.equal(raw.sourceRowIndex, 2);
+        doc = await f.run(() =>
+          i.service.reviewLine(doc.id, badId, { expectedVersion: doc.version, excluded: true }, f.actor),
+        );
+        assert.equal(doc.lines.find((line) => line.id === badId).name, raw.name);
+        assert.equal(doc.lines.find((line) => line.id === badId).quantity, raw.quantity);
+        doc = await f.run(() =>
+          i.service.mapLine(doc.id, goodId, { expectedVersion: doc.version, productId: p.id }, f.actor),
+        );
+        const manualRequest = {
+          expectedVersion: doc.version,
+          requestId: randomUUID(),
+          productId: p.id,
+          quantity: 2,
+          price: 123.45,
+        };
+        const [first, replay] = await Promise.all([
+          f.run(() => i.service.addManualLine(doc.id, manualRequest, f.actor)),
+          f.run(() => i.service.addManualLine(doc.id, manualRequest, f.actor)),
+        ]);
+        doc = first;
+        const manual = doc.lines.find((line) => line.origin === 'manual');
+        assert.equal(replay.lines.find((line) => line.origin === 'manual').id, manual.id);
+        assert.equal(doc.lines.filter((line) => line.origin === 'manual').length, 1);
+        assert.equal(manual.sourcePageIndex, undefined);
+        const refresh = await f.run(() =>
+          i.service.addManualLine(doc.id, { ...manualRequest, expectedVersion: doc.version }, f.actor),
+        );
+        assert.equal(refresh.version, doc.version);
+        await assert.rejects(
+          f.run(() =>
+            i.service.addManualLine(doc.id, { ...manualRequest, expectedVersion: doc.version, price: 124 }, f.actor),
+          ),
+          (error) => error.getResponse().code === 'INVOICE_MANUAL_REQUEST_CONFLICT',
+        );
+        doc = await f.run(() =>
+          i.service.mapLine(
+            doc.id,
+            manual.id,
+            { expectedVersion: doc.version, productId: p.id, remember: true },
+            f.actor,
+          ),
+        );
+        assert.equal(
+          (await f.q('SELECT count(*)::int n FROM supplier_product_aliases WHERE tenant_id=$1', [f.tenant]))[0].n,
+          1,
+        );
+        const active = () =>
+          doc.lines
+            .filter((line) => !line.excluded)
+            .map((line) => ({
+              lineId: line.id,
+              productId: line.productId,
+              quantity: line.quantity,
+              price: line.price,
+            }));
+        const requestId = randomUUID();
+        await assert.rejects(
+          f.run(() =>
+            i.service.confirm(
+              doc.id,
+              {
+                expectedVersion: doc.version,
+                requestId,
+                date: '2026-09-01',
+                items: [...active(), { lineId: badId, productId: p.id, quantity: 1, price: 55 }],
+              },
+              f.actor,
+            ),
+          ),
+          status(400),
+        );
+        doc = await f.run(() =>
+          i.service.reviewLine(doc.id, badId, { expectedVersion: doc.version, excluded: false }, f.actor),
+        );
+        await assert.rejects(
+          f.run(() =>
+            i.service.confirm(
+              doc.id,
+              {
+                expectedVersion: doc.version,
+                requestId,
+                date: '2026-09-01',
+                items: active().filter((line) => line.lineId !== badId),
+              },
+              f.actor,
+            ),
+          ),
+          status(400),
+        );
+        doc = await f.run(() =>
+          i.service.reviewLine(doc.id, badId, { expectedVersion: doc.version, excluded: true }, f.actor),
+        );
+        const result = await f.run(() =>
+          i.service.confirm(
+            doc.id,
+            { expectedVersion: doc.version, requestId, date: '2026-09-01', items: active() },
+            f.actor,
+          ),
+        );
+        assert.ok(result.id);
+        assert.equal((await f.q('SELECT stock FROM products WHERE id=$1', [p.id]))[0].stock, '14.000');
+        assert.equal(
+          (await f.q('SELECT current_debt FROM suppliers WHERE id=$1', [i.supplier]))[0].current_debt,
+          '2046.90',
+        );
+        const late = await f.run(() => i.service.addManualLine(doc.id, manualRequest, f.actor));
+        assert.equal(late.status, 'confirmed');
+        assert.equal(late.lines.filter((line) => line.origin === 'manual').length, 1);
+      }),
+    ),
+);

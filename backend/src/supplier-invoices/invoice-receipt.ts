@@ -34,17 +34,19 @@ export async function lockInvoiceReceipt(
       message: 'Накладная изменилась. Обновите проверку строк',
     });
   const result = row.result as InvoiceResult;
+  const active = result.lines.filter((line) => line.excluded !== true);
   if (
     !lineIds ||
-    !result.lines.length ||
-    lineIds.length !== result.lines.length ||
+    !active.length ||
+    active.length > 500 ||
+    lineIds.length !== active.length ||
     items.length !== lineIds.length ||
     new Set(lineIds).size !== lineIds.length
   ) {
     throw new BadRequestException('Проверьте все строки накладной');
   }
   for (const [index, id] of lineIds.entries()) {
-    const line = result.lines.find((line) => line.id === id);
+    const line = active.find((line) => line.id === id);
     if (!line?.productId || line.productId !== items[index].productId)
       throw new BadRequestException('Подтвердите соответствие каждого товара');
   }

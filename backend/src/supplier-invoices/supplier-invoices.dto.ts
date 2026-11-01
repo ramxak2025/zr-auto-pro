@@ -29,6 +29,15 @@ export class InvoiceContextDto extends InvoiceVersionDto {
   @IsUUID('4')
   orderId?: string | null;
 }
+export class InvoiceLineReviewDto extends InvoiceVersionDto {
+  @IsBoolean() excluded!: boolean;
+}
+export class AddManualInvoiceLineDto extends InvoiceVersionDto {
+  @IsUUID('4') requestId!: string;
+  @IsUUID('4') productId!: string;
+  @IsNumber({ maxDecimalPlaces: 3 }) @Min(0.001) quantity!: number;
+  @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) price!: number;
+}
 export class MapInvoiceLineDto extends InvoiceVersionDto {
   @IsUUID('4') productId!: string;
   @IsOptional() @IsBoolean() remember?: boolean;

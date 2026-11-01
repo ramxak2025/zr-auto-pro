@@ -12,7 +12,9 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Pool, PoolClient } from 'pg';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
+import { validateSync } from 'class-validator';
+import { plainToInstance } from 'class-transformer';
 import { Readable } from 'stream';
 import * as fs from 'fs/promises';
 import sharp = require('sharp');
@@ -24,7 +26,12 @@ import { actorPointId, warehousePointFilterSql } from '../common/point-scope';
 import { LocalStorageAdapter } from '../uploads/storage.service';
 import { SuppliersService } from '../suppliers/suppliers.service';
 import { InvoiceResult, invoiceAliasKey, normalizeAlias, parseInvoiceTables } from './invoice-parser';
-import { ConfirmInvoiceDto, MapInvoiceLineDto } from './supplier-invoices.dto';
+import {
+  AddManualInvoiceLineDto,
+  ConfirmInvoiceDto,
+  InvoiceLineReviewDto,
+  MapInvoiceLineDto,
+} from './supplier-invoices.dto';
 
 interface DocumentRow {
   id: string;
@@ -485,7 +492,7 @@ export class SupplierInvoicesService {
         line.warnings.push(
           `Единица накладной «${line.unit || 'не распознана'}», каталог: «${line.productUnit}». Подтвердите количество и закупочную цену в единицах каталога`,
         );
-      if (dto.remember !== false)
+      if (dto.remember !== false && line.origin !== 'manual')
         await client.query(
           `INSERT INTO supplier_product_aliases(tenant_id,supplier_id,alias_key,product_id,confirmed_by)
         VALUES($1,$2,$3,$4,$5) ON CONFLICT(tenant_id,supplier_id,alias_key) DO UPDATE SET product_id=excluded.product_id,confirmed_by=excluded.confirmed_by,updated_at=now()`,
@@ -493,6 +500,105 @@ export class SupplierInvoicesService {
         );
       await client.query(
         'UPDATE supplier_invoice_documents SET result=$3,version=version+1,updated_at=now() WHERE id=$1 AND tenant_id=$2',
+        [id, actor.tenantID, JSON.stringify(row.result)],
+      );
+      await client.query('COMMIT');
+      return this.get(id, actor);
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async reviewLine(id: string, lineId: string, dto: InvoiceLineReviewDto, actor: JwtPayload) {
+    if (validateSync(plainToInstance(InvoiceLineReviewDto, dto)).length)
+      throw new BadRequestException('Проверьте параметры строки');
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const row = await this.document(client, id, actor, true);
+      this.writable(row, dto.expectedVersion);
+      if (row.status !== 'review') throw new ConflictException('Сначала откройте проверку накладной');
+      const line = row.result.lines.find((line) => line.id === lineId);
+      if (!line) throw new NotFoundException('Строка не найдена');
+      if (line.excluded !== dto.excluded) {
+        line.excluded = dto.excluded;
+        await client.query(
+          'UPDATE supplier_invoice_documents SET result=$3,version=version+1,updated_at=now() WHERE id=$1 AND tenant_id=$2',
+          [id, actor.tenantID, JSON.stringify(row.result)],
+        );
+      }
+      await client.query('COMMIT');
+      return this.get(id, actor);
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async addManualLine(id: string, dto: AddManualInvoiceLineDto, actor: JwtPayload) {
+    if (validateSync(plainToInstance(AddManualInvoiceLineDto, dto)).length)
+      throw new BadRequestException('Проверьте товар, количество и закупочную цену ручной строки');
+    const requestId = dto.requestId.toLowerCase(),
+      productId = dto.productId.toLowerCase();
+    const fingerprint = createHash('sha256')
+      .update(JSON.stringify({ productId, quantity: dto.quantity, price: dto.price }))
+      .digest('hex');
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const row = await this.document(client, id, actor, true);
+      const prior = row.result.lines.find((line) => line.origin === 'manual' && line.manualRequestId === requestId);
+      if (prior) {
+        if (prior.manualFingerprint !== fingerprint)
+          throw new ConflictException({
+            code: 'INVOICE_MANUAL_REQUEST_CONFLICT',
+            message: 'Запрос ручной строки уже использован с другими данными',
+          });
+        await client.query('COMMIT');
+        return this.get(id, actor);
+      }
+      this.writable(row, dto.expectedVersion);
+      if (row.status === 'processing') throw new ConflictException('Дождитесь завершения распознавания');
+      if (row.result.lines.length >= 1000 || row.result.lines.filter((line) => line.excluded !== true).length >= 500)
+        throw new BadRequestException('В накладной не должно быть больше 500 активных строк');
+      const params: unknown[] = [productId, actor.tenantID];
+      const point = warehousePointFilterSql('p', actorPointId(actor), params);
+      const product = (
+        await client.query(
+          `SELECT p.id,p.name,p.unit FROM products p JOIN warehouses w ON w.id=p.warehouse_id
+        WHERE p.id=$1 AND p.tenant_id=$2 AND p.deleted_at IS NULL AND p.assembly_id IS NULL AND w.kind<>'used'${point}`,
+          params,
+        )
+      ).rows[0];
+      if (!product)
+        throw new BadRequestException(
+          'Выберите доступный товар текущего филиала. Б/У и собранные комплекты не принимаются по накладной',
+        );
+      row.result.lines.push({
+        id: randomUUID(),
+        origin: 'manual',
+        excluded: false,
+        manualRequestId: requestId,
+        manualFingerprint: fingerprint,
+        name: product.name,
+        sku: '',
+        unit: product.unit || 'шт',
+        productUnit: product.unit || 'шт',
+        quantity: dto.quantity,
+        price: dto.price,
+        productId: product.id,
+        suggestedProductId: null,
+        unitMismatch: false,
+        unitConfirmed: true,
+        warnings: ['Строка добавлена вручную'],
+      });
+      await client.query(
+        `UPDATE supplier_invoice_documents SET result=$3,status='review',version=version+1,updated_at=now() WHERE id=$1 AND tenant_id=$2`,
         [id, actor.tenantID, JSON.stringify(row.result)],
       );
       await client.query('COMMIT');

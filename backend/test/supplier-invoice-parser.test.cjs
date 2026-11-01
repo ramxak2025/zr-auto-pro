@@ -170,3 +170,23 @@ test('local provider uses only configured private origin, dedicated bearer, boun
     }
   }
 });
+
+test('multi-page row provenance points to the photographed page and original table row', () => {
+  const result = parseInvoiceTables([
+    annotation([
+      ['Наименование', 'Кол-во', 'Цена'],
+      ['First', '1', '5'],
+    ]),
+    annotation([
+      ['Наименование', 'Кол-во', 'Цена'],
+      ['Second', '2', '6'],
+    ]),
+  ]);
+  assert.deepEqual(
+    result.lines.map((line) => [line.name, line.origin, line.sourcePageIndex, line.sourceRowIndex]),
+    [
+      ['First', 'ocr', 0, 1],
+      ['Second', 'ocr', 1, 1],
+    ],
+  );
+});

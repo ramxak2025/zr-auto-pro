@@ -1,5 +1,5 @@
 import type { AssembleKitRequest, KitOperationResult, PhysicalProductKit, KitRecipe } from './productKits';
-import type { SupplierInvoiceDocument, ConfirmSupplierInvoice } from './supplierInvoices';
+import type { AddManualSupplierInvoiceLine, SupplierInvoiceDocument, ConfirmSupplierInvoice } from './supplierInvoices';
 import type { TodayEarnings, DashboardAttention } from '../types';
 import type {
   OwnerHomeProfit,
@@ -3246,6 +3246,10 @@ export function createSupplierInvoicesApi(api: HttpClient) {
     ) => api.patch<SupplierInvoiceDocument>(`/supplier-invoices/${id}/lines/${lineId}`, data),
     setOrder: (id: string, expectedVersion: number, orderId: string | null) =>
       api.patch<SupplierInvoiceDocument>(`/supplier-invoices/${id}/context`, { expectedVersion, orderId }),
+    reviewLine: (id: string, lineId: string, data: { expectedVersion: number; excluded: boolean }) =>
+      api.patch<SupplierInvoiceDocument>(`/supplier-invoices/${id}/lines/${lineId}/review`, data),
+    addManualLine: (id: string, data: AddManualSupplierInvoiceLine) =>
+      api.post<SupplierInvoiceDocument>(`/supplier-invoices/${id}/manual-lines`, data),
     confirm: (id: string, data: ConfirmSupplierInvoice) =>
       api.post<{ id: string }>(`/supplier-invoices/${id}/confirm`, data),
   };

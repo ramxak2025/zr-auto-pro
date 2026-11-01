@@ -1,5 +1,11 @@
 /** Private OCR preview. No stock or supplier debt changes before confirm. */
 export interface SupplierInvoiceLine {
+  origin?: 'ocr' | 'manual';
+  excluded?: boolean;
+  sourcePageIndex?: number;
+  sourceRowIndex?: number;
+  sourceTableIndex?: number;
+  manualRequestId?: string;
   id: string;
   name: string;
   sku: string;
@@ -73,4 +79,12 @@ export interface ConfirmSupplierInvoice {
     unitConfirmed?: boolean;
     productUnit?: string;
   }>;
+}
+
+export interface AddManualSupplierInvoiceLine {
+  expectedVersion: number;
+  requestId: string;
+  productId: string;
+  quantity: number;
+  price: number;
 }

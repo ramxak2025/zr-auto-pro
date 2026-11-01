@@ -73,7 +73,8 @@ export async function validateInvoiceUnitsTx(
   for (const [index, item] of items.entries()) {
     const line = result.lines.find((line) => line.id === lineIds[index]);
     const product = products.find((product) => product.id === item.productId);
-    if (!line || !product) throw new BadRequestException('Строка накладной или товар не найдены');
+    if (!line || line.excluded || !product)
+      throw new BadRequestException('Строка накладной исключена или товар не найден');
     if (product.assembly_id || product.kind === 'used')
       throw new BadRequestException('Товар Б/У и собранные комплекты не принимаются по накладной поставщика');
     const unit = product.unit || 'шт';

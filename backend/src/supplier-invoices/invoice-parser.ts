@@ -2,6 +2,13 @@ import { BadRequestException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 
 export interface InvoiceLine {
+  origin?: 'ocr' | 'manual';
+  excluded?: boolean;
+  sourcePageIndex?: number;
+  sourceRowIndex?: number;
+  sourceTableIndex?: number;
+  manualRequestId?: string;
+  manualFingerprint?: string;
   id: string;
   name: string;
   sku: string;
@@ -63,13 +70,13 @@ export function invoiceNumber(value: string, decimals: number, positive: boolean
 export function parseInvoiceTables(pages: OcrAnnotation[]): InvoiceResult {
   const lines: InvoiceLine[] = [];
   const dates = new Set<string>();
-  for (const page of pages) {
+  for (const [sourcePageIndex, page] of pages.entries()) {
     for (const match of (page.fullText ?? '').matchAll(/\b(\d{2})[./-](\d{2})[./-](\d{4})\b/g)) {
       const date = `${match[3]}-${match[2]}-${match[1]}`;
       const parsed = new Date(`${date}T00:00:00Z`);
       if (Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date) dates.add(date);
     }
-    for (const table of page.tables ?? []) {
+    for (const [sourceTableIndex, table] of (page.tables ?? []).entries()) {
       const rows = new Map<number, Map<number, string>>();
       const evidence = new Map<string, OcrCell>();
       for (const cell of table.cells ?? []) {
@@ -97,6 +104,11 @@ export function parseInvoiceTables(pages: OcrAnnotation[]): InvoiceResult {
         const quantity = invoiceNumber(cells.get(header.qty) ?? '', 3, true),
           price = invoiceNumber(cells.get(header.price) ?? '', 2, false);
         lines.push({
+          origin: 'ocr',
+          excluded: false,
+          sourcePageIndex,
+          sourceTableIndex,
+          sourceRowIndex: row,
           id: randomUUID(),
           name,
           sku: (cells.get(header.sku) ?? '').trim(),

@@ -21,7 +21,9 @@ import { PermissionsGuard, RequirePermission } from '../common/guards/permission
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { SupplierInvoicesService } from './supplier-invoices.service';
 import {
+  AddManualInvoiceLineDto,
   ConfirmInvoiceDto,
+  InvoiceLineReviewDto,
   InvoiceContextDto,
   InvoiceVersionDto,
   MapInvoiceLineDto,
@@ -139,6 +141,23 @@ export class SupplierInvoicesController {
     @CurrentUser() actor: JwtPayload,
   ) {
     return this.invoices.mapLine(id, lineId, dto, actor);
+  }
+  @Patch(':id/lines/:lineId/review')
+  reviewLine(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('lineId', new ParseUUIDPipe()) lineId: string,
+    @Body() dto: InvoiceLineReviewDto,
+    @CurrentUser() actor: JwtPayload,
+  ) {
+    return this.invoices.reviewLine(id, lineId, dto, actor);
+  }
+  @Post(':id/manual-lines')
+  manualLine(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: AddManualInvoiceLineDto,
+    @CurrentUser() actor: JwtPayload,
+  ) {
+    return this.invoices.addManualLine(id, dto, actor);
   }
   @Post(':id/confirm')
   confirm(
