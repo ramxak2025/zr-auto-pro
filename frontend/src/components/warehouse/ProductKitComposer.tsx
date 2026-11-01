@@ -464,24 +464,27 @@ export default function ProductKitComposer({
                   </span>
                 )}
               </span>
-              <Input
-                aria-label={`Количество компонента — ${line.name}`}
-                inputMode="decimal"
-                value={line.quantity}
-                disabled={compositionFrozen}
-                onChange={(event) =>
-                  writeLines((previous) =>
-                    previous.map((item) =>
-                      item.productId === line.productId ? { ...item, quantity: event.target.value } : item,
-                    ),
-                  )
-                }
-                className="w-24"
-              />
+              <div className="w-24 flex-none">
+                <Input
+                  aria-label={`Количество компонента — ${line.name}`}
+                  inputMode="decimal"
+                  value={line.quantity}
+                  disabled={compositionFrozen}
+                  onChange={(event) =>
+                    writeLines((previous) =>
+                      previous.map((item) =>
+                        item.productId === line.productId ? { ...item, quantity: event.target.value } : item,
+                      ),
+                    )
+                  }
+                  className="w-full"
+                />
+              </div>
               <Button
                 variant="ghost"
                 size="sm"
                 icon={Trash2}
+                className="shrink-0"
                 disabled={compositionFrozen}
                 onClick={() => writeLines((previous) => previous.filter((item) => item.productId !== line.productId))}
               >
