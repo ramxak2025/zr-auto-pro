@@ -109,7 +109,9 @@ export class ProductsService {
       assemblyId: row.assembly_id ?? null,
       assemblyRevision: row.assembly_revision ?? 0,
       assemblyExactCost: canSeeCost && row.assembly_exact_cost != null ? Number(row.assembly_exact_cost) : undefined,
-      bundleItems: row.bundle_items || [],
+      // Old POS clients expand nonempty virtual bundles before saving. Physical
+      // stock must stay one SKU; its captured composition is available via kits.
+      bundleItems: row.assembly_id ? [] : row.bundle_items || [],
       supplierId: row.supplier_id,
       warehouseId: row.warehouse_id ?? null,
       warrantyDays: row.warranty_days !== null && row.warranty_days !== undefined ? parseInt(row.warranty_days) : null,

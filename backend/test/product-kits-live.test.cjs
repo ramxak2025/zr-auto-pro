@@ -887,3 +887,43 @@ test(
       }),
     ),
 );
+
+test('physical product DTO cannot trigger old virtual-bundle expansion; real kit composition and whole-kit sale stay intact',options,()=>fixture(f=>kitFixture(f,async k=>{
+ const assembled=await k.assemble();
+ // Exact branch predicate from mobile0effd7ef CheckCreateScreen.addProductLine.
+ const legacyExpands=product=>product.isBundle&&product.bundleItems&&product.bundleItems.length>0;
+ const physical=await f.run(()=>f.products.getById(assembled.productId,f.tenant,f.actor));
+ assert.equal(physical.assemblyId,assembled.assemblyId);assert.equal(physical.isBundle,true);assert.deepEqual(physical.bundleItems,[]);assert.equal(legacyExpands(physical),false);
+ const stored=(await f.q('SELECT * FROM products WHERE id=$1',[assembled.productId]))[0];assert.equal(stored.bundle_items.length,2);
+ assert.deepEqual(f.products.projectProductForActor(stored,f.actor).bundleItems,[]);
+ const virtual=await f.product({name:'Legacy virtual',isBundle:true,bundleItems:[{productId:k.a.id,name:k.a.name,quantity:1}]});
+ assert.equal(legacyExpands(virtual),true);assert.equal(virtual.bundleItems[0].productId,k.a.id);
+ const captured=await f.run(()=>k.kits.get(assembled.productId,f.actor));assert.equal(captured.components.length,2);assert.deepEqual(new Set(captured.components.map(c=>c.productId)),new Set([k.a.id,k.b.id]));
+ await assert.rejects(f.run(()=>f.products.update(assembled.productId,f.tenant,{bundleItems:[]},f.owner,f.point)),status(409));
+ assert.equal((await f.q('SELECT bundle_items FROM products WHERE id=$1',[assembled.productId]))[0].bundle_items.length,2);
+ const checks=new ChecksService(f.pool,new WarrantyService(f.pool),new ClientsService(f.pool));
+ const line=legacyExpands(physical)?physical.bundleItems.map(c=>({productId:c.productId,name:c.name,quantity:c.quantity})): [{productId:physical.id,name:physical.name,quantity:1,sellPrice:physical.sellPrice,costPrice:0}];
+ const sale=await f.run(()=>checks.create(f.tenant,f.owner,'director',{masterId:f.owner,services:[],products:line,isDeferred:false,paymentMethod:'cash'},f.actor));
+ assert.equal(sale.products.length,1);assert.equal(sale.products[0].productId,assembled.productId);assert.equal(sale.productCostTotal,10000);
+ assert.equal(await k.stock(assembled.productId),0);assert.equal(await k.stock(k.a.id),9);assert.equal(await k.stock(k.b.id),9);
+ assert.deepEqual((await f.run(()=>f.products.getById(assembled.productId,f.tenant,f.actor))).bundleItems,[]);
+})));
+
+test('old split-check payload without IDs/provenance/protocol conflicts, exact saved line IDs preserve sources, explicit replacement remains ordinary',options,()=>fixture(f=>kitFixture(f,async k=>{
+ const assembled=await k.assemble(),x=splitFlows(f,k,assembled);
+ await f.run(()=>f.products.update(k.a.id,f.tenant,{costPrice:9000},f.owner,f.point));
+ const sale=await x.create(x.input());
+ const oldLine=line=>({productId:line.productId,name:line.name,quantity:line.quantity,sellPrice:line.sellPrice,costPrice:0});
+ const before=await f.q('SELECT product_id,quantity,kit_source FROM check_product_lines WHERE check_id=$1 ORDER BY id',[sale.id]);
+ const stocks=await f.q('SELECT id,stock FROM products WHERE tenant_id=$1 ORDER BY id',[f.tenant]);
+ await assert.rejects(x.edit(sale.id,{products:sale.products.map(oldLine)}),e=>e.getStatus()===409&&e.getResponse().code==='KIT_PROVENANCE_REQUIRED');
+ await assert.rejects(x.edit(sale.id,{products:sale.products.map(line=>({...oldLine(line),id:randomUUID()}))}),e=>e.getStatus()===409&&e.getResponse().code==='KIT_PROVENANCE_REQUIRED');
+ assert.deepEqual(await f.q('SELECT product_id,quantity,kit_source FROM check_product_lines WHERE check_id=$1 ORDER BY id',[sale.id]),before);
+ assert.deepEqual(await f.q('SELECT id,stock FROM products WHERE tenant_id=$1 ORDER BY id',[f.tenant]),stocks);
+ const retained=await x.edit(sale.id,{products:sale.products.map(line=>({...oldLine(line),id:line.id}))});
+ assert.ok(retained.products.every(line=>line.kitSource));assert.deepEqual(new Set(retained.products.map(line=>line.kitSource.sourceProductId)),new Set([k.a.id,k.b.id]));
+ const first=retained.products[0],other=retained.products[1];
+ const replaced=await x.edit(sale.id,{products:[oldLine(first),other],kitSplits:retained.kitSplits});
+ assert.equal(replaced.products.find(line=>line.productId===first.productId).kitSource,undefined);
+ assert.equal((await f.q("SELECT count(*)::int n FROM kit_operations WHERE check_id=$1 AND kind='split'",[sale.id]))[0].n,1);assert.equal(await k.stock(assembled.productId),0);
+})));

@@ -97,13 +97,39 @@ export async function prepareKitCheckProducts<T extends KitCheckLine>(
     const check = (await client.query('SELECT kit_splits FROM checks WHERE id=$1 AND tenant_id=$2', [checkId, tenant]))
       .rows[0];
     saved = intentsFrom(check?.kit_splits ?? []);
-    const priorLines = (
+    const persistedLines = (
       await client.query(
-        'SELECT id,product_id,name,quantity,sell_price,kit_source FROM check_product_lines WHERE check_id=$1 AND kit_source IS NOT NULL',
+        'SELECT id,product_id,name,quantity,sell_price,kit_source FROM check_product_lines WHERE check_id=$1',
         [checkId],
       )
     ).rows;
+    const priorLines = persistedLines.filter((line) => line.kit_source != null);
     savedSources = priorLines;
+    if (
+      rawIntents === undefined &&
+      !products.some((line) => line.kitSource) &&
+      products.some(
+        (line) =>
+          !line.kitSource &&
+          !persistedLines.some(
+            (previous) => previous.id === line.id && previous.product_id === (line.productId ?? null),
+          ),
+      ) &&
+      priorLines.some(
+        (previous) =>
+          !products.some(
+            (line) =>
+              line.id === previous.id ||
+              (line.kitSource?.intentId === previous.kit_source.intentId &&
+                line.kitSource?.sourceProductId === previous.kit_source.sourceProductId),
+          ),
+      )
+    )
+      throw new ConflictException({
+        code: 'KIT_PROVENANCE_REQUIRED',
+        message:
+          'Обновите приложение для изменения чека с разобранным комплектом. Сохраните исходные строки или укажите разборку явно',
+      });
     products = products.map((line) => {
       if (line.kitSource) return line;
       // A new id-less ordinary replacement must never regain captured lineage
