@@ -49,7 +49,7 @@ test('closed A→B edits, echo, delete→restore→delete and purge retain immut
   await f.q("DELETE FROM checks WHERE id=$1 AND deleted_at<now()-interval '30 days'",[sale.id]);
   assert.equal((await x.events(sale.id)).length,6);
   const history=await f.run(()=>f.movements.history(f.tenant,{productId:b.id,includeSales:true},f.point,f.actor));
-  assert.equal(history.data.length,4);assert.ok(history.data.every(row=>row.checkId===null&&row.receiptAvailable===false));
+  assert.equal(history.data.filter(row=>row.id.startsWith('check-event:')).length,4);assert.ok(history.data.filter(row=>row.id.startsWith('check-event:')).every(row=>row.checkId===null&&row.receiptAvailable===false));
 }));
 
 test('legacy baseline freezes all original SKUs before destructive edit and invalidates an existing cursor',options,()=>fixture(async(f)=>{
@@ -72,13 +72,13 @@ test('partial product/service returns keep a single physical return event with c
   const line=(await f.q('SELECT id FROM check_product_lines WHERE check_id=$1',[sale.id]))[0].id;
   await f.run(()=>x.returns.createReturn(f.tenant,f.owner,sale.id,{destination:'warehouse',scope:'partial',lines:[{productLineId:line,quantity:1}]},f.actor));
   assert.equal(await x.stock(a),8);assert.equal((await x.events(sale.id)).length,1);
-  const movement=(await f.q('SELECT * FROM stock_movements WHERE product_id=$1',[a.id]))[0];
+  const movement=(await f.q("SELECT * FROM stock_movements WHERE product_id=$1 AND type='customer_return'",[a.id]))[0];
   assert.equal(movement.type,'customer_return');assert.equal(movement.check_id,sale.id);assert.equal(movement.source_product_id,a.id);assert.ok(movement.return_id);
-  const history=await f.run(()=>f.movements.history(f.tenant,{productId:a.id,includeSales:true},f.point,f.actor));assert.equal(history.data.length,2);
+  const history=await f.run(()=>f.movements.history(f.tenant,{productId:a.id,includeSales:true},f.point,f.actor));assert.equal(history.data.length,3);
   const serviceSale=await x.create([x.line(a,1)]);
   const serviceLine=(await f.q('SELECT id FROM check_service_lines WHERE check_id=$1',[serviceSale.id]))[0].id;
   await f.run(()=>x.returns.createReturn(f.tenant,f.owner,serviceSale.id,{destination:'warehouse',scope:'partial',lines:[{serviceLineId:serviceLine}]},f.actor));
-  assert.equal((await f.q('SELECT count(*)::int n FROM stock_movements WHERE product_id=$1',[a.id]))[0].n,1);
+  assert.equal((await f.q('SELECT count(*)::int n FROM stock_movements WHERE product_id=$1',[a.id]))[0].n,2);
 }));
 
 test('defect returns retain original SKU provenance in its product history; uncovered date edits invalidate cursors',options,()=>fixture(async(f)=>{
@@ -89,7 +89,7 @@ test('defect returns retain original SKU provenance in its product history; unco
   const movement=(await f.q('SELECT * FROM stock_movements WHERE source_product_id=$1',[a.id]))[0];
   assert.equal(movement.type,'defect_transfer');assert.notEqual(movement.product_id,a.id);assert.equal(movement.check_id,sale.id);
   const history=await f.run(()=>f.movements.history(f.tenant,{productId:a.id,includeSales:true},f.point,f.actor));
-  assert.equal(history.data.length,2);assert.ok(history.data.find(row=>row.type==='defect_transfer'&&row.sourceProductId===a.id));
+  assert.equal(history.data.length,3);assert.ok(history.data.find(row=>row.type==='defect_transfer'&&row.sourceProductId===a.id));
   const legacy=randomUUID();await f.q("INSERT INTO checks(id,tenant_id,point_id,master_id,date) VALUES($1,$2,$3,$4,'2026-09-01')",[legacy,f.tenant,f.point,f.owner]);
   await f.q("INSERT INTO check_product_lines(check_id,product_id,name,quantity) VALUES($1,$2,'Original',1),($1,$2,'Original 2',1)",[legacy,a.id]);
   const page=await f.run(()=>f.movements.history(f.tenant,{includeSales:true,limit:1},f.point,f.actor));

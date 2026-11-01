@@ -54,7 +54,7 @@ test('used intake: concurrent retries commit one product/income, no debt or expe
 }));
 
 test('history: all 451 records, stable tie order, new backdated events excluded, filter-bound cursor', options, () => fixture(async (f) => {
-  const p = await f.product();
+  const p = await f.product({stock:0});
   await f.q(`INSERT INTO stock_movements(product_id,tenant_id,type,quantity,stock_before,stock_after,warehouse_id,created_at)
     SELECT $1,$2,'income',1,0,1,$3,'2026-09-01 12:00:00.123456Z'::timestamptz FROM generate_series(1,451)`, [p.id,f.tenant,f.main]);
   let page = await f.run(() => f.movements.history(f.tenant, { productId:p.id,limit:43 }, f.point, f.actor));

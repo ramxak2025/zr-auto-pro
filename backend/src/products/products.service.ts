@@ -1373,12 +1373,12 @@ export class ProductsService {
   // INNER JOIN products и берёт оттуда имя и цены, так что движение с пустым
   // product_id пропадёт из журнала ровно так же — только ещё незаметнее.
   // Лечить надо не ключ, а само удаление.
-  private static readonly NO_HARD_REFS_SQL = `NOT EXISTS (SELECT 1 FROM stock_movements sm WHERE sm.product_id = p.id)
+  private static readonly NO_HARD_REFS_SQL = `NOT EXISTS (SELECT 1 FROM stock_movements sm WHERE (sm.product_id = p.id OR sm.source_product_id=p.id OR sm.target_product_id=p.id))
        AND NOT EXISTS (SELECT 1 FROM purchase_order_items poi WHERE poi.product_id = p.id)
        AND NOT EXISTS (SELECT 1 FROM check_return_lines crl WHERE crl.product_id = p.id)`;
 
   /** Те же три ссылки, но флагами — чтобы объяснить человеку, что держит товар. */
-  private static readonly HARD_REF_FLAGS_SQL = `EXISTS (SELECT 1 FROM stock_movements sm WHERE sm.product_id = p.id) AS has_movements,
+  private static readonly HARD_REF_FLAGS_SQL = `EXISTS (SELECT 1 FROM stock_movements sm WHERE (sm.product_id = p.id OR sm.source_product_id=p.id OR sm.target_product_id=p.id)) AS has_movements,
               EXISTS (SELECT 1 FROM purchase_order_items poi WHERE poi.product_id = p.id) AS has_orders,
               EXISTS (SELECT 1 FROM check_return_lines crl WHERE crl.product_id = p.id) AS has_returns`;
 

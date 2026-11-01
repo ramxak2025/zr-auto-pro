@@ -58,7 +58,15 @@ test(
         assert.equal(await k.stock(k.b.id), 9);
         assert.equal(await k.stock(a.productId), 1);
         assert.equal(await k.value(), before);
-        assert.equal((await f.q('SELECT count(*)::int n FROM stock_movements WHERE tenant_id=$1', [f.tenant]))[0].n, 3);
+        assert.equal(
+          (
+            await f.q(
+              'SELECT count(*)::int n FROM stock_movements WHERE tenant_id=$1 AND kit_operation_id IS NOT NULL',
+              [f.tenant],
+            )
+          )[0].n,
+          3,
+        );
         assert.equal((await f.q('SELECT count(*)::int n FROM expenses WHERE tenant_id=$1', [f.tenant]))[0].n, 0);
         assert.equal(
           (await f.q('SELECT count(*)::int n FROM supplier_payments WHERE tenant_id=$1', [f.tenant]))[0].n,

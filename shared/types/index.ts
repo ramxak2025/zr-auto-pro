@@ -3541,6 +3541,10 @@ export interface StockMovement {
   documentDate?: string | null;
   returnId?: string | null;
   sourceProductId?: string | null;
+  targetProductId?: string | null;
+  targetStockBefore?: number | null;
+  targetStockAfter?: number | null;
+  direction?: 'in' | 'out' | null;
   reason?: string;
   userId?: string;
   user?: { id: string; fullName: string } | null;

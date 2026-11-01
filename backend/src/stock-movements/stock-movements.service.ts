@@ -654,6 +654,8 @@ export class StockMovementsService {
     // describes the source warehouse (было → осталось на исходном).
     const stockAfter = stockBefore - qty;
     let targetProductId: string = dto.productId;
+    let targetStockBefore = 0,
+      targetStockAfter = qty;
     if (stockAfter === 0) {
       // 172 — ячейка принадлежит СКЛАДУ: строка уехала на другой склад (брак / Б-У /
       // другой филиал) — адрес прежнего склада там не существует, снимаем его.
@@ -677,7 +679,8 @@ export class StockMovementsService {
       );
       if (targetRows.length > 0) {
         targetProductId = targetRows[0].id;
-        const targetStockAfter = (parseFloat(targetRows[0].stock) || 0) + qty;
+        targetStockBefore = parseFloat(targetRows[0].stock) || 0;
+        targetStockAfter = targetStockBefore + qty;
         await client.query('UPDATE products SET stock=$1 WHERE id=$2 AND tenant_id=$3', [
           targetStockAfter,
           targetProductId,
@@ -704,8 +707,8 @@ export class StockMovementsService {
     const { rows: mvRows } = await client.query(
       `INSERT INTO stock_movements (
          product_id, type, quantity, stock_before, stock_after, reason,
-         tenant_id, user_id, warehouse_id, source_warehouse_id, target_warehouse_id
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         tenant_id, user_id, warehouse_id, source_warehouse_id, target_warehouse_id, source_product_id,target_product_id,target_stock_before,target_stock_after
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
        RETURNING id`,
       [
         dto.productId,
@@ -719,6 +722,10 @@ export class StockMovementsService {
         targetWarehouseId,
         sourceWarehouseId,
         targetWarehouseId,
+        dto.productId,
+        targetProductId,
+        targetStockBefore,
+        targetStockAfter,
       ],
     );
 
