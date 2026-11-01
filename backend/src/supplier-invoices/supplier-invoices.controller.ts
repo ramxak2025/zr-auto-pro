@@ -33,9 +33,13 @@ import {
 /** Bounded camera uploads; neither filename nor document text is logged. */
 export async function invoiceUpload(req: Request): Promise<Buffer> {
   return new Promise((resolve, reject) => {
+    const maximum = 10 * 1024 * 1024;
     let parser: ReturnType<typeof Busboy>;
     try {
-      parser = Busboy({ headers: req.headers, limits: { fileSize: 10 * 1024 * 1024, files: 1, fields: 0, parts: 1 } });
+      // Installed Busboy emits partsLimit when the allowed part count is
+      // reached, so 1 would reject every valid one-file form. A second part is
+      // still invalid through parts/files/fields events below.
+      parser = Busboy({ headers: req.headers, limits: { fileSize: maximum + 1, files: 1, fields: 0, parts: 2 } });
     } catch {
       reject(new BadRequestException('Отправьте фотографию как multipart/form-data'));
       return;
@@ -43,20 +47,35 @@ export async function invoiceUpload(req: Request): Promise<Buffer> {
     const chunks: Buffer[] = [];
     let size = 0,
       files = 0,
-      invalid = false;
+      invalid = false,
+      settled = false;
+    const finish = (error?: Error, result?: Buffer) => {
+      if (settled) return;
+      settled = true;
+      req.off('aborted', aborted);
+      req.off('error', failed);
+      if (error) {
+        chunks.length = 0;
+        req.once('error', () => undefined);
+        req.unpipe(parser);
+        if (!parser.destroyed) parser.destroy();
+        req.resume();
+        reject(error);
+      } else resolve(result!);
+    };
+    const aborted = () => finish(new BadRequestException('Загрузка прервана'));
+    const failed = () => finish(new BadRequestException('Не удалось прочитать фотографию'));
     parser.on('file', (_field, stream) => {
       files++;
       stream.on('data', (chunk: Buffer) => {
         size += chunk.length;
-        if (size <= 10 * 1024 * 1024) chunks.push(chunk);
+        if (size <= maximum) chunks.push(chunk);
         else invalid = true;
       });
       stream.on('limit', () => {
         invalid = true;
       });
-      stream.on('error', () => {
-        invalid = true;
-      });
+      stream.on('error', failed);
     });
     parser.on('filesLimit', () => {
       invalid = true;
@@ -67,11 +86,13 @@ export async function invoiceUpload(req: Request): Promise<Buffer> {
     parser.on('partsLimit', () => {
       invalid = true;
     });
-    parser.on('error', () => reject(new BadRequestException('Не удалось прочитать фотографию')));
-    req.on('aborted', () => reject(new BadRequestException('Загрузка прервана')));
+    parser.on('error', failed);
+    req.on('aborted', aborted);
+    req.on('error', failed);
     parser.on('close', () => {
-      if (invalid || files !== 1 || !size) reject(new BadRequestException('Загрузите одну фотографию до 10 МБ'));
-      else resolve(Buffer.concat(chunks));
+      if (settled) return;
+      if (invalid || files !== 1 || !size) finish(new BadRequestException('Загрузите одну фотографию до 10 МБ'));
+      else finish(undefined, Buffer.concat(chunks));
     });
     req.pipe(parser);
   });
