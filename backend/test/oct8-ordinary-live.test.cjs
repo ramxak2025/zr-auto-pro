@@ -394,14 +394,20 @@ test('October-8 ordinary contracts / PostgreSQL16 real RLS and HTTP', { skip: !l
           seen.push(...result.data.map((row) => row.id));
         }
         assert.equal(new Set(seen).size, 1005);
-        assert.equal(
-          (
-            await f.run(() =>
-              services.getAll(f.tenant, { preferredOnly: true, search: 'visible-100', page: 1, limit: 2 }, f.viewer),
-            )
-          ).total,
-          6,
+        const searchPage = await f.run(() =>
+          services.getAll(f.tenant, { preferredOnly: true, search: 'visible-100', page: 1, limit: 2 }, f.viewer),
         );
+        // Smart search splits punctuation into unordered substring tokens:
+        // visible-0100 also contains both "visible" and "100". Prefixes rank first.
+        assert.equal(searchPage.total, 7);
+        assert.deepEqual(searchPage.data.map((row) => row.name), ['visible-1000', 'visible-1001']);
+        const allSearch = await f.run(() =>
+          services.getAll(f.tenant, { preferredOnly: true, search: 'visible-100', limit: 100 }, f.viewer),
+        );
+        assert.deepEqual(allSearch.data.map((row) => row.name), [
+          'visible-1000', 'visible-1001', 'visible-1002', 'visible-1003', 'visible-1004', 'visible-1005', 'visible-0100',
+        ]);
+        assert.ok(allSearch.data.every((row) => row.category === 'Shown'));
         const fullIds = [];
         for (let page = 1; page <= 5; page++) {
           const full = await f.run(() => services.getAll(f.tenant, { page, limit: 500 }, f.viewer));
