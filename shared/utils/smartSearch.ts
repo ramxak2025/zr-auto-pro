@@ -112,7 +112,9 @@ export function smartSearch<T>(
   if (!options.typos) return [];
   for (const variant of variants) {
     const tokens = searchTokens(variant);
-    if (!tokens.length || tokens.length > 8) continue;
+    // A punctuated SKU (ABCD-123) splits into words during normalization.
+    // Keep its alphabetic segment exact too: never typo-correct numeric queries.
+    if (!tokens.length || tokens.length > 8 || /\p{N}/u.test(variant)) continue;
     const matches = items.filter((item) => {
       const values = fields(item).map(normalizeSearchText).filter(Boolean);
       const words = values.flatMap((value) => value.split(' '));

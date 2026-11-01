@@ -63,6 +63,7 @@ describe('shared smart search', () => {
     expect(smartSearch([{ name: 'кот' }], 'кит', (row) => [row.name], { typos: true })).toEqual([]);
     expect(smartSearch(products, 'AB124', fields, { typos: true })).toEqual([]);
     expect(smartSearch(products, '460124', fields, { typos: true })).toEqual([]);
+    expect(smartSearch([{ article: 'ABCD-123' }], 'ABCE-123', (row) => [row.article], { typos: true })).toEqual([]);
     const rows = [{ name: 'Фильтр' }, { name: 'Филтр' }];
     expect(smartSearch(rows, 'Филтр', (row) => [row.name], { typos: true })).toEqual([rows[1]]);
   });
