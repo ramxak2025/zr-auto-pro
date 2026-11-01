@@ -99,6 +99,92 @@ test('actual foreground handler suppresses all internal notification presentatio
   }
 });
 
+test('App installs its foreground handler synchronously only in ordinary builds', () => {
+  const f = source('App.tsx');
+  let raw;
+  traverse(f.ast, {
+    CallExpression(p) {
+      if (
+        p.node.callee.type === 'MemberExpression' &&
+        p.node.callee.object.name === 'Notifications' &&
+        p.node.callee.property.name === 'setNotificationHandler'
+      ) {
+        const guard = p.findParent((parent) => parent.isIfStatement());
+        assert.ok(guard, 'Top-level SDK handler must be guarded before internal app startup');
+        assert.equal(guard.parent.type, 'Program');
+        raw = f.text.slice(guard.node.start, guard.node.end);
+      }
+    },
+  });
+  assert.ok(raw);
+  for (const internal of [true, false]) {
+    let handlers = 0;
+    executable('() => {' + raw + '}', {
+      inventoryInternal: internal,
+      Notifications: internal
+        ? forbiddenNotifications().api
+        : {
+            setNotificationHandler(handler) {
+              handlers++;
+              assert.equal(typeof handler.handleNotification, 'function');
+            },
+          },
+    })();
+    assert.equal(handlers, internal ? 0 : 1);
+  }
+});
+
+test('ordinary broadcast and salary listeners still refresh their business alerts and dispose subscriptions', () => {
+  for (const [file, type] of [
+    ['src/contexts/BroadcastNotificationContext.tsx', 'superadmin_broadcast'],
+    ['src/contexts/SalaryNotificationContext.tsx', 'salary_test'],
+  ]) {
+    const f = source(file);
+    let raw;
+    traverse(f.ast, {
+      CallExpression(p) {
+        const callee = p.node.callee;
+        if (callee.type !== 'MemberExpression' || callee.property.name !== 'useEffect') return;
+        const callback = p.node.arguments[0];
+        const candidate = f.text.slice(callback.start, callback.end);
+        if (candidate.includes('Notifications.addNotificationReceivedListener')) raw = candidate;
+      },
+    });
+    assert.ok(raw, file);
+    let received,
+      foreground,
+      polls = 0,
+      disposed = 0;
+    const cleanup = executable(raw, {
+      inventoryInternal: false,
+      Notifications: {
+        addNotificationReceivedListener: (listener) => {
+          received = listener;
+          return { remove: () => disposed++ };
+        },
+      },
+      AppState: {
+        addEventListener: (_event, listener) => {
+          foreground = listener;
+          return { remove: () => disposed++ };
+        },
+      },
+      isSalaryNoticePush: (data) => data.type === type,
+      checkOnce: () => polls++,
+    })();
+    received({ request: { content: { data: { type: 'irrelevant' } } } });
+    assert.equal(polls, 0);
+    received({ request: { content: { data: { type } } } });
+    assert.equal(polls, 1);
+    if (foreground) {
+      foreground('active');
+      assert.equal(polls, 2);
+    }
+    cleanup();
+    assert.equal(disposed, foreground ? 2 : 1);
+  }
+});
+
 test('all actual push-listener effects leave the OS response untouched internally while own salary foreground polling remains', () => {
   const files = [
     'App.tsx',

@@ -7,7 +7,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import NetInfo from '@react-native-community/netinfo';
 import * as Font from 'expo-font';
-import * as Notifications from 'expo-notifications';
+import * as Notifications from './src/utils/notifications';
 import { inventoryInternal } from './src/utils/runtimeEnvironment';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
@@ -94,15 +94,17 @@ const apiRoutingInitialization = ensureApiHostReady().catch(() => {});
 // Same-bundle internal builds ignore existing public push registration. iOS can
 // still display earlier public alerts in the background; we do not mutate that
 // production registration or remove the user's OS notification history.
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: !inventoryInternal,
-    shouldShowBanner: !inventoryInternal,
-    shouldShowList: !inventoryInternal,
-    shouldPlaySound: !inventoryInternal,
-    shouldSetBadge: false,
-  }),
-});
+if (!inventoryInternal) {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowAlert: !inventoryInternal,
+      shouldShowBanner: !inventoryInternal,
+      shouldShowList: !inventoryInternal,
+      shouldPlaySound: !inventoryInternal,
+      shouldSetBadge: false,
+    }),
+  });
+}
 
 const queryClient = new QueryClient({
   // Глобальный перехват ошибок мутаций (волна C «Связь 2.0», C-1). Раньше

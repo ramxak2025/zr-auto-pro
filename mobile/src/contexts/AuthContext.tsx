@@ -4,7 +4,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { AppState, Platform } from 'react-native';
 import AsyncStorage from '../utils/environmentStorage';
 import { inventoryInternal } from '../utils/runtimeEnvironment';
-import * as Notifications from 'expo-notifications';
+import * as Notifications from '../utils/notifications';
 import Constants from 'expo-constants';
 import { randomUUID } from 'expo-crypto';
 import { isApiRouteFailure, isAuthoritativeAuthFailure } from '../api/apiHosts';

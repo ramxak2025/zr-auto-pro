@@ -5,7 +5,7 @@ import { inventoryInternal } from '../utils/runtimeEnvironment';
  */
 import React from 'react';
 import { AppState } from 'react-native';
-import * as Notifications from 'expo-notifications';
+import * as Notifications from '../utils/notifications';
 import { useQueryClient } from '@tanstack/react-query';
 import { createSalaryApi } from '../../../shared/api/createServices';
 import { captureAuthSession, createSessionBoundClient } from '../api/axios';

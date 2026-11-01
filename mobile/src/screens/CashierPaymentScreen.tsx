@@ -23,7 +23,7 @@ import { inventoryInternal } from '../utils/runtimeEnvironment';
 import React, { useCallback, useMemo, useState } from 'react';
 import { RefreshControl, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import * as Notifications from 'expo-notifications';
+import * as Notifications from '../utils/notifications';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { checksApi } from '../api/services';

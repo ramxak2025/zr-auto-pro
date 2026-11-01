@@ -45,7 +45,7 @@ import { ownedStorage } from './ownedStorage';
 import { captureDataSession } from './dataSession';
 import { createSessionBoundClient } from '../api/axios';
 import { createNotificationsApi } from '../../../shared/api/createServices';
-import * as Notifications from 'expo-notifications';
+import * as Notifications from '../utils/notifications';
 import { useAuth } from './AuthContext';
 import BroadcastModal from '../components/BroadcastModal';
 import type { Broadcast } from '../../../shared/types';
