@@ -130,7 +130,7 @@ export class StockMovementsService {
       if (rows.length === 0) throw new BadRequestException({ message: 'Склад не найден' });
       return rows[0].id;
     }
-    const w = await this.warehouses.resolveByKind(tenantID, fallbackKind, pointId);
+    const w = await this.warehouses.resolveByKind(tenantID, fallbackKind, pointId, client);
     return w.id;
   }
 

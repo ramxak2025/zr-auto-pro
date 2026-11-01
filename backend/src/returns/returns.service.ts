@@ -1,3 +1,4 @@
+import { exactKitLineCost } from '../product-kits/kit-stock';
 import { resolveSavedKitPositions } from '../product-kits/kit-checks';
 import { captureCheckProductHistory } from '../checks/check-product-events';
 import { lockMotivationRead } from '../motivation/motivation-rules';
@@ -150,7 +151,13 @@ export class ReturnsService {
         if (lineQty > 0 && qty >= lineQty) return { sell: totalSell, cost: totalCost };
         const unitSell = lineQty > 0 ? totalSell / lineQty : parseFloat(row.sell_price) || 0;
         const unitCost = lineQty > 0 ? totalCost / lineQty : parseFloat(row.cost_price) || 0;
-        return { sell: round2(unitSell * qty), cost: round2(unitCost * qty) };
+        return {
+          sell: round2(unitSell * qty),
+          cost:
+            row.kit_exact_unit_cost == null
+              ? round2(unitCost * qty)
+              : exactKitLineCost(String(row.kit_exact_unit_cost), qty),
+        };
       };
 
       // For full scope we move every product line; for partial we honour the

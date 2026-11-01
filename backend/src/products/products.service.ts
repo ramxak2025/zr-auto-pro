@@ -138,12 +138,13 @@ export class ProductsService {
     warehouseId?: string | null,
     opts: { forCreate?: boolean } = {},
     pointId: string | null = null,
+    db: Pool | PoolClient = this.pool,
   ): Promise<string | null> {
     if (warehouseId) {
       // 169 — склад обязан быть складом ФИЛИАЛА сессии: устаревший id склада
       // другого филиала (экран пережил переключение) — «не найден», а не
       // тихая запись в чужой автосервис.
-      const { rows } = await this.pool.query(
+      const { rows } = await db.query(
         'SELECT id, kind FROM warehouses WHERE id=$1 AND tenant_id=$2 AND ($3::uuid IS NULL OR point_id = $3::uuid) LIMIT 1',
         [warehouseId, tenantID, pointId],
       );
@@ -157,7 +158,7 @@ export class ProductsService {
     }
     // Склад не указан → ОСНОВНОЙ склад филиала сессии (169).
     const params: unknown[] = [tenantID];
-    const { rows } = await this.pool.query(`SELECT ${mainWarehouseOfPointSql('$1', pointId, params)} AS id`, params);
+    const { rows } = await db.query(`SELECT ${mainWarehouseOfPointSql('$1', pointId, params)} AS id`, params);
     if (rows.length > 0 && rows[0].id) return rows[0].id as string;
 
     // НАБОРА СКЛАДОВ У ФИЛИАЛА ЕЩЁ НЕТ — САМОЛЕЧИМСЯ, А НЕ РОЖДАЕМ СИРОТУ.
@@ -168,9 +169,9 @@ export class ProductsService {
     // внутрь оставалась карточка товара — отсюда «товар есть, а на складе
     // его нет». Сеем набор тем же SQL, что и модуль складов, и перечитываем.
     if (tenantID === NO_TENANT_ID) return null; // sentinel-тенант не может владеть складом (FK)
-    await seedWarehousesForPoint(this.pool, tenantID, pointId);
+    await seedWarehousesForPoint(db, tenantID, pointId);
     const retryParams: unknown[] = [tenantID];
-    const { rows: retry } = await this.pool.query(
+    const { rows: retry } = await db.query(
       `SELECT ${mainWarehouseOfPointSql('$1', pointId, retryParams)} AS id`,
       retryParams,
     );
@@ -183,9 +184,14 @@ export class ProductsService {
    * конвенция, что у common/point-scope.assertRowPointForWrite). Без филиала
    * (тенант без филиалов) гейта нет.
    */
-  private async assertProductInPoint(id: string, tenantID: string, pointId: string | null): Promise<void> {
+  private async assertProductInPoint(
+    id: string,
+    tenantID: string,
+    pointId: string | null,
+    db: Pool | PoolClient = this.pool,
+  ): Promise<void> {
     if (!pointId) return;
-    const { rows } = await this.pool.query(
+    const { rows } = await db.query(
       `SELECT 1 FROM products p
         WHERE p.id = $1 AND p.tenant_id = $2
           AND EXISTS (SELECT 1 FROM warehouses wpt WHERE wpt.id = p.warehouse_id AND wpt.point_id = $3)`,
@@ -402,17 +408,20 @@ export class ProductsService {
   }
 
   async create(tenantID: string, dto: any, pointId: string | null = null, transaction?: PoolClient) {
+    const db = transaction ?? this.pool;
     // If a supplier is referenced, it must belong to the caller's tenant.
     if (dto.supplierId) {
-      await this.assertSupplierInTenant(dto.supplierId, tenantID);
+      await this.assertSupplierInTenant(dto.supplierId, tenantID, db);
     }
     // 169 — склад филиала сессии (явный или его основной).
-    const warehouseId = await this.resolveWarehouseId(tenantID, dto.warehouseId, { forCreate: true }, pointId);
+    const warehouseId = await this.resolveWarehouseId(tenantID, dto.warehouseId, { forCreate: true }, pointId, db);
     const warrantyDays = this.normalizeWarrantyDays(dto.warrantyDays);
     // 172 — адрес обязан быть ячейкой ТОГО ЖЕ склада (до любой записи).
-    const cell = dto.storageCellId ? await this.loadCellOfWarehouse(tenantID, dto.storageCellId, warehouseId) : null;
+    const cell = dto.storageCellId
+      ? await this.loadCellOfWarehouse(tenantID, dto.storageCellId, warehouseId, db)
+      : null;
     const photos = dto.photos === undefined ? productPhotos(undefined, dto.photo) : validateProductPhotos(dto.photos);
-    const { rows } = await (transaction ?? this.pool).query(
+    const { rows } = await db.query(
       `INSERT INTO products (name, category, photo, cost_price, sell_price, stock, min_stock, unit, is_bundle, bundle_items, supplier_id, tenant_id, warehouse_id, warranty_days, barcode, storage_cell_id, brand, article, packaging, photos)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) RETURNING *`,
       [
@@ -455,8 +464,9 @@ export class ProductsService {
     tenantID: string,
     cellId: string,
     warehouseId: string | null,
+    db: Pool | PoolClient = this.pool,
   ): Promise<{ id: string; code: string; name: string | null }> {
-    const { rows } = await this.pool.query(
+    const { rows } = await db.query(
       'SELECT id, code, name FROM storage_cells WHERE id = $1 AND tenant_id = $2 AND warehouse_id = $3::uuid',
       [cellId, tenantID, warehouseId],
     );
@@ -490,8 +500,12 @@ export class ProductsService {
     return s.length > 0 ? s : null;
   }
 
-  private async assertSupplierInTenant(supplierId: string, tenantID: string): Promise<void> {
-    const { rows } = await this.pool.query('SELECT 1 FROM suppliers WHERE id = $1 AND tenant_id = $2 LIMIT 1', [
+  private async assertSupplierInTenant(
+    supplierId: string,
+    tenantID: string,
+    db: Pool | PoolClient = this.pool,
+  ): Promise<void> {
+    const { rows } = await db.query('SELECT 1 FROM suppliers WHERE id = $1 AND tenant_id = $2 LIMIT 1', [
       supplierId,
       tenantID,
     ]);
@@ -512,9 +526,9 @@ export class ProductsService {
       throw new BadRequestException('Остаток меняется отдельной складской операцией');
     const db = transaction ?? this.pool;
     // 169 — товар чужого филиала не правится.
-    await this.assertProductInPoint(id, tenantID, pointId);
+    await this.assertProductInPoint(id, tenantID, pointId, db);
     if (dto.supplierId !== undefined && dto.supplierId !== null) {
-      await this.assertSupplierInTenant(dto.supplierId, tenantID);
+      await this.assertSupplierInTenant(dto.supplierId, tenantID, db);
     }
 
     // Get current prices (и остаток, склад) before update for price history
@@ -615,7 +629,7 @@ export class ProductsService {
     let finalWarehouseId: string | null = current.length > 0 ? (current[0].warehouse_id ?? null) : null;
     let warehouseChanged = false;
     if (dto.warehouseId !== undefined) {
-      const resolved = await this.resolveWarehouseId(tenantID, dto.warehouseId, {}, pointId);
+      const resolved = await this.resolveWarehouseId(tenantID, dto.warehouseId, {}, pointId, db);
       sets.push(`warehouse_id=$${idx++}`);
       vals.push(resolved);
       warehouseChanged = current.length > 0 && resolved !== finalWarehouseId;
@@ -635,7 +649,7 @@ export class ProductsService {
       sets.push('storage_cell_id=NULL');
     } else if (dto.storageCellId !== undefined) {
       if (current.length === 0) throw new NotFoundException({ message: 'Товар не найден' });
-      const cell = await this.loadCellOfWarehouse(tenantID, dto.storageCellId, finalWarehouseId);
+      const cell = await this.loadCellOfWarehouse(tenantID, dto.storageCellId, finalWarehouseId, db);
       sets.push(`storage_cell_id=$${idx++}`);
       vals.push(cell.id);
     } else if (warehouseChanged) {
@@ -1405,7 +1419,7 @@ export class ProductsService {
     const params: unknown[] = [tenantID];
     const pointFilter = warehousePointFilterSql('p', pointId, params);
     const { rows } = await this.pool.query(
-      `SELECT p.name, p.category, p.unit, p.sell_price, p.cost_price, p.stock, p.min_stock,
+      `SELECT p.name, p.category, p.unit, p.sell_price, COALESCE(p.assembly_exact_cost,p.cost_price) AS cost_price, p.stock, p.min_stock,
               sc.code AS storage_cell_code
        FROM products p ${CELL_JOIN_SQL}
        WHERE p.tenant_id = $1 AND p.deleted_at IS NULL${pointFilter}

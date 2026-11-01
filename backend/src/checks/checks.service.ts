@@ -1211,11 +1211,13 @@ export class ChecksService {
     if (!rows.length) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
     const check = await this.getById(id, tenantID, actor);
     if (!this.canSeeProfit(actor) && !userHasPermission(actor, 'warehouse_manage')) {
-      check.products = check.products.map((line: { costPrice: number; totalCost: number }) => ({
-        ...line,
-        costPrice: 0,
-        totalCost: 0,
-      }));
+      check.products = check.products.map(
+        (line: { costPrice: number; totalCost: number; kitExactUnitCost?: number }) => {
+          const safe = { ...line, costPrice: 0, totalCost: 0 };
+          delete safe.kitExactUnitCost;
+          return safe;
+        },
+      );
     }
     return check;
   }
@@ -1718,12 +1720,23 @@ export class ChecksService {
        WHERE pl.check_id=$1`,
       [id, tenantID],
     );
-    ch.kitSplits = row.kit_splits ?? [];
+    ch.kitSplits = (Array.isArray(row.kit_splits) ? row.kit_splits : []).map(
+      (intent: { intentId: string; productId: string; expectedRevision: number; quantity: number }) => ({
+        intentId: intent.intentId,
+        productId: intent.productId,
+        expectedRevision: intent.expectedRevision,
+        quantity: intent.quantity,
+      }),
+    );
     ch.products = prodRows.map((p) => ({
       id: p.id,
       productId: p.product_id,
-      kitSource: p.kit_source ?? undefined,
-      kitExactUnitCost: p.kit_exact_unit_cost == null ? undefined : Number(p.kit_exact_unit_cost),
+      kitSource: p.kit_source
+        ? { intentId: p.kit_source.intentId, sourceProductId: p.kit_source.sourceProductId }
+        : undefined,
+      ...((canSeeProfit || userHasPermission(actor, 'warehouse_manage')) && p.kit_exact_unit_cost != null
+        ? { kitExactUnitCost: Number(p.kit_exact_unit_cost) }
+        : {}),
       name: p.name,
       sellPrice: parseFloat(p.sell_price) || 0,
       costPrice: parseFloat(p.cost_price) || 0,

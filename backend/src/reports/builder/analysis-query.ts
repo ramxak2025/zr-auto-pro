@@ -121,7 +121,7 @@ export async function loadAnalysis(
         WHERE cr.tenant_id = $1
         GROUP BY cr.check_id, rl.product_line_id, rl.service_line_id
      ), product_base AS (
-       SELECT ch.*, pl.id AS line_id, pl.product_id, pl.name, pl.quantity, pl.total_sell, pl.total_cost,
+       SELECT ch.*, pl.id AS line_id, pl.product_id, pl.name, pl.quantity, pl.total_sell, pl.total_cost, pl.kit_exact_unit_cost,
               p.category, p.stock, COALESCE(r.qty, 0) AS returned_qty,
               COALESCE(r.amount, 0) AS returned_amount, COALESCE(r.qty_back, 0) AS qty_back,
               SUM(GREATEST(COALESCE(pl.total_sell, 0), 0)) OVER (PARTITION BY ch.id) AS sell_sum,
@@ -145,7 +145,9 @@ export async function loadAnalysis(
                   ELSE 0 END END AS revenue,
               CASE WHEN is_returned AND return_scope = 'full' AND return_destination = 'warehouse' THEN 0
                    ELSE total_cost - CASE WHEN quantity > 0
-                     THEN ROUND(total_cost * LEAST(qty_back, quantity) / quantity, 2) ELSE 0 END END AS cost
+                     THEN CASE WHEN qty_back>=quantity THEN total_cost
+                          WHEN kit_exact_unit_cost IS NOT NULL THEN ROUND(kit_exact_unit_cost*LEAST(qty_back,quantity),2)
+                          ELSE ROUND(total_cost * LEAST(qty_back, quantity) / quantity, 2) END ELSE 0 END END AS cost
          FROM product_base
      ), service_values AS (
        SELECT ch.id AS check_id, ch.day, 'service'::text AS kind,

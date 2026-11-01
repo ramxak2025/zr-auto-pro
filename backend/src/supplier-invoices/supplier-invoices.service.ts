@@ -618,8 +618,14 @@ export class SupplierInvoicesService {
       const row = await this.document(client, id, actor, true);
       this.writable(row, version);
       if (orderId) {
-        const order = await this.orders.getById(orderId, actor.tenantID, actorPointId(actor));
-        if (order.supplierId !== row.supplier_id || order.status === 'cancelled' || order.status === 'received')
+        const order = (
+          await client.query(
+            'SELECT id,supplier_id,status FROM purchase_orders WHERE id=$1 AND tenant_id=$2 AND ($3::uuid IS NULL OR point_id=$3)',
+            [orderId, actor.tenantID, actorPointId(actor)],
+          )
+        ).rows[0];
+        if (!order) throw new NotFoundException('Заказ не найден');
+        if (order.supplier_id !== row.supplier_id || order.status === 'cancelled' || order.status === 'received')
           throw new BadRequestException('Выберите открытый заказ этого поставщика');
       }
       await client.query(
