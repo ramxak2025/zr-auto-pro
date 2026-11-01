@@ -427,6 +427,8 @@ export interface CreateProductRequest {
   category?: string;
   /** Photo URL. Send `null` or `''` to store no photo. */
   photo?: string | null;
+  /** Ordered maximum four. Omit to preserve; [] removes all photos. */
+  photos?: string[];
   costPrice: number;
   sellPrice: number;
   stock: number;
@@ -460,6 +462,8 @@ export interface UpdateProductRequest {
    * with the previous photo. Omitting the field leaves the photo unchanged (#63).
    */
   photo?: string | null;
+  /** Ordered maximum four. Omit to preserve; [] removes all photos. */
+  photos?: string[];
   costPrice?: number;
   sellPrice?: number;
   stock?: number;

@@ -1,3 +1,4 @@
+import { productPhotos, validateProductPhotos } from './product-photos';
 import { lockMotivation } from '../motivation/motivation-rules';
 import {
   Injectable,
@@ -92,6 +93,7 @@ export class ProductsService {
       costPriceIsPlaceholder: canSeeCost ? row.cost_price_is_placeholder === true : undefined,
       category: row.category,
       photo: row.photo,
+      photos: productPhotos(row.photos, row.photo),
       // Себестоимость скрывается у тех, кто не управляет складом (см. canSeeCost).
       costPrice: canSeeCost ? parseFloat(row.cost_price) || 0 : 0,
       sellPrice: parseFloat(row.sell_price) || 0,
@@ -395,7 +397,7 @@ export class ProductsService {
     return this.mapProduct(rows[0], this.canSeeCost(actor));
   }
 
-  async create(tenantID: string, dto: any, pointId: string | null = null) {
+  async create(tenantID: string, dto: any, pointId: string | null = null, transaction?: PoolClient) {
     // If a supplier is referenced, it must belong to the caller's tenant.
     if (dto.supplierId) {
       await this.assertSupplierInTenant(dto.supplierId, tenantID);
@@ -405,13 +407,14 @@ export class ProductsService {
     const warrantyDays = this.normalizeWarrantyDays(dto.warrantyDays);
     // 172 — адрес обязан быть ячейкой ТОГО ЖЕ склада (до любой записи).
     const cell = dto.storageCellId ? await this.loadCellOfWarehouse(tenantID, dto.storageCellId, warehouseId) : null;
-    const { rows } = await this.pool.query(
-      `INSERT INTO products (name, category, photo, cost_price, sell_price, stock, min_stock, unit, is_bundle, bundle_items, supplier_id, tenant_id, warehouse_id, warranty_days, barcode, storage_cell_id, brand, article, packaging)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) RETURNING *`,
+    const photos = dto.photos === undefined ? productPhotos(undefined, dto.photo) : validateProductPhotos(dto.photos);
+    const { rows } = await (transaction ?? this.pool).query(
+      `INSERT INTO products (name, category, photo, cost_price, sell_price, stock, min_stock, unit, is_bundle, bundle_items, supplier_id, tenant_id, warehouse_id, warranty_days, barcode, storage_cell_id, brand, article, packaging, photos)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) RETURNING *`,
       [
         dto.name,
         dto.category,
-        this.normalizePhoto(dto.photo),
+        photos[0] ?? null,
         dto.costPrice || 0,
         dto.sellPrice || 0,
         dto.stock || 0,
@@ -428,6 +431,7 @@ export class ProductsService {
         dto.brand?.trim() ?? '',
         dto.article?.trim() ?? '',
         dto.packaging?.trim() ?? '',
+        JSON.stringify(photos),
       ],
     );
     return this.mapProduct({
@@ -555,10 +559,12 @@ export class ProductsService {
       sets.push(`category=$${idx++}`);
       vals.push(dto.category);
     }
-    if (dto.photo !== undefined) {
-      // #63 — REPLACE the photo with exactly what the client sent. An explicit
-      // null / '' / blank clears it to NULL (a removed photo is gone); a URL is
-      // stored as-is. Omitting `photo` leaves the current value untouched.
+    if (dto.photos !== undefined) {
+      const photos = validateProductPhotos(dto.photos);
+      sets.push(`photos=$${idx++}`, `photo=$${idx++}`);
+      vals.push(JSON.stringify(photos), photos[0] ?? null);
+    } else if (dto.photo !== undefined) {
+      // The DB trigger replaces/removes the cover and preserves the other photos.
       sets.push(`photo=$${idx++}`);
       vals.push(this.normalizePhoto(dto.photo));
     }

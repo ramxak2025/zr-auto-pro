@@ -861,6 +861,10 @@ export function createProductsApi(api: HttpClient) {
       }>('/products/warehouse-stats'),
     getById: (id: string) => api.get<Product>(`/products/${id}`),
     create: (data: CreateProductRequest) => api.post<Product>('/products', data),
+    usedIntake: (data: Omit<CreateProductRequest, 'stock' | 'supplierId' | 'isBundle' | 'bundleItems'> & { quantity: number; requestId: string }) =>
+      api.post<{ product: Product; requestId: string }>('/products/used-intake', data),
+    createShare: (id: string) => api.post<{ token: string; path: string }>(`/products/${id}/share`, {}),
+    revokeShare: (id: string) => api.delete<{ revoked: boolean }>(`/products/${id}/share`),
     update: (id: string, data: UpdateProductRequest) => api.patch<Product>(`/products/${id}`, data),
     /** Set just the sell price on an existing product. */
     setSellPrice: (id: string, sellPrice: number) => api.patch<Product>(`/products/${id}/sell-price`, { sellPrice }),

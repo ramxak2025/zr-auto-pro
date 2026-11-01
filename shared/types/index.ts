@@ -1899,6 +1899,8 @@ export interface Product {
   name: string;
   category?: string;
   photo?: string;
+  /** Ordered pictures (maximum four); photo remains the cover for older clients. */
+  photos?: string[];
   costPrice: number;
   sellPrice: number;
   stock: number;

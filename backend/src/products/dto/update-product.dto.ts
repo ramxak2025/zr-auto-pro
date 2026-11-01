@@ -1,4 +1,15 @@
-import { IsString, IsOptional, IsNumber, IsBoolean, IsArray, IsInt, IsUUID, Min } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsNumber,
+  IsBoolean,
+  IsArray,
+  IsInt,
+  IsUUID,
+  Min,
+  ArrayMaxSize,
+  ArrayUnique,
+} from 'class-validator';
 
 export class UpdateProductDto {
   @IsOptional() @IsString() brand?: string;
@@ -18,6 +29,13 @@ export class UpdateProductDto {
   @IsString()
   @IsOptional()
   photo?: string | null;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(4)
+  @ArrayUnique()
+  @IsString({ each: true })
+  photos?: string[];
 
   // Сообщения валидации — по-русски: клиенты показывают текст сервера
   // пользователю дословно (mobile utils/apiError.ts, web toast'ы), английский

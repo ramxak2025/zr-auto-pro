@@ -1,3 +1,6 @@
+import { ProductSharingService } from './product-sharing.service';
+import { UsedIntakeService } from './used-intake.service';
+import { UsedIntakeDto } from './dto/used-intake.dto';
 import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards, Res } from '@nestjs/common';
 import { Response } from 'express';
 import { ProductsService } from './products.service';
@@ -24,7 +27,11 @@ import { BulkAssignCellDto } from './dto/bulk-assign-cell.dto';
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('products')
 export class ProductsController {
-  constructor(private productsService: ProductsService) {}
+  constructor(
+    private productsService: ProductsService,
+    private sharing: ProductSharingService,
+    private usedIntake: UsedIntakeService,
+  ) {}
 
   @Get()
   getAll(@CurrentUser() user: JwtPayload, @Query() query: any) {
@@ -143,6 +150,24 @@ export class ProductsController {
   @Delete(':id/hard')
   hardDelete(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.productsService.hardDelete(id, user.tenantID, actorPointId(user));
+  }
+
+  @RequirePermission('warehouse_manage')
+  @Post('used-intake')
+  createUsed(@CurrentUser() user: JwtPayload, @Body() dto: UsedIntakeDto) {
+    return this.usedIntake.create(dto, user);
+  }
+
+  @RequirePermission('warehouse_manage')
+  @Post(':id/share')
+  share(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.sharing.create(id, user);
+  }
+
+  @RequirePermission('warehouse_manage')
+  @Delete(':id/share')
+  revokeShare(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.sharing.revoke(id, user);
   }
 
   @Get(':id')
