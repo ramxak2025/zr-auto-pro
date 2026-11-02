@@ -1,7 +1,7 @@
 import { colors } from '../theme';
 import React, { useEffect, useRef, useState } from 'react';
 import { View, TextInput } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from '../utils/environmentStorage';
 import { randomUUID } from 'expo-crypto';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';

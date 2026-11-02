@@ -1,7 +1,7 @@
 import React from 'react';
 import type { Product } from '../../../../shared/types';
 import type { SupplierInvoiceDocument } from '../../../../shared/api/supplierInvoices';
-import { setDataSession } from '../../contexts/dataSession';
+import { captureDataSession, setDataSession } from '../../contexts/dataSession';
 import { getProductPickerSession } from '../../utils/productPickerSession';
 
 const mockStates: unknown[] = [],
@@ -75,6 +75,8 @@ const mockCamera = jest.fn(),
   mockRecompose = jest.fn(),
   mockUpdateRecipe = jest.fn();
 const mockAlert = jest.fn(),
+  mockToast = jest.fn(),
+  mockDisassemble = jest.fn(),
   mockInvalidate = jest.fn();
 
 jest.mock('react', () => ({
@@ -125,6 +127,10 @@ jest.mock('expo-image-picker', () => ({
 jest.mock('expo-crypto', () => ({
   randomUUID: () => `00000000-0000-4000-8000-${String(++mockRequest).padStart(12, '0')}`,
 }));
+jest.mock('expo-constants', () => ({
+  __esModule: true,
+  default: { expoConfig: { extra: { inventoryInternal: 'ios-v1' } } },
+}));
 jest.mock('@react-native-async-storage/async-storage', () => ({
   __esModule: true,
   default: {
@@ -155,16 +161,18 @@ jest.mock('@tanstack/react-query', () => ({
           ? undefined
           : queryKey[0] === 'products'
             ? [mockProduct]
-            : queryKey[0] === 'kit-recipe'
-              ? {
-                  id: 'recipe',
-                  version: 1,
-                  name: 'Старый состав',
-                  components: mockRecipeComponents ?? [{ productId: mockProduct.id, quantity: 1.5 }],
-                }
-              : queryKey[0] === 'warehouses'
-                ? mockWarehouses
-                : [],
+            : queryKey[0] === 'product-kit'
+              ? { quantity: 5, revision: 7, components: [] }
+              : queryKey[0] === 'kit-recipe'
+                ? {
+                    id: 'recipe',
+                    version: 1,
+                    name: 'Старый состав',
+                    components: mockRecipeComponents ?? [{ productId: mockProduct.id, quantity: 1.5 }],
+                  }
+                : queryKey[0] === 'warehouses'
+                  ? mockWarehouses
+                  : [],
       isPending: false,
       isError: false,
       refetch: jest.fn(),
@@ -184,7 +192,13 @@ jest.mock('../../api/services', () => ({
     addManualLine: mockManualLine,
     setOrder: jest.fn(),
   },
-  productKitsApi: { updateRecipe: mockUpdateRecipe, assemble: mockAssemble, recompose: mockRecompose, get: jest.fn() },
+  productKitsApi: {
+    updateRecipe: mockUpdateRecipe,
+    assemble: mockAssemble,
+    recompose: mockRecompose,
+    disassemble: mockDisassemble,
+    get: jest.fn(),
+  },
   productsApi: { getById: mockProductGet },
   purchaseOrdersApi: {},
   warehousesApi: {},
@@ -215,9 +229,14 @@ jest.mock('../../components/BottomSheet', () => ({ BottomSheet: 'BottomSheet' })
 jest.mock('../../components/DateTimePickerModal', () => ({ __esModule: true, default: 'DatePicker' }));
 jest.mock('../../components/ConfirmDialog', () => ({ __esModule: true, default: 'ConfirmDialog' }));
 jest.mock('../../components/Button', () => ({ Button: 'Button' }));
+jest.mock('../../components/Toast', () => ({ showToast: mockToast }));
 
 const InvoiceScreen = jest.requireActual<{ default: () => React.ReactNode }>('../SupplierInvoiceScreen').default;
 const KitScreen = jest.requireActual<{ default: () => React.ReactNode }>('../ProductKitComposerScreen').default;
+const KitPanelComponent = jest.requireActual<{
+  default: (props: { product: Product; canManage: boolean }) => React.ReactNode;
+}>('../../components/ProductKitPanel').default;
+const KitPanel = () => KitPanelComponent({ product: mockProduct, canManage: true });
 const RecipePreview = jest.requireActual<{
   KitRecipeComposition: (props: { recipeId: string; version: number }) => React.ReactNode;
 }>('../../components/ProductKitRecipes').KitRecipeComposition;
@@ -269,6 +288,9 @@ const resetHooks = () => {
   mockCleanup.length = 0;
   mockIndex = 0;
 };
+const INTERNAL_PREFIX = 'autexa_inventory_internal_v1.';
+const draftKey = (kind: 'invoice-review' | 'kit-draft' | 'kit-disassembly', id: string) =>
+  `autexa.${kind}.v1:${captureDataSession().key}:${id}`;
 
 beforeEach(() => {
   resetHooks();
@@ -369,6 +391,7 @@ beforeEach(() => {
     },
   );
   mockAssemble.mockResolvedValue({ data: { productId: 'assembled-product' } });
+  mockDisassemble.mockResolvedValue({ data: {} });
 });
 afterEach(resetHooks);
 
@@ -379,13 +402,23 @@ it('native explicit suggestion confirmation remembers the name without receiving
   await press(InvoiceScreen, 'Распознать накладную');
   expect(mockMap).not.toHaveBeenCalled();
   await press(InvoiceScreen, `Подтвердить: ${mockProduct.name}`);
-  expect(mockMap).toHaveBeenCalledWith(mockDocument.id, 'line', expect.objectContaining({ productId: mockProduct.id, remember: true }));
+  expect(mockMap).toHaveBeenCalledWith(
+    mockDocument.id,
+    'line',
+    expect.objectContaining({ productId: mockProduct.id, remember: true }),
+  );
+  expect(mockToast).toHaveBeenCalledWith('Название поставщика сохранено', 'success');
+  expect(mockAlert).not.toHaveBeenCalled();
   expect(mockConfirm).not.toHaveBeenCalled();
 });
 
 it('native invoice camera preserves the full page, uses authenticated previews, maps explicitly and receives once after confirmation', async () => {
+  const key = draftKey('invoice-review', 'supplier');
+  const production = JSON.stringify({ documentId: 'production-document', requestId: 'production-pending' });
+  mockStorage.set(key, production);
   render(InvoiceScreen);
   await flush();
+  expect(mockGet).not.toHaveBeenCalled();
   await press(InvoiceScreen, 'Сфотографировать');
   expect(mockCamera).toHaveBeenCalledWith(expect.objectContaining({ allowsEditing: false, quality: 1 }));
   const image = nodes(render(InvoiceScreen)).find((node) => node.type === 'Image')!;
@@ -400,6 +433,8 @@ it('native invoice camera preserves the full page, uses authenticated previews, 
     'line',
     expect.objectContaining({ productId: mockProduct.id, remember: true }),
   );
+  expect(mockToast).toHaveBeenCalledWith('Название поставщика сохранено', 'success');
+  expect(mockAlert).not.toHaveBeenCalled();
   expect(mockConfirm).not.toHaveBeenCalled();
   field(InvoiceScreen, 'Количество — Фильтр поставщика', '12,5');
   await press(InvoiceScreen, 'Проверить и принять');
@@ -407,6 +442,9 @@ it('native invoice camera preserves the full page, uses authenticated previews, 
   const acknowledgement = nodes(render(InvoiceScreen)).find(
     (node) => node.props.accessibilityLabel === 'Количество и цены проверены в единицах склада',
   )!;
+  await flush();
+  expect(JSON.parse(mockStorage.get(INTERNAL_PREFIX + key)!)).toMatchObject({ documentId: mockDocument.id });
+  expect(mockStorage.get(key)).toBe(production);
   (acknowledgement.props.onPress as () => void)();
   const reviewBeforeLastEdit = button(InvoiceScreen, 'Проверить и принять').props.onPress as () => void;
   field(InvoiceScreen, 'Количество — Фильтр поставщика', '13,5');
@@ -427,6 +465,8 @@ it('native invoice camera preserves the full page, uses authenticated previews, 
     unitConfirmed: true,
   });
   expect(mockNavigation.replace).toHaveBeenCalledWith('SupplierDetail', { id: 'supplier', openDeliveryId: 'delivery' });
+  expect(mockStorage.has(INTERNAL_PREFIX + key)).toBe(false);
+  expect(mockStorage.get(key)).toBe(production);
 });
 
 it('closing native invoice while permission is pending prevents late camera/upload/receipt actions', async () => {
@@ -503,6 +543,7 @@ it('native review excludes/restores OCR noise and explicitly retries a frozen ma
   await press(InvoiceScreen, 'Повторить добавление');
   expect(mockManualLine.mock.calls[1][1]).toEqual(first);
   expect(mockMap).not.toHaveBeenCalled();
+  expect(mockToast).not.toHaveBeenCalled();
   await press(InvoiceScreen, 'Проверить и принять');
   await confirm(InvoiceScreen);
   expect(mockConfirm.mock.calls[0][1].items).toEqual([
@@ -517,8 +558,14 @@ it('native review excludes/restores OCR noise and explicitly retries a frozen ma
 });
 
 it('native kit composer uses the canonical picker and sends a fractional recipe only after explicit confirmation', async () => {
+  const key = draftKey('kit-draft', 'main');
+  const production = JSON.stringify({ name: 'Рабочий комплект', requestId: 'production-pending', lines: [] });
+  mockStorage.set(key, production);
   render(KitScreen);
   await flush();
+  expect(
+    nodes(render(KitScreen)).find((node) => node.props.accessibilityLabel === 'Название комплекта')!.props.value,
+  ).toBe('');
   field(KitScreen, 'Название комплекта', 'Комплект ТО');
   field(KitScreen, 'Количество комплектов', '2');
   field(KitScreen, 'Цена комплекта', '123,45');
@@ -532,6 +579,13 @@ it('native kit composer uses the canonical picker and sends a fractional recipe 
   reviewBeforeLastEdit();
   await flush();
   expect(mockAssemble).not.toHaveBeenCalled();
+  render(KitScreen);
+  await flush();
+  expect(JSON.parse(mockStorage.get(INTERNAL_PREFIX + key)!)).toMatchObject({
+    name: 'Комплект ТО',
+    pending: { quantity: 2, components: [{ productId: mockProduct.id, quantity: 1.5 }] },
+  });
+  expect(mockStorage.get(key)).toBe(production);
   await confirm(KitScreen);
   expect(mockAssemble).toHaveBeenCalledTimes(1);
   expect(mockAssemble.mock.calls[0][0]).toEqual(
@@ -543,6 +597,35 @@ it('native kit composer uses the canonical picker and sends a fractional recipe 
     }),
   );
   expect(mockNavigation.replace).toHaveBeenCalledWith('ProductDetail', { productId: 'assembled-product' });
+  expect(mockStorage.has(INTERNAL_PREFIX + key)).toBe(false);
+  expect(mockStorage.get(key)).toBe(production);
+});
+
+it('internal kit disassembly restores and retries only its own frozen request while preserving a same-ID public intent', async () => {
+  const key = draftKey('kit-disassembly', mockProduct.id);
+  const production = JSON.stringify({ requestId: 'production-pending', expectedRevision: 99, quantity: 4 });
+  mockStorage.set(key, production);
+  render(KitPanel);
+  await flush();
+  expect(
+    nodes(render(KitPanel)).find((node) => node.props.accessibilityLabel === 'Количество комплектов к разборке')!.props
+      .value,
+  ).toBe('1');
+  mockDisassemble.mockRejectedValueOnce(new Error('fixture offline'));
+  await press(KitPanel, 'Подтвердить разборку');
+  const frozen = mockDisassemble.mock.calls[0][1];
+  expect(frozen).toMatchObject({ quantity: 1, expectedRevision: 7 });
+  expect(frozen.requestId).not.toBe('production-pending');
+  expect(JSON.parse(mockStorage.get(INTERNAL_PREFIX + key)!)).toEqual(frozen);
+  expect(mockStorage.get(key)).toBe(production);
+  resetHooks();
+  render(KitPanel);
+  await flush();
+  expect(mockDisassemble).toHaveBeenCalledTimes(1);
+  await press(KitPanel, 'Подтвердить разборку');
+  expect(mockDisassemble.mock.calls[1][1]).toEqual(frozen);
+  expect(mockStorage.has(INTERNAL_PREFIX + key)).toBe(false);
+  expect(mockStorage.get(key)).toBe(production);
 });
 
 it('a prepared kit confirmation from the previous account cannot dispatch in a new session', async () => {

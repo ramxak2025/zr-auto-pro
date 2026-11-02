@@ -2,7 +2,7 @@ import { BottomSheet } from '../components/BottomSheet';
 import { colors } from '../theme';
 import React, { useEffect, useRef, useState } from 'react';
 import { View, TextInput, Pressable, StyleSheet } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from '../utils/environmentStorage';
 import { randomUUID } from 'expo-crypto';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';

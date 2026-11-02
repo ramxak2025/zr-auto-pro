@@ -2,7 +2,7 @@ import { colors } from '../theme';
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Image, Modal as NativeModal, Pressable, TextInput, View, StyleSheet } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from '../utils/environmentStorage';
 import { randomUUID } from 'expo-crypto';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -47,6 +47,7 @@ import { BottomSheet } from '../components/BottomSheet';
 import DateTimePickerModal from '../components/DateTimePickerModal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { Button } from '../components/Button';
+import { showToast } from '../components/Toast';
 import { Text } from '../platform/Typography';
 
 export default function SupplierInvoiceScreen() {
@@ -237,7 +238,7 @@ export default function SupplierInvoiceScreen() {
       if (current()) {
         apply(result.data);
         setRows((previous) => ({ ...previous, [lineId]: { ...previous[lineId], unitAcknowledged: false } }));
-        if (rememberAlias) Alert.alert('Соответствие сохранено', 'Название запомнено только для этого поставщика.');
+        if (rememberAlias) showToast('Название поставщика сохранено', 'success');
       }
     });
   const bridge: ProductPickerBridge = {

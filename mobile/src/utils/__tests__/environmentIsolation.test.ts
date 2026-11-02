@@ -4,8 +4,45 @@ import {
   type EnvironmentStorage,
 } from '../environmentStorageAdapter';
 import { createAccountRegistry, activeAccount, ACCOUNT_REGISTRY_KEY } from '../../contexts/accountRegistry';
+import fs from 'node:fs';
+import path from 'node:path';
+import ts from 'typescript';
 
 const PREFIX = 'autexa_inventory_internal_v1.';
+
+it('production business modules access AsyncStorage only through the environment seam', () => {
+  const src = path.resolve(__dirname, '../..');
+  const allowed = new Set(['contexts/ThemeContext.tsx', 'utils/environmentStorage.ts']);
+  const bypasses: string[] = [];
+  const rawStorage = /^@react-native-async-storage\/async-storage(?:\/|$)/;
+  const scan = (filename: string) => {
+    if (fs.statSync(filename).isDirectory()) {
+      if (path.basename(filename) !== '__tests__')
+        for (const child of fs.readdirSync(filename)) scan(path.join(filename, child));
+      return;
+    }
+    if (!/\.[jt]sx?$/.test(filename) || allowed.has(path.relative(src, filename))) return;
+    const ast = ts.createSourceFile(filename, fs.readFileSync(filename, 'utf8'), ts.ScriptTarget.Latest, true);
+    const visit = (node: ts.Node) => {
+      const specifier =
+        ts.isImportDeclaration(node) || ts.isExportDeclaration(node)
+          ? node.moduleSpecifier
+          : ts.isCallExpression(node) &&
+              (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+                (ts.isIdentifier(node.expression) && node.expression.text === 'require'))
+            ? node.arguments[0]
+            : undefined;
+      if (specifier && ts.isStringLiteral(specifier) && rawStorage.test(specifier.text))
+        bypasses.push(path.relative(src, filename));
+      ts.forEachChild(node, visit);
+    };
+    visit(ast);
+  };
+  scan(src);
+  scan(path.resolve(src, '../App.tsx'));
+  scan(path.resolve(src, '../index.js'));
+  expect(bypasses).toEqual([]);
+});
 function disk() {
   const values = new Map<string, string>();
   const storage: EnvironmentStorage = {
