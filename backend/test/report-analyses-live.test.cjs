@@ -53,8 +53,8 @@ async function fixture(work) {
         service_salary_total numeric DEFAULT 999, product_salary_total numeric DEFAULT 99,
         is_returned boolean DEFAULT false, return_scope text, return_destination text,
         is_deferred boolean DEFAULT false, deleted_at timestamptz, payment_method text DEFAULT 'cash');
-      CREATE TEMP TABLE products(id uuid PRIMARY KEY, tenant_id uuid, name text, category text, stock numeric, cost_price numeric);
-      CREATE TEMP TABLE check_product_lines(id uuid PRIMARY KEY, check_id uuid, product_id uuid, name text, quantity numeric, total_sell numeric, total_cost numeric);
+      CREATE TEMP TABLE products(id uuid PRIMARY KEY, tenant_id uuid, name text, category text, stock numeric, cost_price numeric, assembly_exact_cost numeric(15,5));
+      CREATE TEMP TABLE check_product_lines(id uuid PRIMARY KEY, check_id uuid, product_id uuid, name text, quantity numeric, total_sell numeric, total_cost numeric, kit_exact_unit_cost numeric(15,5));
       CREATE TEMP TABLE check_service_lines(id uuid PRIMARY KEY, check_id uuid, service_id uuid, name text, quantity numeric DEFAULT 1, total numeric);
       CREATE TEMP TABLE check_returns(id uuid PRIMARY KEY, check_id uuid, tenant_id uuid, destination text);
       CREATE TEMP TABLE check_return_lines(return_id uuid, product_line_id uuid, service_line_id uuid, quantity numeric, amount numeric);
@@ -84,7 +84,7 @@ async function fixture(work) {
     };
     const product = async (checkId, name, quantity, revenue, cost, productId = null) => {
       const id = randomUUID();
-      await db.query('INSERT INTO check_product_lines VALUES($1,$2,$3,$4,$5,$6,$7)', [
+      await db.query('INSERT INTO check_product_lines(id,check_id,product_id,name,quantity,total_sell,total_cost) VALUES($1,$2,$3,$4,$5,$6,$7)', [
         id,
         checkId,
         productId,
@@ -131,7 +131,7 @@ test(
   async () =>
     fixture(async ({ db, ctx, check, product, service, returned }) => {
       const catalogId = randomUUID();
-      await db.query("INSERT INTO products VALUES($1,$2,'Changed catalogue name','Folder',99,9999)", [
+      await db.query("INSERT INTO products(id,tenant_id,name,category,stock,cost_price) VALUES($1,$2,'Changed catalogue name','Folder',99,9999)", [
         catalogId,
         ctx.tenantId,
       ]);
@@ -320,11 +320,11 @@ test(
     fixture(async ({ db, ctx, check }) => {
       const ch = await check({ revenue: 1001, cost: 500.5, productTotal: 1001 });
       await db.query(
-        `INSERT INTO products SELECT gen_random_uuid(), $1, 'Product ' || lpad(i::text, 4, '0'), NULL, 1, 1 FROM generate_series(1,1001) i`,
+        `INSERT INTO products(id,tenant_id,name,category,stock,cost_price) SELECT gen_random_uuid(), $1, 'Product ' || lpad(i::text, 4, '0'), NULL, 1, 1 FROM generate_series(1,1001) i`,
         [ctx.tenantId],
       );
       await db.query(
-        `INSERT INTO check_product_lines SELECT gen_random_uuid(), $1, id, name, 1, 1, 0.5 FROM products`,
+        `INSERT INTO check_product_lines(id,check_id,product_id,name,quantity,total_sell,total_cost) SELECT gen_random_uuid(), $1, id, name, 1, 1, 0.5 FROM products`,
         [ch],
       );
       let queries = 0;
@@ -382,7 +382,7 @@ test(
     fixture(async ({ db, ctx, check, product, returned }) => {
       const ids = Array.from({ length: 4 }, () => randomUUID());
       for (let i = 0; i < ids.length; i += 1) {
-        await db.query("INSERT INTO products VALUES($1,$2,$3,'Folder',1,$4)", [
+        await db.query("INSERT INTO products(id,tenant_id,name,category,stock,cost_price) VALUES($1,$2,$3,'Folder',1,$4)", [
           ids[i],
           ctx.tenantId,
           'Stock ' + i,
@@ -397,7 +397,7 @@ test(
       await product(ch, 'C snapshot', 1, 5, 3, ids[2]);
       // Excluded catalogue ID, tenant, point and instant must not move the ABC thresholds.
       const excluded = randomUUID();
-      await db.query("INSERT INTO products VALUES($1,$2,'Not selected','Folder',1,999)", [excluded, ctx.tenantId]);
+      await db.query("INSERT INTO products(id,tenant_id,name,category,stock,cost_price) VALUES($1,$2,'Not selected','Folder',1,999)", [excluded, ctx.tenantId]);
       ch = await check({ revenue: 999, productTotal: 999 });
       await product(ch, 'Not selected', 1, 999, 0, excluded);
       for (const extra of [{ point_id: randomUUID() }, { tenant_id: randomUUID() }, { date: '2026-10-01T08:59:59Z' }]) {

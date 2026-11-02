@@ -1,3 +1,4 @@
+import { KitRecipeComposition } from '../components/ProductKitRecipes';
 /**
  * TemplateEditorScreen — создание / правка шаблона чека (пушится из
  * TemplatesScreen; зарегистрирован и в MoreStack, и на корневом стеке —
@@ -28,7 +29,7 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import IosScreenHeader from '../components/IosScreenHeader';
 import Modal from '../components/Modal';
 import { KeyboardAwareView } from '../components/KeyboardAware';
-import { checkTemplatesApi, servicesApi, productsApi } from '../api/services';
+import { checkTemplatesApi, servicesApi, productsApi, productKitsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
@@ -63,13 +64,17 @@ interface EditorServiceLine {
 }
 
 interface EditorProductLine {
+  pendingKitBinding?: boolean;
+  kind?: 'kitRecipe';
+  kitRecipeId?: string;
+  kitRecipeVersion?: number;
   sourceTemplateProduct?: CheckTemplate['products'][number]['sourceTemplateProduct'];
   productId?: string;
   name: string;
-  sellPrice: number;
+  sellPrice?: number;
   costPrice?: number;
   costStatus?: 'known' | 'unknown';
-  catalogStatus?: 'current' | 'unavailable' | 'manual';
+  catalogStatus?: CheckTemplate['products'][number]['catalogStatus'];
   quantity: number;
 }
 
@@ -84,6 +89,7 @@ export default function TemplateEditorScreen() {
   const { user, hasPermission } = useAuth();
   const catalogOwner = user?.role === 'director' || user?.role === 'superadmin';
   const canManageShared = hasPermission('templates_shared_manage');
+  const canReadKitRecipes = hasPermission('warehouse_access');
 
   const templateId: string | undefined = route.params?.templateId;
   const isEditing = !!templateId;
@@ -143,9 +149,12 @@ export default function TemplateEditorScreen() {
     );
     setProductLines(
       (template.products || []).map((p) => ({
+        kind: p.kind,
+        kitRecipeId: p.kitRecipeId,
+        kitRecipeVersion: p.kitRecipeVersion,
         productId: p.productId,
         name: p.name,
-        sellPrice: p.sellPrice ?? 0,
+        sellPrice: p.sellPrice,
         costPrice: p.costPrice,
         sourceTemplateProduct: p.sourceTemplateProduct,
         costStatus: p.costStatus,
@@ -230,33 +239,132 @@ export default function TemplateEditorScreen() {
     ]);
   };
 
-  const addProduct = (p: Product) => {
-    haptic('tap');
-    setProductLines((lines) => {
-      const idx = lines.findIndex((l) => l.productId === p.id);
-      if (idx >= 0) {
-        const next = [...lines];
-        next[idx] = { ...next[idx], quantity: next[idx].quantity + 1 };
-        return next;
+  const addProduct = async (selected: Product) => {
+    try {
+      const p = selected.assemblyId === undefined ? (await productsApi.getById(selected.id)).data : selected;
+      if (p.assemblyId && canReadKitRecipes) {
+        const kit = (await productKitsApi.get(p.id)).data;
+        setProductLines((lines) => {
+          const index = lines.findIndex(
+            (line) =>
+              line.kind === 'kitRecipe' &&
+              line.kitRecipeId === kit.recipeId &&
+              line.kitRecipeVersion === kit.recipeVersion,
+          );
+          return index < 0
+            ? [
+                ...lines,
+                {
+                  kind: 'kitRecipe',
+                  kitRecipeId: kit.recipeId,
+                  kitRecipeVersion: kit.recipeVersion,
+                  name: kit.name,
+                  quantity: 1,
+                  costStatus: 'unknown',
+                },
+              ]
+            : lines.map((line, i) =>
+                i === index
+                  ? {
+                      ...line,
+                      quantity: line.quantity + 1,
+                      productId: undefined,
+                      sourceTemplateProduct: undefined,
+                      sellPrice: undefined,
+                      costPrice: undefined,
+                      costStatus: 'unknown',
+                    }
+                  : line,
+              );
+        });
+      } else {
+        setProductLines((lines) => {
+          const index = lines.findIndex((line) => line.kind !== 'kitRecipe' && line.productId === p.id);
+          return index < 0
+            ? [
+                ...lines,
+                {
+                  productId: p.id,
+                  name: p.name,
+                  sellPrice: p.assemblyId ? undefined : p.sellPrice,
+                  costPrice: !p.assemblyId && canSeeCost ? p.costPrice : undefined,
+                  costStatus: p.assemblyId ? 'unknown' : canSeeCost ? 'known' : undefined,
+                  ...(p.assemblyId ? { pendingKitBinding: true } : {}),
+                  quantity: 1,
+                },
+              ]
+            : lines.map((line, i) => (i === index ? { ...line, quantity: line.quantity + 1 } : line));
+        });
       }
-      return [
-        ...lines,
-        {
-          productId: p.id,
-          name: p.name,
-          sellPrice: p.sellPrice ?? 0,
-          costPrice: canSeeCost ? p.costPrice : undefined,
-          costStatus: canSeeCost ? 'known' : undefined,
-          quantity: 1,
-        },
-      ];
-    });
+      haptic('tap');
+    } catch {
+      Alert.alert('Товар не добавлен', 'Не удалось проверить состав. Подключитесь к сети и повторите.');
+    }
+  };
+
+  const replaceRecipeVersion = async (index: number, line: EditorProductLine) => {
+    if (!canReadKitRecipes || viewOnly) return;
+    try {
+      const latest = (await productKitsApi.recipe(line.kitRecipeId!)).data;
+      if (latest.version === line.kitRecipeVersion) {
+        Alert.alert('Состав актуален', `Используется версия ${latest.version}.`);
+        return;
+      }
+      const names = await Promise.all(
+        latest.components.map(
+          async (component) => `${(await productsApi.getById(component.productId)).data.name} × ${component.quantity}`,
+        ),
+      );
+      Alert.alert(
+        'Заменить версию состава?',
+        `Версия ${line.kitRecipeVersion} → ${latest.version}\n${names.join('\n')}`,
+        [
+          { text: 'Отмена', style: 'cancel' },
+          {
+            text: 'Заменить',
+            onPress: () =>
+              setProductLines((lines) =>
+                lines.map((item, i) =>
+                  i === index && item === line
+                    ? {
+                        kind: 'kitRecipe',
+                        kitRecipeId: latest.id,
+                        kitRecipeVersion: latest.version,
+                        name: latest.name,
+                        quantity: line.quantity,
+                        costStatus: 'unknown',
+                      }
+                    : item,
+                ),
+              ),
+          },
+        ],
+      );
+    } catch {
+      Alert.alert('Состав не заменён', 'Не удалось загрузить новую версию. Повторите.');
+    }
   };
 
   const patchServiceLine = (idx: number, patch: Partial<EditorServiceLine>) =>
     setServiceLines((lines) => lines.map((l, i) => (i === idx ? { ...l, ...patch } : l)));
   const patchProductLine = (idx: number, patch: Partial<EditorProductLine>) =>
-    setProductLines((lines) => lines.map((l, i) => (i === idx ? { ...l, ...patch } : l)));
+    setProductLines((lines) =>
+      lines.map((line, i) =>
+        i !== idx
+          ? line
+          : line.kind === 'kitRecipe'
+            ? {
+                ...line,
+                ...patch,
+                productId: undefined,
+                sourceTemplateProduct: undefined,
+                sellPrice: undefined,
+                costPrice: undefined,
+                costStatus: 'unknown',
+              }
+            : { ...line, ...patch },
+      ),
+    );
 
   // ── Итоги ───────────────────────────────────────────────────────────────────
 
@@ -266,10 +374,13 @@ export default function TemplateEditorScreen() {
     [serviceLines],
   );
   const productsTotal = useMemo(
-    () => productLines.reduce((sum, l) => sum + l.sellPrice * l.quantity, 0),
+    () =>
+      productLines.some((line) => line.sellPrice === undefined)
+        ? undefined
+        : productLines.reduce((sum, l) => sum + l.sellPrice! * l.quantity, 0),
     [productLines],
   );
-  const grandTotal = servicesTotal + productsTotal;
+  const grandTotal = productsTotal === undefined ? undefined : servicesTotal + productsTotal;
   const canSeeCost = hasPermission('warehouse_manage');
   const productCostTotal = templateProductsCost(productLines);
 
@@ -316,6 +427,9 @@ export default function TemplateEditorScreen() {
         price: parsePrice(l.priceText),
       }));
       const products = productLines.map((l) => ({
+        kind: l.kind,
+        kitRecipeId: l.kitRecipeId,
+        kitRecipeVersion: l.kitRecipeVersion,
         sourceTemplateProduct: l.sourceTemplateProduct,
         productId: l.productId,
         name: l.name,
@@ -744,6 +858,24 @@ export default function TemplateEditorScreen() {
                     </TouchableOpacity>
                   )}
                 </View>
+                {line.pendingKitBinding && (
+                  <Text style={{ color: palette.text.secondary }}>Комплект · состав сохранится в шаблоне</Text>
+                )}
+                {line.kind === 'kitRecipe' && (
+                  <View style={{ gap: 8 }}>
+                    <KitRecipeComposition recipeId={line.kitRecipeId!} version={line.kitRecipeVersion!} />
+                    <Text style={{ color: palette.text.secondary }}>Партия выбирается при применении.</Text>
+                    {!viewOnly && canReadKitRecipes && (
+                      <TouchableOpacity
+                        accessibilityRole="button"
+                        onPress={() => void replaceRecipeVersion(idx, line)}
+                        style={{ minHeight: 44, justifyContent: 'center' }}
+                      >
+                        <Text style={{ color: palette.accent.primaryText }}>Выбрать актуальный состав</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                )}
                 {line.catalogStatus === 'unavailable' && (
                   <Text style={{ color: palette.text.tertiary }}>Нет в каталоге · цена не подтверждена</Text>
                 )}
@@ -757,12 +889,12 @@ export default function TemplateEditorScreen() {
                 )}
                 <View style={styles.lineControls}>
                   <Text style={[styles.lineStatic, { color: palette.text.secondary }]}>
-                    {formatTemplateMoney(line.sellPrice)}
+                    {line.sellPrice === undefined ? 'Цена после выбора партии' : formatTemplateMoney(line.sellPrice)}
                     {viewOnly ? ` × ${line.quantity}` : ''}
                   </Text>
                   {!viewOnly && stepper(line.quantity, (q) => patchProductLine(idx, { quantity: q }))}
                   <Text style={[styles.lineTotal, { color: palette.text.primary }]}>
-                    {formatTemplateMoney(line.sellPrice * line.quantity)}
+                    {line.sellPrice === undefined ? '—' : formatTemplateMoney(line.sellPrice * line.quantity)}
                   </Text>
                 </View>
               </View>
@@ -781,7 +913,7 @@ export default function TemplateEditorScreen() {
               <View style={styles.totalRow}>
                 <Text style={[styles.totalLabel, { color: palette.text.secondary }]}>Товары</Text>
                 <Text style={[styles.totalValue, { color: palette.text.secondary }]}>
-                  {formatTemplateMoney(productsTotal)}
+                  {productsTotal === undefined ? 'После выбора партий' : formatTemplateMoney(productsTotal)}
                 </Text>
               </View>
               {canSeeCost && (
@@ -796,7 +928,7 @@ export default function TemplateEditorScreen() {
               <View style={styles.totalRow}>
                 <Text style={[styles.totalLabelGrand, { color: palette.text.primary }]}>Итого</Text>
                 <Text style={[styles.totalValueGrand, { color: palette.text.primary }]}>
-                  {formatTemplateMoney(grandTotal)}
+                  {grandTotal === undefined ? 'После выбора партий' : formatTemplateMoney(grandTotal)}
                 </Text>
               </View>
             </View>

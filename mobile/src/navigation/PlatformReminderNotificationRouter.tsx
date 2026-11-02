@@ -1,5 +1,6 @@
+import { inventoryInternal } from '../utils/runtimeEnvironment';
 import { useEffect } from 'react';
-import * as Notifications from 'expo-notifications';
+import * as Notifications from '../utils/notifications';
 import { createManagerCabinetApi } from '../../../shared/api/createServices';
 import { captureAuthSession, createSessionBoundClient } from '../api/axios';
 import { useAuth } from '../contexts/AuthContext';
@@ -19,6 +20,7 @@ export default function PlatformReminderNotificationRouter({
   const { user, token, loading, recoveringSession } = useAuth();
   useEffect(() => {
     if (
+      inventoryInternal ||
       !ready ||
       loading ||
       recoveringSession ||

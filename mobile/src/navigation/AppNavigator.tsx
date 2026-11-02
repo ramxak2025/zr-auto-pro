@@ -31,6 +31,8 @@ import SuppliersScreen from '../screens/SuppliersScreen';
 import SupplierDetailScreen from '../screens/SupplierDetailScreen';
 import PurchaseOrdersScreen from '../screens/PurchaseOrdersScreen';
 import DirectSupplyCreateScreen from '../screens/DirectSupplyCreateScreen';
+import SupplierInvoiceScreen from '../screens/SupplierInvoiceScreen';
+import ProductKitComposerScreen from '../screens/ProductKitComposerScreen';
 import PurchaseOrderCreateScreen from '../screens/PurchaseOrderCreateScreen';
 import PurchaseOrderDetailScreen from '../screens/PurchaseOrderDetailScreen';
 import SupplyReceiveScreen from '../screens/SupplyReceiveScreen';
@@ -264,7 +266,7 @@ export type RootStackParamList = {
    * are loaded. Detail screen consumes the flag once via useEffect and
    * resets navigation state so a re-mount doesn't re-trigger it.
    */
-  SupplierDetail: { id: string; openDefectReturn?: boolean; openDeliveryReturnId?: string };
+  SupplierDetail: { id: string; openDefectReturn?: boolean; openDeliveryReturnId?: string; openDeliveryId?: string };
   /**
    * Приёмка поставки ПО ЗАКАЗУ. `orderId` — заказ, который принимаем; `po` —
    * строка заказа для мгновенной отрисовки шапки (позиции дотянет getById).
@@ -274,6 +276,15 @@ export type RootStackParamList = {
    * стеке (для SupplierDetail, который перекрывает таб-бар).
    */
   DirectSupplyCreate: { supplierId: string; supplierName?: string };
+  SupplierInvoiceReview: { supplierId: string; supplierName?: string };
+  ProductKitComposer: {
+    warehouseId: string;
+    productId?: string;
+    recipeId?: string;
+    recipeVersion?: number;
+    recipeEdit?: boolean;
+  };
+  ProductDetail: { product?: Product; productId?: string; edit?: boolean };
   SupplyReceive: { orderId: string; po?: PurchaseOrder };
   /**
    * Шаблоны чеков (round 8 #3) — управление личными шаблонами с папками +
@@ -336,6 +347,13 @@ export type TabParamList = {
 // выше в дереве категорий. Старый внутренний state `activePath` теперь
 // читается из route.params.
 export type ProductsStackParamList = {
+  ProductKitComposer: {
+    warehouseId: string;
+    productId?: string;
+    recipeId?: string;
+    recipeVersion?: number;
+    recipeEdit?: boolean;
+  };
   // `editProduct` is set by ProductDetailScreen's «Изменить» on the route it
   // pops back to — ProductsScreen consumes it once to open its edit modal,
   // reusing the form instead of duplicating it.
@@ -503,6 +521,7 @@ function MoreStackNavigator() {
           Кредитует склад + ведёт долг/платёж поставщика; экран инвалидирует
           ['products']/['stock-movements']/['supplier-*'] после приёмки. */}
       <MoreStack.Screen name="DirectSupplyCreate" component={DirectSupplyCreateScreen} />
+      <MoreStack.Screen name="SupplierInvoiceReview" component={SupplierInvoiceScreen} />
       <MoreStack.Screen name="SupplyReceive" component={SupplyReceiveScreen} />
       <MoreStack.Screen name="CashFlow" component={GatedCashFlow} />
       {/* Кассовая смена / Z-отчёт / Инкассация — UNGATED by plan-feature
@@ -662,6 +681,7 @@ function ProductsStackNavigator() {
           Checks → CheckDetail) so the floating tab bar stays visible and
           iOS edge-swipe pops back to the warehouse list. */}
       <ProductsStack.Screen name="ProductDetail" component={ProductDetailScreen} />
+      <ProductsStack.Screen name="ProductKitComposer" component={ProductKitComposerScreen} />
       {/* Инвентаризация — scan-driven recount; reuses productsApi.updateStock
           (type 'inventory'). In-stack so the tab bar stays visible. */}
       <ProductsStack.Screen name="Inventory" component={InventoryScreen} />
@@ -1036,6 +1056,9 @@ export default function AppNavigator() {
               «Новая поставка». MoreStack has its own copy above for the
               in-section SupplierDetail / PurchaseOrderDetail callers. */}
           <Stack.Screen name="DirectSupplyCreate" component={DirectSupplyCreateScreen} />
+          <Stack.Screen name="SupplierInvoiceReview" component={SupplierInvoiceScreen} />
+          <Stack.Screen name="ProductKitComposer" component={ProductKitComposerScreen} />
+          <Stack.Screen name="ProductDetail" component={ProductDetailScreen} />
           <Stack.Screen name="SupplyReceive" component={SupplyReceiveScreen} />
           {/* Шаблоны чеков на КОРНЕВОМ стеке — для «Управлять» из пикера
               шаблонов Кассы (CheckCreate перекрывает таб-бар, значит и

@@ -1,4 +1,10 @@
+import ProductKitRecipes from '../components/warehouse/ProductKitRecipes';
+import BarcodeLookupButton from '../components/products/BarcodeLookupButton';
+import { loadProductCatalog } from '../../../shared/api/productCatalog';
+import ProductLabelPrint from '../components/products/ProductLabelPrint';
 import LowStockView from './LowStockPage';
+import { newUuid } from '../utils/uuid';
+import ProductKitComposer from '../components/warehouse/ProductKitComposer';
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -6,6 +12,7 @@ import { Reorder } from 'framer-motion';
 import toast from 'react-hot-toast';
 import {
   Plus,
+  Printer,
   Package,
   PackageMinus,
   ClipboardCheck,
@@ -140,6 +147,8 @@ function ProductsPageContents() {
   const cellParam = params.get('cell') ?? '';
 
   // Modal state
+  const [kitRecipesOpen, setKitRecipesOpen] = useState(false);
+  const [recipeAssembly, setRecipeAssembly] = useState<{ recipeId: string; recipeVersion: number } | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [detailTarget, setDetailTarget] = useState<Product | null>(null);
@@ -198,11 +207,18 @@ function ProductsPageContents() {
     return (warehouses.find((w) => w.kind === 'main') || warehouses[0]).id;
   }, [warehouses, whParam]);
 
+  useEffect(() => {
+    setBarcodeMatches(null);
+  }, [activeWarehouseId]);
   const activeWarehouse = useMemo(
     () => warehouses?.find((w) => w.id === activeWarehouseId) ?? null,
     [warehouses, activeWarehouseId],
   );
   const activeWarehouseKind = activeWarehouse?.kind ?? null;
+  const usedRequestId = useRef<string | null>(null);
+  const [barcodeMatches, setBarcodeMatches] = useState<Product[] | null>(null);
+  const [labelTargets, setLabelTargets] = useState<Product[] | null>(null);
+  const [kitComposerOpen, setKitComposerOpen] = useState(false);
 
   // Ячейки активного склада. Пока их нет (`hasCells === false`), страница выглядит как раньше.
   const {
@@ -235,14 +251,11 @@ function ProductsPageContents() {
   } = useQuery<PaginatedResponse<Product>>({
     // Тот же класс дефекта, что на телефоне: сервер сортирует по названию, и
     // лимит молча срезал алфавитный хвост каталога — товар «есть, а в списке
-    // нет». Берём потолок сервера (capLimit 10000) одной страницей: дерево
-    // папок и суммы на этой странице считаются по всему массиву.
+    // нет». Собираем все страницы: дерево папок и суммы считают полный каталог.
     queryKey: ['products', { limit: 10000, warehouseId: activeWarehouseId || 'all' }],
     queryFn: async () => {
-      const params: { limit: number; warehouseId?: string } = { limit: 10000 };
-      if (activeWarehouseId) params.warehouseId = activeWarehouseId;
-      const res = await productsApi.getAll(params);
-      return res.data;
+      const products = await loadProductCatalog(productsApi.getAll, { warehouseId: activeWarehouseId || 'all' });
+      return { data: products, total: products.length, page: 1, limit: Math.max(products.length, 1) };
     },
     staleTime: 30_000,
     enabled: !!activeWarehouseId,
@@ -475,7 +488,7 @@ function ProductsPageContents() {
       const folderPrefix = prefix ? `${prefix}/${folder.name}` : folder.name;
       const folderProducts = allProducts.filter((p) => {
         const cat = p.category || '';
-        return cat === folderPrefix || cat.startsWith(folderPrefix + '/');
+        return !p.assemblyId && (cat === folderPrefix || cat.startsWith(folderPrefix + '/'));
       });
       if (folderProducts.length === 0) {
         info.set(folder.name, { recentlyChecked: false });
@@ -513,15 +526,29 @@ function ProductsPageContents() {
   // Фильтр по ячейке работает, только пока у склада есть ячейки (или их ещё грузим): висящий ?cell= не должен прятать товары.
   const showingCellFilter = !!cellParam && (hasCells || cellsLoading);
 
+  const searchQuery = useQuery({
+    queryKey: [
+      'products',
+      'search',
+      { search: searchText.trim(), warehouseId: activeWarehouseId, cell: showingCellFilter ? cellParam : null },
+    ],
+    queryFn: () =>
+      loadProductCatalog(productsApi.getAll, {
+        search: searchText.trim(),
+        warehouseId: activeWarehouseId || 'all',
+        ...(showingCellFilter ? { storageCellId: cellParam } : {}),
+      }),
+    enabled: !!activeWarehouseId && !!searchText.trim(),
+    staleTime: 0,
+  });
+
   // Плоский список без папок: результаты поиска и/или товары одной ячейки. Поиск идёт и по коду ячейки.
   const flatResults = useMemo(() => {
-    if (!searchText && !showingCellFilter) return [];
-    const q = searchText.toLowerCase();
-    return allProducts.filter((p) => {
-      if (showingCellFilter && (cellParam === 'none' ? !!p.storageCellId : p.storageCellId !== cellParam)) return false;
-      return !q || p.name.toLowerCase().includes(q) || (p.storageCellCode ?? '').toLowerCase().includes(q);
-    });
-  }, [searchText, showingCellFilter, cellParam, allProducts]);
+    if (barcodeMatches) return barcodeMatches;
+    if (searchText.trim()) return searchQuery.data ?? [];
+    if (!showingCellFilter) return [];
+    return allProducts.filter((p) => (cellParam === 'none' ? !p.storageCellId : p.storageCellId === cellParam));
+  }, [searchText, showingCellFilter, cellParam, allProducts, searchQuery.data, barcodeMatches]);
 
   // Код ячейки для крошки: из списка ячеек, а пока он грузится — из самих товаров.
   const cellFilterCode = useMemo(() => {
@@ -647,8 +674,28 @@ function ProductsPageContents() {
   };
 
   const createMutation = useMutation({
-    mutationFn: (data: ProductFormData) =>
-      productsApi.create({ ...data, costPrice: data.costPrice ?? 0, sellPrice: data.sellPrice ?? 0 }),
+    mutationFn: async (data: ProductFormData) => {
+      const initialStock = data.stock;
+      if (initialStock === undefined) throw new Error('Укажите начальный остаток товара');
+      if (activeWarehouseKind === 'used') {
+        const { stock: _stock, isBundle: _isBundle, bundleItems: _bundleItems, ...fields } = data;
+        usedRequestId.current ??= newUuid();
+        const result = await productsApi.usedIntake({
+          ...fields,
+          quantity: initialStock,
+          requestId: usedRequestId.current,
+          costPrice: data.costPrice ?? 0,
+          sellPrice: data.sellPrice ?? 0,
+        });
+        return { data: result.data.product };
+      }
+      return productsApi.create({
+        ...data,
+        stock: initialStock,
+        costPrice: data.costPrice ?? 0,
+        sellPrice: data.sellPrice ?? 0,
+      });
+    },
     onSuccess: (_res, data) => {
       toast.success('Товар создан');
       queryClient.invalidateQueries({ queryKey: ['products'] });
@@ -788,12 +835,22 @@ function ProductsPageContents() {
   // ---- Handlers ----
 
   function openCreate() {
+    usedRequestId.current = null;
     setEditingProduct(null);
     setFormOpen(true);
   }
 
-  function openEdit(product: Product) {
-    setEditingProduct(product);
+  async function openEdit(product: Product) {
+    let complete = product;
+    if (!Array.isArray(product.photos) || product.assemblyId === undefined) {
+      try {
+        complete = (await productsApi.getById(product.id)).data;
+      } catch {
+        toast.error('Не удалось загрузить карточку. Обновите товар и попробуйте ещё раз.');
+        return;
+      }
+    }
+    setEditingProduct(complete);
     setFormOpen(true);
   }
 
@@ -807,10 +864,14 @@ function ProductsPageContents() {
       // stock_movements.
       const { costPrice, sellPrice, stock, minStock, ...rest } = data;
       const patch: UpdateProductRequest = { ...rest };
-      if (costPrice !== editingProduct.costPrice) patch.costPrice = costPrice;
+      if (!editingProduct.assemblyId && costPrice !== editingProduct.costPrice) patch.costPrice = costPrice;
       if (sellPrice !== editingProduct.sellPrice) patch.sellPrice = sellPrice;
-      if (stock !== editingProduct.stock) patch.stock = stock;
+      if (!editingProduct.assemblyId && stock !== editingProduct.stock) patch.stock = stock;
       if (minStock !== editingProduct.minStock) patch.minStock = minStock;
+      if (editingProduct.assemblyId) {
+        delete patch.isBundle;
+        delete patch.bundleItems;
+      }
       updateMutation.mutate({ id: editingProduct.id, data: patch });
     } else {
       // Auto-fill category from current folder path
@@ -1090,7 +1151,7 @@ function ProductsPageContents() {
   const isMutating = createMutation.isPending || updateMutation.isPending;
 
   // ---- Navigation state ----
-  const showingSearch = !!searchText;
+  const showingSearch = !!searchText || !!barcodeMatches;
   // Поиск и фильтр по ячейке — плоский список по всему складу, без папок.
   const showingFlat = showingSearch || showingCellFilter;
   const showingFolderContents = activePath.length > 0 && !showingFlat;
@@ -1116,13 +1177,19 @@ function ProductsPageContents() {
       ? cellParam === 'none'
         ? 'Товары без ячейки'
         : `Товары в ячейке ${cellFilterCode ?? ''}`.trim()
-      : `Результаты поиска «${searchText}»`;
+      : barcodeMatches
+        ? 'Совпадения штрихкода · выберите товар'
+        : `Результаты поиска «${searchText}»`;
 
   // Список: до прихода первого ответа — скелет; ошибка без данных (или с данными
   // ДРУГОГО склада из placeholderData) — честная ошибка, а не чужой список под
   // новым именем; ошибка фонового обновления при живых данных — баннер сверху.
-  const listPending = !productsData && !isError;
-  const listError = isError && (!productsData || isPlaceholderData);
+  const listPending = barcodeMatches ? false : searchText.trim() ? searchQuery.isPending : !productsData && !isError;
+  const listError = barcodeMatches
+    ? false
+    : searchText.trim()
+      ? searchQuery.isError && !searchQuery.data
+      : isError && (!productsData || isPlaceholderData);
   const staleBanner = isError && !!productsData && !isPlaceholderData;
 
   const moreMenu: MenuEntry[] = [
@@ -1197,7 +1264,19 @@ function ProductsPageContents() {
                 Операции
               </Button>
               <Button icon={Plus} onClick={openCreate}>
-                Добавить товар
+                {activeWarehouseKind === 'used' ? 'Добавить Б/У' : 'Добавить товар'}
+              </Button>
+              <Button variant="secondary" onClick={() => setKitRecipesOpen(true)}>
+                Составы комплектов
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setRecipeAssembly(null);
+                  setKitComposerOpen(true);
+                }}
+              >
+                Собрать комплект
               </Button>
               <input
                 ref={fileInputRef}
@@ -1242,11 +1321,29 @@ function ProductsPageContents() {
         <div className="w-full sm:w-72">
           <SearchInput
             value={searchText}
-            onChange={(value) => setParam({ q: value }, { replace: true })}
+            onChange={(value) => {
+              setBarcodeMatches(null);
+              setParam({ q: value }, { replace: true });
+            }}
             placeholder={hasCells ? 'Поиск по названию или ячейке…' : 'Поиск по названию…'}
             aria-label="Поиск товара"
           />
         </div>
+        <BarcodeLookupButton
+          warehouseId={activeWarehouseId || undefined}
+          onResolved={(result) => {
+            if (result.status === 'found') setDetailTarget(result.matches[0]);
+            else {
+              setParam({ q: null, cell: null }, { replace: true });
+              setBarcodeMatches(result.matches);
+            }
+          }}
+        />
+        {barcodeMatches && (
+          <Button variant="ghost" size="sm" onClick={() => setBarcodeMatches(null)}>
+            Весь каталог
+          </Button>
+        )}
         {/* Адресное хранение: фильтр и шторка появляются, только когда на складе есть ячейки. */}
         {hasCells && (
           <>
@@ -1356,7 +1453,10 @@ function ProductsPageContents() {
         <QueryState
           isLoading={false}
           isError
-          onRetry={() => refetch()}
+          onRetry={() => {
+            void refetch();
+            if (searchText.trim()) void searchQuery.refetch();
+          }}
           isFetching={isFetching}
           errorTitle={
             activeWarehouse ? `Не удалось загрузить склад «${activeWarehouse.name}»` : 'Не удалось загрузить склад'
@@ -1370,7 +1470,10 @@ function ProductsPageContents() {
           {staleBanner && (
             <InlineError
               message="Не удалось обновить список — показаны данные последней успешной загрузки"
-              onRetry={() => refetch()}
+              onRetry={() => {
+                void refetch();
+                if (searchText.trim()) void searchQuery.refetch();
+              }}
               loading={isFetching}
             />
           )}
@@ -1593,6 +1696,15 @@ function ProductsPageContents() {
                 </Button>
               </>
             )}
+            {selectedProducts.size > 0 && selectedFolders.size === 0 && (
+              <Button
+                variant="secondary"
+                icon={Printer}
+                onClick={() => setLabelTargets(allProducts.filter((product) => selectedProducts.has(product.id)))}
+              >
+                Этикетки
+              </Button>
+            )}
             {canDeleteWarehouse && selectedProducts.size > 0 && selectedFolders.size === 0 && (
               <Button variant="secondary" icon={Move} onClick={() => setShowMoveModal(true)}>
                 Переместить
@@ -1607,6 +1719,23 @@ function ProductsPageContents() {
         </div>
       )}
 
+      {labelTargets && (
+        <ProductLabelPrint
+          open
+          onClose={() => setLabelTargets(null)}
+          products={labelTargets}
+          onGenerateInternal={
+            canManageWarehouse
+              ? async (ids) => {
+                  const { data } = await productsApi.internalBarcodes(ids);
+                  queryClient.invalidateQueries({ queryKey: ['products'] });
+                  queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
+                  return data.products;
+                }
+              : undefined
+          }
+        />
+      )}
       {/* Product detail */}
       {detailTarget && (
         <ProductDetailModal
@@ -1632,6 +1761,9 @@ function ProductsPageContents() {
           // конечные точки, дальше — списание или возврат поставщику).
           canTransfer={activeWarehouseKind === 'main'}
           canManage={canManageWarehouse}
+          onProductChanged={(product) =>
+            setDetailTarget((current) => (current?.id === detailTarget.id ? product : current))
+          }
           onTransfer={() => {
             setTransferTarget(detailTarget);
             setDetailTarget(null);
@@ -1652,6 +1784,27 @@ function ProductsPageContents() {
       )}
 
       {/* Modals */}
+      {kitRecipesOpen && (
+        <ProductKitRecipes
+          onClose={() => setKitRecipesOpen(false)}
+          onAssemble={(recipe) => {
+            setKitRecipesOpen(false);
+            setRecipeAssembly({ recipeId: recipe.id, recipeVersion: recipe.version });
+            setKitComposerOpen(true);
+          }}
+        />
+      )}
+      {kitComposerOpen && (
+        <ProductKitComposer
+          warehouseId={activeWarehouseId}
+          {...(recipeAssembly ?? {})}
+          onClose={() => setKitComposerOpen(false)}
+          onCompleted={(id) => {
+            setKitComposerOpen(false);
+            void productsApi.getById(id).then((response) => setDetailTarget(response.data));
+          }}
+        />
+      )}
       {formOpen && (
         <ProductFormModal
           key={editingProduct?.id || 'new'}
@@ -1664,6 +1817,7 @@ function ProductsPageContents() {
           allProducts={allProducts}
           defaultCategory={activePath.length > 0 ? activePath.join('/') : undefined}
           defaultWarehouseId={activeWarehouseId || undefined}
+          usedIntake={!editingProduct && activeWarehouseKind === 'used'}
           canManage={canManageWarehouse}
         />
       )}

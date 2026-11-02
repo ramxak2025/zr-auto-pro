@@ -48,15 +48,14 @@ test('migration stores exactly one tenant-scoped target; visibility remains sepa
 
 test('legacy service list stays full; preferred filtering is opt-in, before count and pagination, owner stays full', async () => {
   const pool = makePool((sql) => {
-    if (sql.startsWith('SELECT COUNT(*)')) return { rows: [{ total: '1' }] };
-    if (sql.startsWith('SELECT s.*')) return { rows: [serviceRow] };
+    if (sql.startsWith('WITH scoped')) return { rows: [{ total: 1, data: [serviceRow] }] };
     return undefined;
   });
   const service = new ServicesService(pool);
 
   await service.getAll(TENANT_A, { page: 1, limit: 20 }, actor());
   assert.doesNotMatch(pool.log[0].sql, /service_visibility_rules/);
-  assert.doesNotMatch(pool.log[1].sql, /service_visibility_rules/);
+  assert.equal(pool.log.length, 1, 'scope, count and page share one statement');
 
   pool.log.length = 0;
   const filtered = await service.getAll(
@@ -65,10 +64,12 @@ test('legacy service list stays full; preferred filtering is opt-in, before coun
     actor(),
   );
   assert.equal(filtered.total, 1);
-  assert.match(pool.log[0].sql, /SELECT COUNT\(\*\).*LATERAL/);
+  assert.match(pool.log[0].sql, /WITH scoped AS MATERIALIZED.*LATERAL/);
   assert.match(pool.log[0].sql, /visibility_viewer\.role_id = ANY\(visibility_rule\.visible_role_ids\)/);
-  assert.match(pool.log[0].sql, /s\.name ILIKE \$2/);
-  assert.match(pool.log[1].sql, /LIMIT \$4 OFFSET \$5/);
+  assert.match(pool.log[0].sql, /autexa_search_normalize\(s\.name\)/);
+  assert.deepEqual(pool.log[0].values[2][0], 'масло');
+  assert.match(pool.log[0].sql, /LIMIT \$4 OFFSET \$5/);
+  assert.equal(pool.log.length, 1);
 
   pool.log.length = 0;
   await service.getAll(TENANT_A, { preferredOnly: true }, actor('director'));
@@ -76,7 +77,7 @@ test('legacy service list stays full; preferred filtering is opt-in, before coun
 });
 
 test('specific service overrides the closest folder; folder matching is segment-safe for %/_ and sibling prefixes', async () => {
-  const pool = makePool((sql) => (sql.startsWith('SELECT COUNT(*)') ? { rows: [{ total: '0' }] } : { rows: [] }));
+  const pool = makePool((sql) => (sql.startsWith('WITH scoped') ? { rows: [{ total: 0, data: [] }] } : { rows: [] }));
   await new ServicesService(pool).getAll(TENANT_A, { preferredOnly: true }, actor());
   const sql = pool.log[0].sql;
   assert.match(sql, /rule\.service_id=s\.id/);

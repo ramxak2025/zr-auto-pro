@@ -1,3 +1,4 @@
+import type { TemplateKitResolution } from '../api/productKits';
 // ═══════════════════════════════════════════════════════════════════════════════
 //  Shared Types — used by both Web and Mobile apps
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1899,11 +1900,18 @@ export interface Product {
   name: string;
   category?: string;
   photo?: string;
+  /** Ordered pictures (maximum four); photo remains the cover for older clients. */
+  photos?: string[];
   costPrice: number;
   sellPrice: number;
   stock: number;
   minStock: number;
   unit?: string;
+  /** Non-null only for physical, snapshotted assemblies; legacy isBundle remains metadata. */
+  assemblyId?: string | null;
+  assemblyRevision?: number;
+  /** Exact kit-only stock basis, manager-visible; ordinary costPrice stays two-decimal compatible. */
+  assemblyExactCost?: number;
   isBundle?: boolean;
   bundleItems?: BundleItem[];
   supplierId?: string;
@@ -1914,6 +1922,8 @@ export interface Product {
   warrantyDays: number | null;
   /** EAN-13 / QR / custom barcode. Null if not set. */
   barcode?: string | null;
+  /** Immutable server-assigned Code128 label code; factory barcode stays separate. */
+  internalBarcode?: string | null;
   /**
    * 172 (2026-09-30) — адрес хранения: ячейка склада, в которой лежит товар
    * ({@link StorageCell}). Один товар — одна ячейка; ячейка принадлежит тому же
@@ -2138,9 +2148,13 @@ export interface TemplateProductSource {
   templateId: string;
   productIndex: number;
   version: string;
+  /** Required for a concrete batch chosen from a recipe template. */
+  expectedAssemblyRevision?: number;
 }
 
 export interface CheckProductLine {
+  kitExactUnitCost?: number;
+  kitSource?: { intentId: string; sourceProductId: string };
   sourceTemplateProduct?: TemplateProductSource;
   id?: string;
   productId?: string;
@@ -2395,6 +2409,7 @@ export interface CheckAssignee {
 }
 
 export interface Check {
+  kitSplits?: Array<{ intentId: string; productId: string; expectedRevision: number; quantity: number }>;
   id: string;
   number: number;
   date: string;
@@ -3506,8 +3521,14 @@ export type StockMovementType =
   // Продажа товара из чека (волна G). Синтетический тип — на сервере НЕ
   // создаётся движением склада, только подмешивается в ленту «Движение товара»
   // карточки товара при includeSales. Несёт checkId/checkNumber для перехода
-  // в чек; остаток (stockBefore/After) для него не осмыслен (0/0).
-  | 'sale';
+  // в чек; неизвестные исторические остатки передаются как null.
+  | 'sale'
+  | 'sale_correction'
+  | 'sale_annulment'
+  | 'sale_restore'
+  | 'legacy_baseline'
+  | 'kit_assembly'
+  | 'kit_disassembly';
 
 export interface StockMovement {
   id: string;
@@ -3515,8 +3536,18 @@ export interface StockMovement {
   product?: Product;
   type: StockMovementType;
   quantity: number;
-  stockBefore: number;
-  stockAfter: number;
+  stockBefore: number | null;
+  stockAfter: number | null;
+  stockDelta?: number | null;
+  legacyBaseline?: boolean;
+  receiptAvailable?: boolean;
+  documentDate?: string | null;
+  returnId?: string | null;
+  sourceProductId?: string | null;
+  targetProductId?: string | null;
+  targetStockBefore?: number | null;
+  targetStockAfter?: number | null;
+  direction?: 'in' | 'out' | null;
   reason?: string;
   userId?: string;
   user?: { id: string; fullName: string } | null;
@@ -3538,6 +3569,9 @@ export interface StockMovement {
   checkId?: string | null;
   /** Только для type='sale' (волна G): номер чека продажи. */
   checkNumber?: number | null;
+  /** Synthetic sales retain return context; customer_return movements carry the actual inbound quantity. */
+  isReturned?: boolean;
+  returnScope?: string | null;
   createdAt: string;
 }
 
@@ -4241,14 +4275,19 @@ export interface CheckTemplate {
     catalogStatus?: 'current' | 'unavailable' | 'manual';
   }>;
   products: Array<{
+    kind?: 'kitRecipe';
+    kitRecipeId?: string;
+    kitRecipeVersion?: number;
+    kitResolution?: TemplateKitResolution;
     sourceTemplateProduct?: TemplateProductSource;
     productId?: string;
     name: string;
-    sellPrice: number;
+    /** Absent while a recipe has no explicitly selected batch. */
+    sellPrice?: number;
     costPrice?: number;
     quantity: number;
     costStatus?: 'known' | 'unknown';
-    catalogStatus?: 'current' | 'unavailable' | 'manual';
+    catalogStatus?: 'current' | 'unavailable' | 'manual' | 'selection_required' | 'shortage';
   }>;
   /** Only present for warehouse_manage. Unknown never means zero. */
   costStatus?: 'known' | 'unknown';

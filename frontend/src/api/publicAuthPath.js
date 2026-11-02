@@ -4,6 +4,7 @@ export function isPublicSessionLandingPath(pathname) {
   // and in the booking generator/migration before adding them to App.tsx.
   const reservedBookingCodes = new Set(['company-settings']);
   return (
+    (parts.length === 2 && parts[0] === 'p' && parts[1].length > 0) ||
     (parts.length === 1 &&
       /^(?:[A-Za-z0-9_-]{16}|[a-f0-9]{32})$/.test(parts[0]) &&
       !reservedBookingCodes.has(parts[0].toLowerCase())) ||

@@ -1,3 +1,5 @@
+import { assertInventoryFeature } from '../common/inventory-features';
+import { StockHistoryQuery } from './stock-history';
 import { Controller, Get, Post, Body, Query, UseGuards } from '@nestjs/common';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean, IsIn } from 'class-validator';
 import { StockMovementsService, StockMovementType } from './stock-movements.service';
@@ -85,7 +87,15 @@ export class StockMovementsController {
         includeSales: query.includeSales,
       },
       actorPointId(user),
+      user,
     );
+  }
+
+  @RequirePermission('warehouse_access')
+  @Get('history')
+  history(@CurrentUser() user: JwtPayload, @Query() query: StockHistoryQuery) {
+    assertInventoryFeature(user.tenantID);
+    return this.movementsService.history(user.tenantID, query, actorPointId(user), user);
   }
 
   // Инвентаризация / списание / перемещения — требуют управления складом.

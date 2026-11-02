@@ -1,3 +1,20 @@
+import {
+  prepareTemplateProducts,
+  type TemplateKitChoiceRequest,
+  type KitBatchChoice,
+} from '../../../shared/utils/templateKitApplication';
+import TemplateKitBatchPicker from '../components/TemplateKitBatchPicker';
+import {
+  ordinaryProductIndex,
+  splitKitCartLine,
+  usedKitSplits,
+  KIT_SPLIT_NOTE,
+  type KitCartLine,
+} from '../../../shared/utils/kitCart';
+import type { KitSplitIntent } from '../../../shared/api/productKits';
+import { createProductKitsApi } from '../../../shared/api/createServices';
+import api from '../api/axios';
+import { matchSearch, smartSearch } from '../../../shared/utils/smartSearch';
 import { checkProductPayload, savedProductLineIds } from './checkCreate/productPayload';
 import { defaultConfirmedPerformers, explicitlyAssignedPerformers, performerPayload } from './checkCreate/performers';
 import { checkDateParts, selectedCheckDate } from '../../../shared/utils/checkDateTime';
@@ -571,7 +588,12 @@ export default function CheckCreateScreen() {
   const [serviceLines, setServiceLines] = useState<
     (CheckServiceLine & { lineMasterId?: string; priceConfirmed?: boolean })[]
   >([]);
-  const [productLines, setProductLines] = useState<CheckProductLine[]>([]);
+  const [kitSplits, setKitSplits] = useState<KitSplitIntent[]>([]);
+  const kitSourceQuantityLimits = useRef(new Map<string, number>());
+  const savedKitIntentIds = useRef<Set<string>>(new Set());
+  const clientRequestIdRef = useRef<string | null>(null);
+  const [splittingKit, setSplittingKit] = useState(false);
+  const [productLines, setProductLines] = useState<KitCartLine[]>([]);
   const originalProductLineIds = useRef<ReadonlySet<string>>(new Set());
 
   // ── Photo attachments ─────────────────────────────────────────────────────
@@ -1072,7 +1094,7 @@ export default function CheckCreateScreen() {
       for (const car of client.cars) {
         const carPlateNorm = normalizePlateForSearch(car.plateNumber || '', plateMode);
         const matchesPlate = sn && carPlateNorm.includes(sn);
-        const matchesName = fnQuery.length >= 2 && client.fullName?.toLowerCase().includes(fnQuery);
+        const matchesName = fnQuery.length >= 2 && matchSearch(fnQuery, [client.fullName]);
         if (!sn || matchesPlate || matchesName) {
           results.push({ client, car });
         }
@@ -1131,8 +1153,7 @@ export default function CheckCreateScreen() {
   const filteredServices = useMemo(() => {
     const services = selectableServices;
     if (!serviceSearch) return services;
-    const q = serviceSearch.toLowerCase();
-    return services.filter((s) => s.name.toLowerCase().includes(q));
+    return smartSearch(services, serviceSearch, (s) => [s.name, s.category], { typos: true });
   }, [selectableServices, serviceSearch]);
 
   // ── Check Templates ────────────────────────────────────────────────────────
@@ -1209,7 +1230,36 @@ export default function CheckCreateScreen() {
     setShowTemplatesPicker(true);
   };
 
-  const applyTemplate = (template: CheckTemplate) => {
+  const [templateKitChoice, setTemplateKitChoice] = useState<
+    (TemplateKitChoiceRequest & { resolve: (value: KitBatchChoice[] | null) => void }) | null
+  >(null);
+  const templateApplyBusy = useRef(false);
+  const templateApplyEpoch = useRef(0);
+  const [templatePreparing, setTemplatePreparing] = useState(false);
+  const templateApplyLive = useRef(true);
+  const templateChoiceCancel = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    templateApplyLive.current = true;
+    return () => {
+      templateApplyLive.current = false;
+      templateChoiceCancel.current?.();
+    };
+  }, []);
+  const chooseTemplateKit = (request: TemplateKitChoiceRequest) =>
+    new Promise<KitBatchChoice[] | null>((resolve) => {
+      const finish = (value: KitBatchChoice[] | null) => {
+        templateChoiceCancel.current = null;
+        setTemplateKitChoice(null);
+        resolve(value);
+      };
+      templateChoiceCancel.current = () => finish(null);
+      setTemplateKitChoice({ ...request, resolve: finish });
+    });
+  const templateOwnerKey = captureDataSession().key;
+  useEffect(() => {
+    templateChoiceCancel.current?.();
+  }, [templateOwnerKey]);
+  const applyTemplate = async (template: CheckTemplate) => {
     if (
       !canApplyTemplateSnapshot({
         isFetching: templatesRefreshing,
@@ -1218,6 +1268,41 @@ export default function CheckCreateScreen() {
       })
     )
       return;
+    const templateLease = captureDataSession();
+    if (templateApplyBusy.current) return;
+    templateApplyBusy.current = true;
+    const epoch = ++templateApplyEpoch.current;
+    setTemplatePreparing(true);
+    const currentTemplateSession = () =>
+      templateApplyLive.current && epoch === templateApplyEpoch.current && templateLease.isCurrent();
+    let prepared;
+    try {
+      prepared = await prepareTemplateProducts(
+        template,
+        async (id, requireFresh) => {
+          if (!currentTemplateSession()) throw new Error('Применение отменено');
+          const cached = !requireFresh
+            ? allProducts?.find((product) => product.id === id && product.assemblyId !== undefined)
+            : undefined;
+          const product = cached ?? (await productsApi.getById(id)).data;
+          if (!currentTemplateSession()) throw new Error('Аккаунт изменился');
+          return product;
+        },
+        (request) => (currentTemplateSession() ? chooseTemplateKit(request) : Promise.resolve(null)),
+      );
+    } catch (cause) {
+      if (!currentTemplateSession()) return;
+      Alert.alert(
+        'Шаблон не применён',
+        cause instanceof Error ? cause.message : 'Не удалось проверить товары. Подключитесь к сети и повторите.',
+      );
+      return;
+    } finally {
+      templateApplyBusy.current = false;
+      if (templateApplyLive.current) setTemplatePreparing(false);
+    }
+    if (!prepared || !currentTemplateSession()) return;
+    setKitSplits([]);
     // Старый шаблон с «Мойка ×2» разворачиваем в две строки: количества у услуг больше нет,
     // одна строка = одна услуга (иначе статистика считает «×2» за одну работу). Что
     // развернуть нельзя («×150», «×2.5»), остаётся legacy-строкой и считается serviceLineTotal.
@@ -1237,21 +1322,27 @@ export default function CheckCreateScreen() {
       }),
     );
     setProductLines(
-      template.products.map((p) => {
+      prepared.map((p) => {
         // Шаблон unit не хранит — подтягиваем из кэша каталога (как web
         // applyTemplate): иначе строка из шаблона теряла единицу измерения
         // и «Кол. (м)» откатывался к дефолтным «шт».
-        const catalogProduct = (allProducts ?? []).find((ap) => ap.id === p.productId);
+        const catalogProduct = p.catalogProduct;
         return {
           productId: p.productId,
           name: p.name,
-          sellPrice: p.sellPrice,
-          costPrice: p.costPrice ?? 0,
+          sellPrice: catalogProduct?.assemblyId ? catalogProduct.sellPrice : p.sellPrice,
+          costPrice: catalogProduct?.assemblyId
+            ? (catalogProduct.assemblyExactCost ?? catalogProduct.costPrice)
+            : (p.costPrice ?? 0),
           sourceTemplateProduct: p.sourceTemplateProduct,
           quantity: p.quantity,
-          totalSell: p.sellPrice * p.quantity,
-          totalCost: (p.costPrice ?? 0) * p.quantity,
+          totalSell: (catalogProduct?.assemblyId ? catalogProduct.sellPrice : p.sellPrice) * p.quantity,
+          totalCost:
+            (catalogProduct?.assemblyId
+              ? (catalogProduct.assemblyExactCost ?? catalogProduct.costPrice)
+              : (p.costPrice ?? 0)) * p.quantity,
           unit: catalogProduct?.unit,
+          assemblyId: catalogProduct?.assemblyId,
         };
       }),
     );
@@ -1389,6 +1480,15 @@ export default function CheckCreateScreen() {
     );
     originalProductLineIds.current = savedProductLineIds(c.products || []);
     setProductLines(c.products || []);
+    kitSourceQuantityLimits.current = new Map(
+      (c.products ?? []).flatMap((line) =>
+        line.kitSource
+          ? [[`${line.kitSource.intentId}:${line.kitSource.sourceProductId}`, line.quantity] as const]
+          : [],
+      ),
+    );
+    setKitSplits(c.kitSplits ?? []);
+    savedKitIntentIds.current = new Set(c.isDeferred ? [] : (c.kitSplits ?? []).map((intent) => intent.intentId));
     // Round 14: гидрируем исполнителей и место БЕЗ dirty-флагов — payload
     // отправит их только после явной правки (см. proceed()).
     setAssigneeIds(c.assigneesConfirmed === true ? (c.assignees ?? []).map((a) => a.id) : []);
@@ -1975,6 +2075,9 @@ export default function CheckCreateScreen() {
     setInstallmentNextDate(new Date(Date.now() + 30 * 86400000));
     setServiceLines([]);
     setProductLines([]);
+    setKitSplits([]);
+    savedKitIntentIds.current = new Set();
+    clientRequestIdRef.current = null;
     originalProductLineIds.current = new Set();
     setManualDate(null);
     setLoadedCheckDate(null);
@@ -2041,11 +2144,14 @@ export default function CheckCreateScreen() {
         })),
         productLines: productLines.map((l) => ({
           productId: l.productId,
+          kitSource: l.kitSource,
+          sourceTemplateProduct: l.sourceTemplateProduct,
           name: l.name,
           sellPrice: l.sellPrice,
           quantity: l.quantity,
         })),
         pendingPhotos,
+        kitSplits,
         manualDateIso: manualDate ? manualDate.toISOString() : '',
       }),
     [
@@ -2066,6 +2172,7 @@ export default function CheckCreateScreen() {
       orderLocationId,
       serviceLines,
       productLines,
+      kitSplits,
       pendingPhotos,
       manualDate,
     ],
@@ -2345,6 +2452,13 @@ export default function CheckCreateScreen() {
       // всплывают пользователю как раньше (ветка ниже). `variables` — тот
       // самый payload с уже сгенерированным clientRequestId (см. proceed),
       // поэтому досылка «полудоставленного» запроса не задвоит чек.
+      if (requiresKitOnline && isNetworkClassCheckError(err)) {
+        Alert.alert(
+          'Нужно подключение к сети',
+          'Комплект ещё не подтверждён. Корзина остаётся на экране; подключитесь и повторите сохранение.',
+        );
+        return;
+      }
       if (!editId && isNetworkClassCheckError(err)) {
         void stashCheckOffline(variables, err);
         return;
@@ -2464,7 +2578,7 @@ export default function CheckCreateScreen() {
   const oversoldByProductId = useMemo(() => {
     const qtyById = new Map<string, { name: string; qty: number; stock: number }>();
     for (const l of productLines) {
-      if (!l.productId) continue;
+      if (!l.productId || l.kitSource) continue;
       const stock = stockByProductId.get(l.productId);
       if (stock === undefined) continue; // stock unknown — nothing to warn about
       const prev = qtyById.get(l.productId);
@@ -2537,8 +2651,23 @@ export default function CheckCreateScreen() {
   };
 
   const addProductLine = async (product: Product) => {
+    // An old persisted projection cannot prove that this bundle is a legacy recipe.
+    if (product.isBundle && product.assemblyId === undefined) {
+      const lease = captureDataSession();
+      try {
+        product = (await productsApi.getById(product.id)).data;
+        if (!lease.isCurrent()) return;
+      } catch {
+        if (lease.isCurrent())
+          Alert.alert(
+            'Не удалось добавить комплект',
+            'Подключитесь к сети и повторите, чтобы проверить состав комплекта.',
+          );
+        return;
+      }
+    }
     // Handle bundle products — expand into individual component products
-    if (product.isBundle && product.bundleItems && product.bundleItems.length > 0) {
+    if (!product.assemblyId && product.isBundle && product.bundleItems && product.bundleItems.length > 0) {
       // Round 7 audit #1: resolve EVERY component BEFORE touching state.
       // The scoped cache now covers the whole active warehouse (no 500 cap),
       // but a component can still be missing (живёт на другом складе, свежая
@@ -2565,7 +2694,7 @@ export default function CheckCreateScreen() {
       setProductLines((prev) => {
         const updated = [...prev];
         for (const { qty, component: bundleProduct } of resolved) {
-          const existIdx = updated.findIndex((l) => l.productId === bundleProduct.id);
+          const existIdx = ordinaryProductIndex(updated, bundleProduct.id);
           if (existIdx >= 0) {
             const newQty = roundQty(updated[existIdx].quantity + qty);
             updated[existIdx] = {
@@ -2592,7 +2721,7 @@ export default function CheckCreateScreen() {
       return;
     }
 
-    const existing = productLines.findIndex((l) => l.productId === product.id);
+    const existing = ordinaryProductIndex(productLines, product.id);
     if (existing >= 0) {
       updateProductLine(existing, 'quantity', roundQty(productLines[existing].quantity + 1));
     } else {
@@ -2600,15 +2729,56 @@ export default function CheckCreateScreen() {
         ...prev,
         {
           productId: product.id,
+          assemblyId: product.assemblyId,
           name: product.name,
           sellPrice: product.sellPrice,
-          costPrice: product.costPrice,
+          costPrice: product.assemblyExactCost ?? product.costPrice,
           quantity: 1,
           totalSell: product.sellPrice,
-          totalCost: product.costPrice,
+          totalCost: product.assemblyExactCost ?? product.costPrice,
           unit: product.unit,
         },
       ]);
+    }
+  };
+
+  const requiresKitOnline =
+    kitSplits.length > 0 ||
+    productLines.some(
+      (line) =>
+        !!line.kitSource ||
+        !!line.assemblyId ||
+        allProducts?.some((product) => product.id === line.productId && !!product.assemblyId),
+    );
+
+  const splitProductLine = async (index: number) => {
+    const line = productLines[index];
+    if (!line?.productId || splittingKit) return;
+    setSplittingKit(true);
+    const lease = captureDataSession();
+    try {
+      const { data: kit } = await createProductKitsApi(api).get(line.productId);
+      const catalog = await Promise.all(
+        kit.components.map(async (component) => (await productsApi.getById(component.productId)).data),
+      );
+      if (!lease.isCurrent()) return;
+      const split = splitKitCartLine(kit, line.quantity, generateClientRequestId(), catalog);
+      setProductLines((prev) =>
+        prev[index] === line ? [...prev.slice(0, index), ...split.lines, ...prev.slice(index + 1)] : prev,
+      );
+      for (const item of split.lines) {
+        if (item.kitSource)
+          kitSourceQuantityLimits.current.set(
+            `${item.kitSource.intentId}:${item.kitSource.sourceProductId}`,
+            item.quantity,
+          );
+      }
+      setKitSplits((prev) => [...prev, split.intent]);
+    } catch (error) {
+      if (lease.isCurrent())
+        Alert.alert('Комплект не разделён', error instanceof Error ? error.message : 'Обновите комплект и повторите.');
+    } finally {
+      if (lease.isCurrent()) setSplittingKit(false);
     }
   };
 
@@ -2620,7 +2790,7 @@ export default function CheckCreateScreen() {
    *  промежуточные состояния. */
   const decrementProductLine = (productId: string) => {
     setProductLines((prev) => {
-      const idx = prev.findIndex((l) => l.productId === productId);
+      const idx = ordinaryProductIndex(prev, productId);
       if (idx < 0) return prev;
       const line = prev[idx];
       if (line.quantity <= 1) return prev.filter((_, i) => i !== idx);
@@ -2635,7 +2805,11 @@ export default function CheckCreateScreen() {
     setProductLines((prev) =>
       prev.map((line, i) => {
         if (i !== idx) return line;
-        const updated = { ...line, [field]: value };
+        const maximum = line.kitSource
+          ? (kitSourceQuantityLimits.current.get(`${line.kitSource.intentId}:${line.kitSource.sourceProductId}`) ??
+            line.quantity)
+          : Infinity;
+        const updated = { ...line, [field]: field === 'quantity' ? Math.min(Number(value), maximum) : value };
         updated.totalSell = updated.sellPrice * updated.quantity;
         updated.totalCost = updated.costPrice * updated.quantity;
         return updated;
@@ -2655,6 +2829,14 @@ export default function CheckCreateScreen() {
     // second financial document when the user presses Save again.
     if (!editId && confirmedSavedCheckRef.current) {
       navigation.navigate('CheckDetail', { id: confirmedSavedCheckRef.current });
+      return;
+    }
+
+    if (requiresKitOnline && !onlineManager.isOnline()) {
+      Alert.alert(
+        'Нужно подключение к сети',
+        'Для сохранения комплекта подключитесь к сети. Корзина остаётся на экране.',
+      );
       return;
     }
 
@@ -2783,7 +2965,11 @@ export default function CheckCreateScreen() {
         // досылка из очереди с тем же ключом вернёт УЖЕ созданный чек — без
         // повторного списания склада/зарплаты/выручки. Только для create:
         // у PATCH-обновления ключа нет (whitelist DTO его бы не принял).
-        ...(editId ? {} : { clientRequestId: generateClientRequestId() }),
+        ...(editId
+          ? {}
+          : {
+              clientRequestId: clientRequestIdRef.current ?? (clientRequestIdRef.current = generateClientRequestId()),
+            }),
         clientId: clientId || undefined,
         carId: carId || undefined,
         masterId: resolvedMasterId,
@@ -2850,6 +3036,7 @@ export default function CheckCreateScreen() {
           ...(hasLegacyQty(l) ? { quantity: l.quantity } : {}),
         })),
         products: productLines.map((line) => checkProductPayload(line, originalProductLineIds.current)),
+        kitSplits: usedKitSplits(kitSplits, productLines, savedKitIntentIds.current),
       };
       submittingRef.current = true;
       createMutation.mutate(payload);
@@ -4303,6 +4490,9 @@ export default function CheckCreateScreen() {
                 <Ionicons name="add" size={16} color={colors.primary[600]} />
               </TouchableOpacity>
             </View>
+            {productLines.some((line) => line.kitSource) && (
+              <Text style={[styles.lineInputLabel, { color: palette.text.secondary }]}>{KIT_SPLIT_NOTE}</Text>
+            )}
             {productLines.map((line, idx) => (
               <View
                 key={idx}
@@ -4319,6 +4509,27 @@ export default function CheckCreateScreen() {
                     <Ionicons name="close-circle-outline" size={18} color={colors.red[400]} />
                   </TouchableOpacity>
                 </View>
+                {line.kitSource ? (
+                  <Text style={[styles.lineInputLabel, { color: palette.text.secondary }]}>
+                    Из комплекта · для замены удалите и добавьте товар
+                  </Text>
+                ) : (
+                  (line.assemblyId || allProducts?.some((p) => p.id === line.productId && p.assemblyId)) && (
+                    <View>
+                      <Text style={[styles.lineInputLabel, { color: palette.text.secondary }]}>Собранный комплект</Text>
+                      <TouchableOpacity
+                        accessibilityRole="button"
+                        disabled={splittingKit}
+                        onPress={() => void splitProductLine(idx)}
+                        style={{ paddingVertical: 10 }}
+                      >
+                        <Text style={{ color: colors.primary[600], fontWeight: '600' }}>
+                          {splittingKit ? 'Загрузка…' : 'Разделить на товары'}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  )
+                )}
                 <View style={styles.lineInputs}>
                   <View style={{ flex: 1 }}>
                     <Text style={[styles.lineInputLabel, { color: palette.text.secondary }]}>Цена</Text>
@@ -4355,7 +4566,7 @@ export default function CheckCreateScreen() {
                   </Text>
                 </View>
                 {/* M4: мягкое предупреждение об оверселле — по кешу склада. */}
-                {!!line.productId && oversoldByProductId.has(line.productId) && (
+                {!!line.productId && !line.kitSource && oversoldByProductId.has(line.productId) && (
                   <View style={styles.stockWarnRow}>
                     <Ionicons name="alert-circle-outline" size={13} color={colors.amber[600]} />
                     <Text style={styles.stockWarnText}>
@@ -4791,6 +5002,26 @@ export default function CheckCreateScreen() {
       </KeyboardAwareScroll>
 
       {/* Master Picker — строка услуги либо весь заказ-наряд (CHECK_MASTER_PICKER_INDEX) */}
+      {templateKitChoice && (
+        <TemplateKitBatchPicker
+          request={templateKitChoice}
+          onResolve={templateKitChoice.resolve}
+          onRebuild={
+            hasPermission('warehouse_manage')
+              ? () => {
+                  const line = templateKitChoice.line;
+                  templateKitChoice.resolve(null);
+                  setShowTemplatesPicker(false);
+                  navigation.navigate('ProductKitComposer', {
+                    warehouseId: pickerWarehouseId || warehouses?.[0]?.id || '',
+                    recipeId: line.kitRecipeId!,
+                    recipeVersion: line.kitRecipeVersion!,
+                  });
+                }
+              : undefined
+          }
+        />
+      )}
       <Modal
         visible={showMasterPicker !== null}
         onClose={() => setShowMasterPicker(null)}
@@ -5153,7 +5384,18 @@ export default function CheckCreateScreen() {
           плоской секцией на корне. Тап по шаблону применяет как раньше
           (applyTemplate без изменений); «Управлять» уводит в раздел
           «Шаблоны» (корневой стек — Касса и так перекрывает таб-бар). */}
-      <Modal visible={showTemplatesPicker} onClose={() => setShowTemplatesPicker(false)} title="Шаблоны чеков">
+      <Modal
+        visible={showTemplatesPicker && !templateKitChoice}
+        onClose={() => {
+          templateApplyEpoch.current++;
+          templateChoiceCancel.current?.();
+          setShowTemplatesPicker(false);
+        }}
+        title="Шаблоны чеков"
+      >
+        {templatePreparing && (
+          <Text style={{ color: palette.text.secondary, paddingVertical: 12 }}>Проверяем товары и партии…</Text>
+        )}
         {templatesPaused && (
           <Text accessibilityRole="alert" style={{ color: palette.text.secondary, paddingVertical: 12 }}>
             Нет соединения. Для применения шаблона нужно обновить цены.
@@ -5203,6 +5445,8 @@ export default function CheckCreateScreen() {
             style={styles.tplManageBtn}
             onPress={() => {
               haptic('tap');
+              templateApplyEpoch.current++;
+              templateChoiceCancel.current?.();
               setShowTemplatesPicker(false);
               navigation.navigate('Templates');
             }}

@@ -11,6 +11,7 @@ import {
   AccessibilityInfo,
 } from 'react-native';
 import Constants from 'expo-constants';
+import { inventoryInternal } from '../utils/runtimeEnvironment';
 import CachedImage from '../components/CachedImage';
 import { Button } from '../components/Button';
 import { KeyboardAwareView } from '../components/KeyboardAware';
@@ -257,6 +258,10 @@ export default function LoginScreen() {
             <Animated.Text style={[styles.subtitle, { opacity: logoFade, color: palette.text.tertiary }]}>
               Система управления автосервисами
             </Animated.Text>
+
+            {inventoryInternal ? (
+              <Text style={[styles.subtitle, { color: palette.text.secondary }]}>Внутренний тест · отдельная база</Text>
+            ) : null}
 
             {/* Phone */}
             <Animated.View style={[styles.fieldWrap, { opacity: formFade, transform: [{ translateY: formSlide }] }]}>

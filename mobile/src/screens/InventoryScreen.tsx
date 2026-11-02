@@ -1,3 +1,5 @@
+import ProductPickerModal from '../components/ProductPickerModal';
+import { loadProductBarcodeMatches } from '../../../shared/utils/productBarcodeLookup';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
@@ -36,6 +38,8 @@ import { productFolderParts } from '../../../shared/utils/productFolders';
 import type { Product, Warehouse } from '../../../shared/types';
 import { TabBarFlatList } from '../components/TabBarScrollable';
 import {
+  canCountProduct,
+  PHYSICAL_KIT_STOCK_NOTICE,
   inventoryError,
   inventoryRows,
   inventorySummary,
@@ -77,6 +81,9 @@ function InventoryWorkspace() {
   const [folderPath, setFolderPath] = useState<string[]>([]);
   const [search, setSearch] = useState('');
   const [warehouseMenu, setWarehouseMenu] = useState(false);
+  const [barcodeMatches, setBarcodeMatches] = useState<Product[] | null>(null);
+  const ambiguousScope = useRef<{ session: InventorySession; warehouseId: string } | null>(null);
+  const barcodeEpoch = useRef(0);
   const [showScanner, setShowScanner] = useState(false);
   const [scanFeedback, setScanFeedback] = useState<string | null>(null);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
@@ -159,7 +166,13 @@ function InventoryWorkspace() {
   const setCount = useCallback(
     (product: Product, raw: string) => {
       const scope = warehouseRef.current;
-      if (!scope || busyRef.current || !canWriteRef.current || (product.warehouseId && product.warehouseId !== scope))
+      if (
+        !scope ||
+        busyRef.current ||
+        !canWriteRef.current ||
+        !canCountProduct(product) ||
+        (product.warehouseId && product.warehouseId !== scope)
+      )
         return;
       setNotice(null);
       setScanFeedback(null);
@@ -209,24 +222,19 @@ function InventoryWorkspace() {
     setWarehouseMenu(false);
   }, []);
 
-  const handleScanned = useCallback(
-    (code: string) => {
-      const scope = scannerScope.current;
-      scannerScope.current = null;
+  const applyScannedProduct = useCallback(
+    (product: Product, scope: { session: InventorySession; warehouseId: string }) => {
       if (
-        !scope ||
         !scope.session.isCurrent() ||
         !mountedRef.current ||
         scope.warehouseId !== warehouseRef.current ||
         busyRef.current ||
-        !canWriteRef.current
+        !canWriteRef.current ||
+        (product.warehouseId && product.warehouseId !== scope.warehouseId)
       )
         return;
-      setShowScanner(false);
-      const product = allProducts.find((p) => String(p.barcode ?? '').trim() === code.trim());
-      if (!product) {
-        haptic('warning');
-        Alert.alert('Товар не найден', 'Штрих-код не привязан к товару выбранного склада.');
+      if (!canCountProduct(product)) {
+        Alert.alert('Собранный комплект', PHYSICAL_KIT_STOCK_NOTICE);
         return;
       }
       const old = draftsRef.current[scope.warehouseId]?.[product.id];
@@ -243,7 +251,54 @@ function InventoryWorkspace() {
       scrollTimer.current = setTimeout(scrollToFocused, 150);
       haptic('success');
     },
-    [allProducts, scrollToFocused, setCount],
+    [scrollToFocused, setCount],
+  );
+  const handleScanned = useCallback(
+    async (code: string) => {
+      const scope = scannerScope.current;
+      scannerScope.current = null;
+      if (
+        !scope ||
+        !scope.session.isCurrent() ||
+        !mountedRef.current ||
+        scope.warehouseId !== warehouseRef.current ||
+        busyRef.current ||
+        !canWriteRef.current
+      )
+        return;
+      const request = ++barcodeEpoch.current;
+      setShowScanner(false);
+      try {
+        const result = await loadProductBarcodeMatches(scope.session.lookupBarcode, {
+          barcode: code.trim(),
+          warehouseId: scope.warehouseId,
+        });
+        if (
+          !scope.session.isCurrent() ||
+          !mountedRef.current ||
+          request !== barcodeEpoch.current ||
+          scope.warehouseId !== warehouseRef.current ||
+          busyRef.current ||
+          !canWriteRef.current
+        )
+          return;
+        if (result.status === 'found') {
+          applyScannedProduct(result.matches[0], scope);
+          return;
+        }
+        if (result.status === 'ambiguous') {
+          ambiguousScope.current = scope;
+          setBarcodeMatches(result.matches);
+          return;
+        }
+        haptic('warning');
+        Alert.alert('Товар не найден', 'Штрих-код не привязан к товару выбранного склада.');
+      } catch {
+        if (scope.session.isCurrent() && mountedRef.current && request === barcodeEpoch.current)
+          Alert.alert('Штрихкод не проверен', 'Подключитесь к сети и повторите. Факт не изменён.');
+      }
+    },
+    [applyScannedProduct],
   );
 
   const finish = useCallback((operation: Operation) => {
@@ -380,7 +435,8 @@ function InventoryWorkspace() {
     const entries: Entry[] = [];
     for (const [id, draft] of Object.entries(current)) {
       const actual = parseInventoryQuantity(draft.raw);
-      if (actual === null) continue;
+      const product = allProducts.find((p) => p.id === id);
+      if (actual === null || (product && !canCountProduct(product))) continue;
       entries.push({
         id,
         body:
@@ -762,6 +818,11 @@ function InventoryWorkspace() {
               Посчитано {summary.counted} · Изменено {summary.changed}
             </Text>
           </View>
+          {allProducts.some((product) => !canCountProduct(product)) ? (
+            <Text variant="caption" color={palette.text.secondary} style={styles.notice}>
+              Собранные комплекты исключены из пересчёта. {PHYSICAL_KIT_STOCK_NOTICE}
+            </Text>
+          ) : null}
           {scanFeedback ? (
             <Text variant="caption" color={palette.accent.primaryText} numberOfLines={2} style={styles.notice}>
               {scanFeedback}
@@ -865,10 +926,27 @@ function InventoryWorkspace() {
           ) : null}
         </>
       )}
+      <ProductPickerModal
+        visible={!!barcodeMatches}
+        onClose={() => {
+          ambiguousScope.current = null;
+          setBarcodeMatches(null);
+        }}
+        exactMatches={barcodeMatches ?? undefined}
+        notice="Этот штрихкод у нескольких товаров. Выберите товар для пересчёта."
+        title="Совпадения штрихкода"
+        onSelectProduct={(product) => {
+          const scope = ambiguousScope.current;
+          ambiguousScope.current = null;
+          setBarcodeMatches(null);
+          if (scope) applyScannedProduct(product, scope);
+        }}
+      />
       <BarcodeScanner
         visible={showScanner}
         onClose={() => {
           scannerScope.current = null;
+          barcodeEpoch.current++;
           setShowScanner(false);
         }}
         onScanned={handleScanned}

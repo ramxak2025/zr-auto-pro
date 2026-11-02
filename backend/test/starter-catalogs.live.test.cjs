@@ -675,7 +675,7 @@ test(
 
 test(
   'financial writeoff reads confirmed fallback cost from the locked row after concurrent confirmation',
-  { skip: !live },
+  { skip: !live, timeout: 10000 },
   async () => {
     const { StockMovementsService } = require('../dist/stock-movements/stock-movements.service');
     const { WarehousesService } = require('../dist/warehouses/warehouses.service');
@@ -724,7 +724,8 @@ test(
               const result = await client.query(sql, ...args);
               if (
                 typeof sql === 'string' &&
-                sql.includes('SELECT p.id, p.tenant_id, p.warehouse_id, p.cost_price FROM products')
+                sql.includes('SELECT p.id, p.tenant_id, p.warehouse_id, p.cost_price') &&
+                sql.includes('FROM products p')
               ) {
                 readSeen();
                 await resume;
@@ -741,7 +742,15 @@ test(
         quantity: 1,
         recordAsExpense: true,
       });
-      await seen;
+      // Observe rejection immediately while the test waits at its read barrier.
+      // If the boundary signature drifts again, fail explicitly instead of an
+      // unhandled rejection masking whether locked-row cost resolution worked.
+      const observed = pending.then(
+        () => ({ stage: 'finished' }),
+        (error) => ({ stage: 'failed', error }),
+      );
+      const boundary = await Promise.race([seen.then(() => ({ stage: 'paused' })), observed]);
+      assert.equal(boundary.stage, 'paused', boundary.error?.message ?? 'Writeoff missed the pre-lock read barrier');
       await products.update(product, tenantId, { costPrice: 100 }, owner);
       releaseRead();
       await pending;

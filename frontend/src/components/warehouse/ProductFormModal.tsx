@@ -1,10 +1,11 @@
 import { useMemo, useState, type FormEvent } from 'react';
+import { productPhotoUrls, productPhotoPatch } from '../../../../shared/utils/productPhotos';
+import ProductPhotoEditor from './ProductPhotoEditor';
 import { Package, Search, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import type { Product, BundleItem } from '../../types';
 import Modal from '../Modal';
 import Switch from '../Switch';
-import ImageUpload from '../ImageUpload';
 import { Button } from '../../ui/Button';
 import { Field } from '../../ui/Field';
 import { Input } from '../../ui/Input';
@@ -22,16 +23,17 @@ export interface ProductFormData {
   packaging?: string;
   name: string;
   category: string;
-  photo?: string;
+  photo?: string | null;
+  photos?: string[];
   costPrice?: number;
   sellPrice?: number;
-  stock: number;
+  stock?: number;
   minStock: number;
   unit: string;
   /** Round 12 #6: EAN-13/QR/свой код. У существующего товара '' очищает. */
   barcode?: string;
-  isBundle: boolean;
-  bundleItems: BundleItem[];
+  isBundle?: boolean;
+  bundleItems?: BundleItem[];
   warrantyDays: number | null;
   warehouseId?: string;
   /** Ячейка хранения: id — назначить, null — снять (только у существующего товара), не задано — не менять. */
@@ -39,6 +41,7 @@ export interface ProductFormData {
 }
 
 interface ProductFormModalProps {
+  usedIntake?: boolean;
   isOpen: boolean;
   onClose: () => void;
   product?: Product | null;
@@ -72,15 +75,17 @@ export default function ProductFormModal({
   defaultCategory,
   defaultWarehouseId,
   canManage = true,
+  usedIntake = false,
 }: ProductFormModalProps) {
   const [name, setName] = useState(product?.name || '');
   const [category, setCategory] = useState(product?.category || defaultCategory || '');
-  const [photo, setPhoto] = useState(product?.photo || '');
+  const [photos, setPhotos] = useState(() => productPhotoUrls(product ?? {}));
+  const [uploadingPhotos, setUploadingPhotos] = useState(false);
   const [confirmPrices, setConfirmPrices] = useState(false);
   const [brand, setBrand] = useState(product?.brand ?? '');
   const [article, setArticle] = useState(product?.article ?? '');
   const [packaging, setPackaging] = useState(product?.packaging ?? '');
-  const [costPrice, setCostPrice] = useState(product?.costPrice?.toString() || '0');
+  const [costPrice, setCostPrice] = useState((product?.assemblyExactCost ?? product?.costPrice)?.toString() || '0');
   const [sellPrice, setSellPrice] = useState(product?.sellPrice?.toString() || '0');
   const [stock, setStock] = useState(product?.stock?.toString() || '0');
   const [minStock, setMinStock] = useState(product?.minStock?.toString() || '0');
@@ -132,11 +137,22 @@ export default function ProductFormModal({
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    if (uploadingPhotos || isLoading) return;
     if (!name.trim()) {
       toast.error('Введите название товара');
       return;
     }
-    if (isBundle && bundleItems.length === 0) {
+    if (
+      usedIntake &&
+      (!Number.isFinite(Number(stock.replace(',', '.'))) ||
+        Number(stock.replace(',', '.')) <= 0 ||
+        !Number.isFinite(Number(costPrice.replace(',', '.'))) ||
+        !Number.isFinite(Number(sellPrice.replace(',', '.'))))
+    ) {
+      toast.error('Укажите положительное количество и корректные цены товара Б/У');
+      return;
+    }
+    if (!product?.assemblyId && isBundle && bundleItems.length === 0) {
       toast.error('Добавьте товары в комплект');
       return;
     }
@@ -147,11 +163,9 @@ export default function ProductFormModal({
       article: article.trim(),
       packaging: packaging.trim(),
       category: category.trim(),
-      photo: photo || undefined,
-      ...(!product ||
-      !product.costPriceIsPlaceholder ||
-      confirmPrices ||
-      toNumberOrZero(costPrice) !== product.costPrice
+      ...productPhotoPatch(photos),
+      ...(!product?.assemblyId &&
+      (!product || !product.costPriceIsPlaceholder || confirmPrices || toNumberOrZero(costPrice) !== product.costPrice)
         ? { costPrice: toNumberOrZero(costPrice) }
         : {}),
       ...(!product ||
@@ -160,11 +174,11 @@ export default function ProductFormModal({
       toNumberOrZero(sellPrice) !== product.sellPrice
         ? { sellPrice: toNumberOrZero(sellPrice) }
         : {}),
-      stock: toNumberOrZero(stock),
+      ...(!product?.assemblyId
+        ? { stock: toNumberOrZero(stock), isBundle, bundleItems: isBundle ? bundleItems : [] }
+        : {}),
       minStock: toNumberOrZero(minStock),
       unit,
-      isBundle,
-      bundleItems: isBundle ? bundleItems : [],
       // '' у существующего товара ОЧИЩАЕТ штрихкод (PATCH сетит поле только
       // когда оно пришло); у нового пустое поле просто не отправляем.
       barcode: product ? barcode.trim() : barcode.trim() || undefined,
@@ -183,7 +197,7 @@ export default function ProductFormModal({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title={product ? 'Редактировать товар' : 'Новый товар'}
+      title={product ? 'Редактировать товар' : usedIntake ? 'Добавить товар Б/У' : 'Новый товар'}
       description={product ? product.name : defaultCategory ? `В папку «${defaultCategory}»` : undefined}
       size="lg"
       footer={
@@ -191,21 +205,15 @@ export default function ProductFormModal({
           <Button variant="secondary" onClick={onClose} disabled={isLoading}>
             Отмена
           </Button>
-          <Button type="submit" form={FORM_ID} loading={isLoading}>
-            {product ? 'Сохранить' : 'Создать'}
+          <Button type="submit" form={FORM_ID} loading={isLoading || uploadingPhotos}>
+            {product ? 'Сохранить' : usedIntake ? 'Принять на склад Б/У' : 'Создать'}
           </Button>
         </>
       }
     >
       <form id={FORM_ID} onSubmit={handleSubmit} className="space-y-4">
+        <ProductPhotoEditor photos={photos} onChange={setPhotos} onBusyChange={setUploadingPhotos} />
         <div className="flex items-start gap-4">
-          <ImageUpload
-            variant="avatar"
-            label="Фото товара"
-            value={photo}
-            onChange={setPhoto}
-            onClear={() => setPhoto('')}
-          />
           <div className="min-w-0 flex-1 space-y-4">
             <Field label="Название" htmlFor="product-name" required>
               <Input
@@ -263,6 +271,7 @@ export default function ProductFormModal({
             <Field label="Закупочная цена, ₽" htmlFor="product-cost">
               <Input
                 id="product-cost"
+                disabled={!!product?.assemblyId}
                 inputMode="decimal"
                 value={costPrice}
                 onChange={(e) => setCostPrice(e.target.value)}
@@ -291,9 +300,10 @@ export default function ProductFormModal({
           {/* Без ограничения снизу: товар, проданный «в минус» (оверселл разрешён
               продуктово), хранит отрицательный остаток, и валидация блокировала
               бы отправку всей формы — включая правку цены. */}
-          <Field label="Остаток" htmlFor="product-stock" hint={unitHint}>
+          <Field label={usedIntake ? 'Количество к приёмке' : 'Остаток'} htmlFor="product-stock" hint={unitHint}>
             <Input
               id="product-stock"
+              disabled={!!product?.assemblyId}
               inputMode="decimal"
               value={stock}
               onChange={(e) => setStock(e.target.value)}
@@ -320,14 +330,21 @@ export default function ProductFormModal({
           currentCell={currentCell}
         />
 
-        <div className="flex items-center gap-3">
-          <Switch id="product-bundle" checked={isBundle} onChange={setIsBundle} label="Комплект (набор товаров)" />
-          <label htmlFor="product-bundle" className="cursor-pointer text-sm font-medium text-ink-2">
-            Комплект (набор товаров)
-          </label>
-        </div>
+        {product?.assemblyId && (
+          <p className="text-sm text-ink-2">
+            Остаток, себестоимость и состав меняются через сборку и разборку комплекта.
+          </p>
+        )}
+        {!usedIntake && product?.isBundle && !product?.assemblyId && (
+          <div className="flex items-center gap-3">
+            <Switch id="product-bundle" checked={isBundle} onChange={setIsBundle} label="Набор позиций · без сборки" />
+            <label htmlFor="product-bundle" className="cursor-pointer text-sm font-medium text-ink-2">
+              Набор позиций · без сборки
+            </label>
+          </div>
+        )}
 
-        {isBundle && (
+        {isBundle && !product?.assemblyId && (
           <div className="space-y-3 rounded-xl border border-accent/30 bg-accent-soft/50 p-3">
             <p className="text-sm font-medium text-ink">Состав комплекта</p>
             {bundleItems.length > 0 && (

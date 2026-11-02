@@ -79,7 +79,14 @@ export interface CheckFormSnapshot {
     quantity: number;
     master: string;
   }[];
-  productLines: readonly { productId?: string; name: string; sellPrice: number; quantity: number }[];
+  kitSplits?: readonly { intentId: string; productId: string; expectedRevision: number; quantity: number }[];
+  productLines: readonly {
+    kitSource?: { intentId: string; sourceProductId: string };
+    productId?: string;
+    name: string;
+    sellPrice: number;
+    quantity: number;
+  }[];
   pendingPhotos: readonly string[];
   manualDateIso: string;
 }
@@ -113,7 +120,8 @@ export function buildCheckFormFingerprint(f: CheckFormSnapshot): string {
       l.quantity,
       l.master,
     ]),
-    f.productLines.map((l) => [l.productId ?? '', l.name, l.sellPrice, l.quantity]),
+    f.productLines.map((l) => [l.productId ?? '', l.name, l.sellPrice, l.quantity, l.kitSource ?? null]),
+    f.kitSplits ?? [],
     f.pendingPhotos,
     f.manualDateIso,
   ]);

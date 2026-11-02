@@ -1,3 +1,6 @@
+import { ProductSharingService } from './product-sharing.service';
+import { UsedIntakeService } from './used-intake.service';
+import { UsedIntakeDto } from './dto/used-intake.dto';
 import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards, Res } from '@nestjs/common';
 import { Response } from 'express';
 import { ProductsService } from './products.service';
@@ -24,7 +27,11 @@ import { BulkAssignCellDto } from './dto/bulk-assign-cell.dto';
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('products')
 export class ProductsController {
-  constructor(private productsService: ProductsService) {}
+  constructor(
+    private productsService: ProductsService,
+    private sharing: ProductSharingService,
+    private usedIntake: UsedIntakeService,
+  ) {}
 
   @Get()
   getAll(@CurrentUser() user: JwtPayload, @Query() query: any) {
@@ -68,7 +75,7 @@ export class ProductsController {
   @RequirePermission('warehouse_manage')
   @Post('import-csv')
   importCsv(@CurrentUser() user: JwtPayload, @Body() dto: { items: any[] }) {
-    return this.productsService.importCsv(user.tenantID, dto.items, actorPointId(user));
+    return this.productsService.importCsv(user.tenantID, dto.items, actorPointId(user), user.userID);
   }
 
   // Mass sell-price change (raise / lower by a percent, optional rounding).
@@ -145,6 +152,24 @@ export class ProductsController {
     return this.productsService.hardDelete(id, user.tenantID, actorPointId(user));
   }
 
+  @RequirePermission('warehouse_manage')
+  @Post('used-intake')
+  createUsed(@CurrentUser() user: JwtPayload, @Body() dto: UsedIntakeDto) {
+    return this.usedIntake.create(dto, user);
+  }
+
+  @RequirePermission('warehouse_manage')
+  @Post(':id/share')
+  share(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.sharing.create(id, user);
+  }
+
+  @RequirePermission('warehouse_manage')
+  @Delete(':id/share')
+  revokeShare(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.sharing.revoke(id, user);
+  }
+
   @Get(':id')
   getById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.productsService.getById(id, user.tenantID, user);
@@ -153,7 +178,7 @@ export class ProductsController {
   @RequirePermission('warehouse_manage')
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateProductDto) {
-    return this.productsService.create(user.tenantID, dto, actorPointId(user));
+    return this.productsService.create(user.tenantID, dto, actorPointId(user), undefined, user.userID);
   }
 
   @Get(':id/movements')

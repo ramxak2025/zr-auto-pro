@@ -634,7 +634,7 @@ test('StorageCellsService.remove: взаимоисключающие и крив
 
 test('ProductsService.update: ячейка другого склада отклоняется 400 STORAGE_CELL_WRONG_WAREHOUSE ДО записи', async () => {
   const pool = makePool((sql) => {
-    if (/^SELECT cost_price, sell_price, stock, warehouse_id FROM products/.test(sql)) {
+    if (/^SELECT cost_price, sell_price, stock, warehouse_id(?:, assembly_id, bundle_items)? FROM products/.test(sql)) {
       return { rows: [{ cost_price: '10', sell_price: '20', stock: '5', warehouse_id: W1 }] };
     }
     // storage_cells: ячейки на складе W1 нет.
@@ -650,7 +650,7 @@ test('ProductsService.update: ячейка другого склада откл�
 
 test('ProductsService.update: ячейка склада товара сохраняется, в ответе — код и подпись', async () => {
   const pool = makePool((sql) => {
-    if (/^SELECT cost_price, sell_price, stock, warehouse_id FROM products/.test(sql)) {
+    if (/^SELECT cost_price, sell_price, stock, warehouse_id(?:, assembly_id, bundle_items)? FROM products/.test(sql)) {
       return { rows: [{ cost_price: '350', sell_price: '500', stock: '3', warehouse_id: W1 }] };
     }
     if (/^SELECT id, code, name FROM storage_cells/.test(sql))
@@ -675,7 +675,7 @@ test('ProductsService.update: ячейка склада товара сохра�
 
 test('ProductsService.update: storageCellId=null снимает адрес без лишних запросов', async () => {
   const pool = makePool((sql) => {
-    if (/^SELECT cost_price, sell_price, stock, warehouse_id FROM products/.test(sql)) {
+    if (/^SELECT cost_price, sell_price, stock, warehouse_id(?:, assembly_id, bundle_items)? FROM products/.test(sql)) {
       return { rows: [{ cost_price: '350', sell_price: '500', stock: '3', warehouse_id: W1 }] };
     }
     if (/^WITH upd AS/.test(sql)) return { rows: [productRow({ storage_cell_id: null })] };
@@ -694,7 +694,7 @@ test('ProductsService.update: storageCellId=null снимает адрес бе�
 
 test('ProductsService.update: смена склада без storageCellId сбрасывает адрес; с ячейкой нового склада — ставит её', async () => {
   const handler = (sql) => {
-    if (/^SELECT cost_price, sell_price, stock, warehouse_id FROM products/.test(sql)) {
+    if (/^SELECT cost_price, sell_price, stock, warehouse_id(?:, assembly_id, bundle_items)? FROM products/.test(sql)) {
       return { rows: [{ cost_price: '350', sell_price: '500', stock: '3', warehouse_id: W1 }] };
     }
     if (/^SELECT id, kind FROM warehouses/.test(sql)) return { rows: [{ id: W2, kind: 'main' }] };
@@ -726,7 +726,7 @@ test('ProductsService.update: смена склада без storageCellId сб�
 
 test('ProductsService.update: склад не изменился и storageCellId не пришёл — адрес не трогаем', async () => {
   const pool = makePool((sql) => {
-    if (/^SELECT cost_price, sell_price, stock, warehouse_id FROM products/.test(sql)) {
+    if (/^SELECT cost_price, sell_price, stock, warehouse_id(?:, assembly_id, bundle_items)? FROM products/.test(sql)) {
       return { rows: [{ cost_price: '350', sell_price: '500', stock: '3', warehouse_id: W1 }] };
     }
     if (/^SELECT id, kind FROM warehouses/.test(sql)) return { rows: [{ id: W1, kind: 'main' }] };
@@ -797,10 +797,15 @@ test('ProductsService.create: ячейка другого склада — 400 �
 
 test('ProductsService.getAll: поиск ищет и по коду ячейки, JOIN есть и в счётчике', async () => {
   const pool = makePool((sql) => {
-    if (/^SELECT COUNT/.test(sql)) return { rows: [{ total: '1' }] };
-    if (/^SELECT p\.\*/.test(sql)) {
-      return { rows: [productRow({ storage_cell_id: CA, storage_cell_code: 'A-1', storage_cell_name: 'Верх' })] };
-    }
+    if (/^WITH scoped/.test(sql))
+      return {
+        rows: [
+          {
+            total: 1,
+            data: [productRow({ storage_cell_id: CA, storage_cell_code: 'A-1', storage_cell_name: 'Верх' })],
+          },
+        ],
+      };
   });
   const service = new ProductsService(pool, null);
 
@@ -812,15 +817,16 @@ test('ProductsService.getAll: поиск ищет и по коду ячейки,
   assert.equal(result.data[0].storageCellId, CA);
   for (const q of pool.log) {
     assert.match(q.sql, /LEFT JOIN storage_cells sc ON sc\.id = p\.storage_cell_id/);
-    assert.match(q.sql, /OR sc\.code ILIKE \$2\)/);
-    assert.equal(q.params[1], '%a-1%');
+    assert.match(q.sql, /autexa_search_normalize\(sc\.code\)/);
+    assert.match(q.sql, /SELECT count\(\*\) FROM matched/);
+    assert.deepEqual(q.params[1][0], 'a 1');
   }
-  assert.match(pool.log[1].sql, /sc\.code AS storage_cell_code, sc\.name AS storage_cell_name/);
+  assert.match(pool.log[0].sql, /sc\.code AS storage_cell_code, sc\.name AS storage_cell_name/);
 });
 
 test('ProductsService.getAll: фильтр storageCellId — uuid | none; мусор игнорируется (не 22P02)', async () => {
   const run = async (query) => {
-    const pool = makePool((sql) => (/^SELECT COUNT/.test(sql) ? { rows: [{ total: '0' }] } : undefined));
+    const pool = makePool((sql) => (/^WITH scoped/.test(sql) ? { rows: [{ total: 0, data: [] }] } : undefined));
     await new ProductsService(pool, null).getAll(T, query, undefined);
     return pool.log[0];
   };
@@ -830,13 +836,13 @@ test('ProductsService.getAll: фильтр storageCellId — uuid | none; мус
   assert.equal(byCell.params[1], CA.toUpperCase());
 
   const withSearch = await run({ search: 'x', storageCellId: CA });
-  assert.match(withSearch.sql, /sc\.code ILIKE \$2\)/);
-  assert.match(withSearch.sql, /AND p\.storage_cell_id = \$3/);
-  assert.deepEqual(withSearch.params.slice(0, 3), [T, '%x%', CA]);
+  assert.match(withSearch.sql, /autexa_search_normalize\(sc\.code\)/);
+  assert.match(withSearch.sql, /AND p\.storage_cell_id = \$2/);
+  assert.deepEqual(withSearch.params.slice(0, 3), [T, CA, ['x']]);
 
   const none = await run({ storageCellId: 'none' });
   assert.match(none.sql, /AND p\.storage_cell_id IS NULL/);
-  assert.equal(none.params.length, 1, 'none — без параметра');
+  assert.deepEqual(none.params.slice(0, 2), [T, []], 'none — без параметра ячейки');
 
   for (const junk of ['undefined', ' ', 'null', 'A-1', 42, undefined]) {
     const q = await run({ storageCellId: junk });
@@ -1008,7 +1014,13 @@ test('exportCsv: «Ячейка» — последняя колонка, пре�
 function importPool({ existing = [], cells = {} } = {}) {
   return makePool((sql, params) => {
     if (/^SELECT \(SELECT/.test(sql)) return { rows: [{ id: W1 }] };
-    if (/^SELECT id, name FROM products/.test(sql)) return { rows: existing };
+    if (/^SELECT id, name(?:, assembly_id)? FROM products/.test(sql)) return { rows: existing };
+    if (/^SELECT id,stock,warehouse_id FROM products/.test(sql))
+      return {
+        rows: existing
+          .filter((row) => params[1].includes(row.id))
+          .map((row) => ({ id: row.id, stock: row.stock ?? '0', warehouse_id: W1 })),
+      };
     if (/^SELECT u\.code AS requested, sc\.id/.test(sql)) {
       return { rows: params[1].filter((code) => cells[code]).map((code) => ({ requested: code, id: cells[code] })) };
     }

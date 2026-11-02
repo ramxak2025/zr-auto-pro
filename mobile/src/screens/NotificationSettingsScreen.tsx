@@ -35,7 +35,8 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import * as Notifications from 'expo-notifications';
+import * as Notifications from '../utils/notifications';
+import { inventoryInternal } from '../utils/runtimeEnvironment';
 import * as Updates from 'expo-updates';
 import Constants from 'expo-constants';
 import IosScreenHeader from '../components/IosScreenHeader';
@@ -382,6 +383,27 @@ function currentTzOffsetMinutes(): number {
 // ─── Screen ──────────────────────────────────────────────────────────────────
 
 export default function NotificationSettingsScreen() {
+  return inventoryInternal ? <InternalNotificationSettingsScreen /> : <PublicNotificationSettingsScreen />;
+}
+
+function InternalNotificationSettingsScreen() {
+  const navigation = useNavigation<{ goBack: () => void }>();
+  const palette = useColors();
+  return (
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+      <IosScreenHeader title="Уведомления" onBack={() => navigation.goBack()} />
+      <View style={styles.loadErrorWrap}>
+        <Ionicons name="notifications-off-outline" size={40} color={palette.text.secondary} />
+        <Text style={[styles.loadErrorTitle, { color: palette.text.primary }]}>Уведомления отключены</Text>
+        <Text style={[styles.loadErrorText, { color: palette.text.secondary }]}>
+          Во внутренней сборке склада push-уведомления и настройки устройства недоступны.
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function PublicNotificationSettingsScreen() {
   const navigation = useNavigation<{ goBack: () => void }>();
   const palette = useColors();
   const shadow = useShadow();

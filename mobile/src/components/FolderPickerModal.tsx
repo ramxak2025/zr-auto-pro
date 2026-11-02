@@ -1,3 +1,4 @@
+import { loadProductCatalog } from '../../../shared/api/productCatalog';
 /**
  * FolderPickerModal — «Перенести в папку».
  *
@@ -118,14 +119,14 @@ export default function FolderPickerModal({
   const { data: productsData, isLoading } = useQuery<PaginatedResponse<Product>>({
     queryKey: ['products', { search: '', limit: PRODUCT_LIST_LIMIT, warehouseId: warehouseId ?? null }],
     queryFn: async () => {
-      const res = await productsApi.getAll({
-        search: '',
-        page: 1,
-        limit: PRODUCT_LIST_LIMIT,
-        fields: PRODUCT_LIST_FIELDS,
-        ...(warehouseId ? { warehouseId } : {}),
-      } as Parameters<typeof productsApi.getAll>[0] & { fields: string });
-      return res.data;
+      const products = await loadProductCatalog(
+        (params) =>
+          productsApi.getAll({ ...params, fields: PRODUCT_LIST_FIELDS } as Parameters<typeof productsApi.getAll>[0] & {
+            fields: string;
+          }),
+        { search: '', ...(warehouseId ? { warehouseId: warehouseId } : {}) },
+      );
+      return { data: products, total: products.length, page: 1, limit: Math.max(products.length, 1) };
     },
     placeholderData: (prev) => prev,
     enabled: visible,

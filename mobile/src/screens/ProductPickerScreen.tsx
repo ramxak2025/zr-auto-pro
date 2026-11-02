@@ -1,3 +1,6 @@
+import { loadProductBarcodeMatches } from '../../../shared/utils/productBarcodeLookup';
+import { captureDataSession } from '../contexts/dataSession';
+import { formatKitUnitCost } from '../../../shared/utils/productKitDraft';
 import { productFolderParts, buildProductFolderLevel } from '../../../shared/utils/productFolders';
 import { loadProductCatalog } from '../../../shared/api/productCatalog';
 /**
@@ -67,7 +70,7 @@ import {
   subscribeProductPickerSession,
 } from '../utils/productPickerSession';
 import { formatQty, unitLabel } from '../utils/units';
-import { cellCodeMatchesQuery } from '../utils/storageCellsUi';
+import { smartSearch } from '../../../shared/utils/smartSearch';
 import type { Product } from '../../../shared/types';
 import { TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
@@ -126,6 +129,7 @@ const PickerFolderRow = React.memo(function PickerFolderRow({
 // ── Строка товара — зеркало PickerProductRow модалки + степпер «− qty +» ───
 interface PickerProductRowProps {
   product: Product;
+  warehouseName?: string;
   cartQty: number;
   showCostPrice: boolean;
   priceKind: 'sell' | 'cost';
@@ -141,6 +145,7 @@ interface PickerProductRowProps {
 
 const PickerProductRow = React.memo(function PickerProductRow({
   product,
+  warehouseName,
   cartQty,
   showCostPrice,
   priceKind,
@@ -187,12 +192,22 @@ const PickerProductRow = React.memo(function PickerProductRow({
           <Text style={[styles.productName, { color: palette.text.primary }]} numberOfLines={2}>
             {product.name}
           </Text>
+          {product.assemblyId ? (
+            <Text style={{ fontSize: 12, color: palette.accent.primaryText }}>Собранный комплект</Text>
+          ) : product.isBundle ? (
+            <Text style={{ fontSize: 12, color: palette.text.secondary }}>Набор позиций · без сборки</Text>
+          ) : null}
           {underWarranty ? (
             <View style={styles.warrantyBadge}>
               <Ionicons name="shield-checkmark" size={11} color={colors.amber[700]} />
               <Text style={styles.warrantyBadgeText}>На гарантии</Text>
             </View>
           ) : null}
+          {warehouseName && (
+            <Text style={[styles.productCategory, { color: palette.text.secondary }]} numberOfLines={2}>
+              {[warehouseName, product.article, product.brand, product.internalBarcode].filter(Boolean).join(' · ')}
+            </Text>
+          )}
           {categoryLeaf ? (
             <Text style={[styles.productCategory, { color: palette.text.tertiary }]}>{categoryLeaf}</Text>
           ) : null}
@@ -206,7 +221,10 @@ const PickerProductRow = React.memo(function PickerProductRow({
             </Text>
             {showCostPrice && priceKind !== 'cost' ? (
               <Text style={[styles.productCostPrice, { color: palette.text.tertiary }]}>
-                {'Себест.'} {formatMoney(product.costPrice)}
+                {'Себест.'}{' '}
+                {product.assemblyId
+                  ? formatKitUnitCost(product.assemblyExactCost ?? product.costPrice)
+                  : formatMoney(product.costPrice)}
               </Text>
             ) : null}
             {/* Ячейка хранения (2026-09-30): кладовщик в Кассе видит, откуда брать. Без адреса
@@ -315,21 +333,27 @@ export default function ProductPickerScreen() {
 
   // ── Поиск: input рисует каждое нажатие, фильтр едет за 200мс-дебаунсом,
   //    чтобы FlashList не перескакивал на каждой букве. ──────────────────────
+  const [barcodeMatches, setBarcodeMatches] = useState<Product[] | null>(null);
+  const scanEpoch = useRef(0);
+  const scanBusy = useRef(false);
   const [localSearch, setLocalSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleSearchChange = useCallback((text: string) => {
+    setBarcodeMatches(null);
     setLocalSearch(text);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => setDebouncedSearch(text), 200);
   }, []);
   const clearSearch = useCallback(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
+    setBarcodeMatches(null);
     setLocalSearch('');
     setDebouncedSearch('');
   }, []);
   useEffect(
     () => () => {
+      scanEpoch.current++;
       if (debounceRef.current) clearTimeout(debounceRef.current);
     },
     [],
@@ -337,6 +361,14 @@ export default function ProductPickerScreen() {
 
   const [showWarehouseDropdown, setShowWarehouseDropdown] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
+  const closeScanner = useCallback(() => {
+    scanEpoch.current++;
+    setShowScanner(false);
+  }, []);
+  useEffect(() => {
+    scanEpoch.current++;
+    setBarcodeMatches(null);
+  }, [warehouseId]);
   const [closeNotice, setCloseNotice] = useState('');
   // Round 12 #6в — «пикать подряд»: сканер работает в continuous-режиме,
   // после каждого успешного скана остаётся открытым; пилюля показывает
@@ -391,7 +423,7 @@ export default function ProductPickerScreen() {
   const cartMap = useMemo(() => {
     const m = new Map<string, number>();
     for (const l of sessionLines ?? []) {
-      if (l.productId) m.set(l.productId, (m.get(l.productId) ?? 0) + l.quantity);
+      if (l.productId && !l.kitSource) m.set(l.productId, (m.get(l.productId) ?? 0) + l.quantity);
     }
     return m;
   }, [sessionLines]);
@@ -407,27 +439,22 @@ export default function ProductPickerScreen() {
 
   // ── Ряды списка: поиск → плоские результаты по ВСЕМУ складу; иначе папки
   //    текущего уровня + товары ровно этого уровня (алгоритм ProductsScreen). ─
-  const searchActive = debouncedSearch.trim().length > 0;
+  const searchActive = !!barcodeMatches || debouncedSearch.trim().length > 0;
   const listRows = useMemo<PickerListRow[]>(() => {
-    const products = Array.isArray(allProducts) ? allProducts : [];
+    const products = (barcodeMatches ?? (Array.isArray(allProducts) ? allProducts : [])).filter(
+      (product) => session?.filterProduct?.(product) ?? true,
+    );
+    if (barcodeMatches) return products.map((product) => ({ type: 'product' as const, key: product.id, product }));
     const q = debouncedSearch.trim().toLowerCase();
     if (q) {
-      const rows: PickerListRow[] = [];
-      for (const p of products) {
-        if (
-          p.name.toLowerCase().includes(q) ||
-          (p.category && p.category.toLowerCase().includes(q)) ||
-          // Round 12 #6в: скан-промах кладёт код в поиск — матчим и barcode,
-          // чтобы частичный/чужой код всё же находил кандидатов.
-          (p.barcode && String(p.barcode).toLowerCase().includes(q)) ||
-          // Ячейка хранения (2026-09-30): код адреса тоже ищется — «A-1-2» находит товар
-          // на полке (регистр и лишние пробелы не важны, как на сервере).
-          (p.storageCellCode ? cellCodeMatchesQuery(p.storageCellCode, q) : false)
-        ) {
-          rows.push({ type: 'product', key: p.id, product: p });
-        }
-      }
-      return rows;
+      return smartSearch(
+        products,
+        q,
+        (p) => [p.name, p.article, p.brand, p.barcode, p.internalBarcode, p.category, p.storageCellCode],
+        {
+          typos: true,
+        },
+      ).map((product) => ({ type: 'product' as const, key: product.id, product }));
     }
 
     const { subfolders: folders, currentProducts: prods } = buildProductFolderLevel(
@@ -445,43 +472,49 @@ export default function ProductPickerScreen() {
     }));
     for (const p of prods) rows.push({ type: 'product', key: p.id, product: p });
     return rows;
-  }, [allProducts, extraFolders, debouncedSearch, folderPath]);
+  }, [allProducts, extraFolders, debouncedSearch, folderPath, sessionVersion, barcodeMatches]);
 
   // ── Действия ──────────────────────────────────────────────────────────────
   // Защита от дребезга — императивная map, НЕ state (state дёргал бы весь
   // виртуализированный список на каждый тап). Контракт как в модалке.
   const lastTapRef = useRef<Map<string, number>>(new Map());
-  const handleRowPress = useCallback((product: Product) => {
-    const s = getProductPickerSession();
-    if (!s) return;
-    if (s.purchaseOrder) {
+  const handleRowPress = useCallback(
+    (product: Product) => {
+      const s = getProductPickerSession();
+      if (!s) return;
+      if (s.filterProduct && !s.filterProduct(product)) return;
+      if (s.purchaseOrder) {
+        haptic('tap');
+        const store = s.purchaseOrder.drafts;
+        const line = s.purchaseOrder.lines.find((line) => line.productId === product.id);
+        store.entries[product.id] ??= {
+          product,
+          quantityText: line?.quantityText ?? '1',
+          costPriceText: line?.costPriceText ?? String(product.costPrice),
+        };
+        store.active = product.id;
+        setCloseNotice('');
+        notifyProcurementDrafts(s.purchaseOrder.updateLine);
+        return;
+      }
+      const now = Date.now();
+      const last = lastTapRef.current.get(product.id) ?? 0;
+      if (now - last < ROW_TAP_DEBOUNCE_MS) return; // случайный двойной тап
+      lastTapRef.current.set(product.id, now);
       haptic('tap');
-      const store = s.purchaseOrder.drafts;
-      const line = s.purchaseOrder.lines.find((line) => line.productId === product.id);
-      store.entries[product.id] ??= {
-        product,
-        quantityText: line?.quantityText ?? '1',
-        costPriceText: line?.costPriceText ?? String(product.costPrice),
-      };
-      store.active = product.id;
-      setCloseNotice('');
-      notifyProcurementDrafts(s.purchaseOrder.updateLine);
-      return;
-    }
-    const now = Date.now();
-    const last = lastTapRef.current.get(product.id) ?? 0;
-    if (now - last < ROW_TAP_DEBOUNCE_MS) return; // случайный двойной тап
-    lastTapRef.current.set(product.id, now);
-    haptic('tap');
-    s.addProduct(product);
-  }, []);
+      s.addProduct(product);
+      if (s.closeOnSelect) navigation.pop(depth + 1);
+    },
+    [navigation, depth],
+  );
 
   // Явные «+»/«−» степпера — осознанные действия, мимо защиты от дребезга.
   const handleIncrement = useCallback(
     (product: Product) => {
       const s = getProductPickerSession();
       if (!s) return;
-      if (s.purchaseOrder) {
+      if (s.filterProduct && !s.filterProduct(product)) return;
+      if (s.purchaseOrder || s.closeOnSelect) {
         handleRowPress(product);
         return;
       }
@@ -529,6 +562,7 @@ export default function ProductPickerScreen() {
     procurement.drafts.active = pending.product.id;
     if (pending.product.warehouseId) current?.setWarehouseId(pending.product.warehouseId);
     if (debounceRef.current) clearTimeout(debounceRef.current);
+    setBarcodeMatches(null);
     setLocalSearch(pending.product.name);
     setDebouncedSearch(pending.product.name);
     setCloseNotice('Добавьте позицию или отмените изменения перед закрытием.');
@@ -547,47 +581,73 @@ export default function ProductPickerScreen() {
     });
   }, [navigation, isRoot, session?.purchaseOrder, canClose]);
 
-  // Round 12 #6в: скан в Кассе = МГНОВЕННОЕ добавление в чек. Exact-match по
-  // загруженному списку склада (тот же источник, что и строки пикера); попал —
-  // добавляем ТЕМ ЖЕ путём, что тап по строке, но МИМО lastTapRef-дебаунса
-  // (образец handleIncrement: скан — осознанное действие, cooldown уже даёт
-  // сам continuous-сканер) и оставляем камеру открытой — складской сценарий
-  // «пикать подряд». Промах — прежнее поведение: код в поиск (клиентский
-  // фильтр ниже теперь матчит и barcode), haptic warning, сканер закрывается,
-  // чтобы показать результаты/пустое состояние.
+  // Cash lookup spans authorized point warehouses. Receipts/composition retain their explicit scope.
+  // Ambiguous factory codes are shown through the existing picker; no first-match auto-add.
   const handleScanned = useCallback(
-    (code: string) => {
+    async (code: string) => {
       const needle = code.trim();
-      const products = Array.isArray(allProducts) ? allProducts : [];
-      const match = needle ? products.find((p) => String(p.barcode || '').trim() === needle) : undefined;
-      if (match) {
-        const s = getProductPickerSession();
-        if (s) {
-          if (s.purchaseOrder) {
+      const context = getProductPickerSession();
+      if (!needle || !context || scanBusy.current) return;
+      const request = scanEpoch.current;
+      const lease = captureDataSession();
+      const restricted = !!context.purchaseOrder || !!context.filterProduct;
+      scanBusy.current = true;
+      setScanFeedback('Проверяем штрихкод…');
+      try {
+        const result = await loadProductBarcodeMatches(productsApi.lookupBarcode, {
+          barcode: needle,
+          ...(restricted && context.warehouseId ? { warehouseId: context.warehouseId } : {}),
+        });
+        const current = getProductPickerSession();
+        if (
+          !lease.isCurrent() ||
+          request !== scanEpoch.current ||
+          !focusedRef.current ||
+          !current ||
+          (restricted && current.warehouseId !== context.warehouseId)
+        )
+          return;
+        const eligible = result.matches.filter((product) => current.filterProduct?.(product) ?? true);
+        if (result.status === 'found' && eligible.length === 1 && !current.purchaseOrder) {
+          const match = eligible[0];
+          haptic('success');
+          current.addProduct(match);
+          if (current.closeOnSelect) {
             setShowScanner(false);
-            if (debounceRef.current) clearTimeout(debounceRef.current);
-            setLocalSearch(needle);
-            setDebouncedSearch(needle);
+            navigation.pop(depth + 1);
             return;
           }
-          haptic('success');
-          s.addProduct(match);
-          scanAddCountRef.current += 1;
+          scanAddCountRef.current++;
           setScanFeedback(`+1 ${match.name} · добавлено ${scanAddCountRef.current}`);
-          return; // сканер НЕ закрываем — ждём следующий товар
+          return;
         }
+        setShowScanner(false);
+        setBarcodeMatches(eligible);
+        if (debounceRef.current) clearTimeout(debounceRef.current);
+        setLocalSearch('');
+        setDebouncedSearch('');
+        setCloseNotice(
+          !eligible.length
+            ? 'Штрихкод не найден или товар недоступен для выбранного действия.'
+            : result.status === 'ambiguous'
+              ? 'Этот штрихкод у нескольких товаров. Выберите нужный.'
+              : 'Выберите товар и проверьте количество и цену.',
+        );
+      } catch {
+        if (lease.isCurrent() && request === scanEpoch.current && focusedRef.current)
+          setScanFeedback('Не удалось проверить код. Подключитесь к сети и повторите сканирование.');
+      } finally {
+        scanBusy.current = false;
       }
-      haptic('warning');
-      setShowScanner(false);
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-      setLocalSearch(needle);
-      setDebouncedSearch(needle); // скан — точный запрос, без дебаунса
     },
-    [allProducts],
+    [navigation, depth],
   );
 
   const openScanner = useCallback(() => {
     haptic('tap');
+    scanEpoch.current++;
+    setBarcodeMatches(null);
+    setCloseNotice('');
     scanAddCountRef.current = 0;
     setScanFeedback(null);
     setShowScanner(true);
@@ -631,6 +691,11 @@ export default function ProductPickerScreen() {
         <View>
           <PickerProductRow
             product={item.product}
+            warehouseName={
+              barcodeMatches
+                ? (warehouses.find((warehouse) => warehouse.id === item.product.warehouseId)?.name ?? 'Склад')
+                : undefined
+            }
             cartQty={qty}
             showCostPrice={sessionShowCostPrice}
             priceKind={priceKind}
@@ -698,6 +763,8 @@ export default function ProductPickerScreen() {
       sessionShowCostPrice,
       priceKind,
       procurement,
+      barcodeMatches,
+      warehouses,
       handleRowPress,
       handleIncrement,
       handleDecrement,
@@ -721,8 +788,8 @@ export default function ProductPickerScreen() {
 
   // Стейт-машина тела — как в модалке: скелетон только на голодном кеше,
   // ошибка только когда показать нечего (stale-while-revalidate молчит).
-  const showInitialSkeleton = allProducts === undefined && isLoading;
-  const showErrorState = allProducts === undefined && isError;
+  const showInitialSkeleton = !barcodeMatches && allProducts === undefined && isLoading;
+  const showErrorState = !barcodeMatches && allProducts === undefined && isError;
   const queryResolvedEmpty = Array.isArray(allProducts) && allProducts.length === 0;
   const visibleProcurementEditor =
     isFocused &&
@@ -864,23 +931,36 @@ export default function ProductPickerScreen() {
           <Text accessibilityRole="alert" style={{ color: palette.text.primary }}>
             {closeNotice}
           </Text>
-          <TouchableOpacity
-            accessibilityRole="button"
-            accessibilityLabel="Отменить изменения позиции"
-            onPress={() => {
-              const current = getProductPickerSession()?.purchaseOrder;
-              if (!current) return;
-              const id = current.drafts.active ?? Object.keys(current.drafts.entries)[0];
-              if (id) delete current.drafts.entries[id];
-              current.drafts.active = null;
-              setCloseNotice('');
-              notifyProcurementDrafts(current.updateLine);
-            }}
-          >
-            <Text style={{ color: palette.accent.primaryText, paddingVertical: spacing[2] }}>
-              Отменить изменения позиции
-            </Text>
-          </TouchableOpacity>
+          {barcodeMatches && (
+            <TouchableOpacity
+              accessibilityRole="button"
+              onPress={() => {
+                clearSearch();
+                setCloseNotice('');
+              }}
+            >
+              <Text style={{ color: palette.accent.primaryText, paddingVertical: spacing[2] }}>Весь каталог</Text>
+            </TouchableOpacity>
+          )}
+          {session?.purchaseOrder && (
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Отменить изменения позиции"
+              onPress={() => {
+                const current = getProductPickerSession()?.purchaseOrder;
+                if (!current) return;
+                const id = current.drafts.active ?? Object.keys(current.drafts.entries)[0];
+                if (id) delete current.drafts.entries[id];
+                current.drafts.active = null;
+                setCloseNotice('');
+                notifyProcurementDrafts(current.updateLine);
+              }}
+            >
+              <Text style={{ color: palette.accent.primaryText, paddingVertical: spacing[2] }}>
+                Отменить изменения позиции
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
       ) : null}
       {/* ── Тело: скелетон → ошибка (без кеша) → FlashList папки+товары ──── */}
@@ -948,7 +1028,9 @@ export default function ProductPickerScreen() {
               <View style={[styles.cartIconWrap, { backgroundColor: palette.accent.primarySoft }]}>
                 <Ionicons name="cart" size={18} color={palette.accent.primaryText} />
                 <View style={styles.cartCountBadge}>
-                  <Text style={styles.cartCountBadgeText}>{formatQty(cartTotals.qty)}</Text>
+                  <Text style={styles.cartCountBadgeText}>
+                    {session?.showTotal === false ? session.productLines.length : formatQty(cartTotals.qty)}
+                  </Text>
                 </View>
               </View>
               <View style={{ flex: 1 }}>
@@ -956,11 +1038,13 @@ export default function ProductPickerScreen() {
                   {session?.totalLabel ?? 'В чеке'}
                 </Text>
                 <Text style={[styles.cartTotalValue, { color: palette.text.primary }]} numberOfLines={1}>
-                  {procurement
-                    ? procurement.invalid
-                      ? 'Проверьте позиции'
-                      : formatPurchaseOrderMoney(cartTotals.sum)
-                    : formatMoney(cartTotals.sum)}
+                  {session?.showTotal === false
+                    ? `${session.productLines.length} позиций`
+                    : procurement
+                      ? procurement.invalid
+                        ? 'Проверьте позиции'
+                        : formatPurchaseOrderMoney(cartTotals.sum)
+                      : formatMoney(cartTotals.sum)}
                 </Text>
               </View>
             </View>
@@ -988,7 +1072,7 @@ export default function ProductPickerScreen() {
           последний добавленный товар и счётчик. Haptic отдаёт handleScanned. */}
       <BarcodeScanner
         visible={showScanner}
-        onClose={() => setShowScanner(false)}
+        onClose={closeScanner}
         onScanned={handleScanned}
         continuous
         statusText={scanFeedback}

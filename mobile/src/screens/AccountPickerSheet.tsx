@@ -2,9 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  KeyboardAvoidingView,
   Modal,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -14,6 +12,9 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import EmployeeAvatar from '../components/EmployeeAvatar';
+import { Button } from '../components/Button';
+import { KeyboardAwareScroll } from '../components/KeyboardAware';
+import { formatPhone, isCompletePhone } from '../../../shared/validation/phone';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '../platform/Typography';
@@ -52,6 +53,10 @@ export default function AccountPickerSheet({ visible, onClose }: Props) {
   const [points, setPoints] = useState<Extract<LoginStepResult, { status: 'point-required' }>['points']>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const [phoneError, setPhoneError] = useState('');
+  const [passwordError, setPasswordError] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const passwordInput = useRef<TextInput>(null);
   const sequence = useRef(0);
   const mounted = useRef(false);
   const pendingRef = useRef<PendingAccountLogin | null>(null);
@@ -85,6 +90,9 @@ export default function AccountPickerSheet({ visible, onClose }: Props) {
     setForm(false);
     setReauthId(null);
     setError('');
+    setPhoneError('');
+    setPasswordError('');
+    setShowPassword(false);
     setPassword('');
     onClose();
   };
@@ -94,6 +102,9 @@ export default function AccountPickerSheet({ visible, onClose }: Props) {
     setPhone('');
     setPassword('');
     setError('');
+    setPhoneError('');
+    setPasswordError('');
+    setShowPassword(false);
     setPending(null);
     pendingRef.current = null;
     setForm(true);
@@ -101,8 +112,15 @@ export default function AccountPickerSheet({ visible, onClose }: Props) {
 
   const submitCredentials = async () => {
     if (busy) return;
-    if (!phone.trim() || !password) {
-      setError('Введите телефон и пароль.');
+    setPhoneError('');
+    setPasswordError('');
+    if (!isCompletePhone(phone)) {
+      setPhoneError(phone ? 'Введите номер целиком: +7 и 10 цифр.' : 'Введите номер телефона.');
+      return;
+    }
+    if (!password.trim()) {
+      setPasswordError('Введите пароль.');
+      passwordInput.current?.focus();
       return;
     }
     const id = ++sequence.current;
@@ -382,123 +400,175 @@ export default function AccountPickerSheet({ visible, onClose }: Props) {
       onRequestClose={close}
     >
       <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top', 'bottom']}>
-        <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={[styles.header, { borderBottomColor: palette.border.subtle }]}>
-            <Pressable
-              onPress={close}
-              disabled={!!busy}
-              style={styles.headerAction}
-              accessibilityRole="button"
-              accessibilityLabel="Закрыть список аккаунтов"
-            >
-              <Ionicons name="close" size={24} color={palette.text.secondary} />
-            </Pressable>
-            <Text style={[styles.title, { color: palette.text.primary }]}>{title}</Text>
-            <View style={styles.headerAction} />
-          </View>
-          <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-            {pending ? (
-              <>
-                <Text style={[styles.subtitle, { color: palette.text.secondary }]}>
-                  Выберите, куда войти. Активный аккаунт пока не изменится.
+        <View style={[styles.header, { borderBottomColor: palette.border.subtle }]}>
+          <Pressable
+            onPress={close}
+            disabled={!!busy}
+            style={styles.headerAction}
+            accessibilityRole="button"
+            accessibilityLabel="Закрыть список аккаунтов"
+          >
+            <Ionicons name="close" size={24} color={palette.text.secondary} />
+          </Pressable>
+          <Text style={[styles.title, { color: palette.text.primary }]}>{title}</Text>
+          <View style={styles.headerAction} />
+        </View>
+        <KeyboardAwareScroll contentContainerStyle={styles.content} reserveTabBar={false}>
+          {pending ? (
+            <>
+              <Text style={[styles.subtitle, { color: palette.text.secondary }]}>
+                Выберите, куда войти. Активный аккаунт пока не изменится.
+              </Text>
+              {points.map((point) => (
+                <Pressable
+                  key={point.id}
+                  disabled={!!busy}
+                  onPress={() => void choosePoint(point.id)}
+                  style={[styles.row, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+                >
+                  <View style={styles.rowCopy}>
+                    <Text style={[styles.accountName, { color: palette.text.primary }]} numberOfLines={2}>
+                      {point.name}
+                    </Text>
+                    <Text style={[styles.meta, { color: palette.text.secondary }]}>
+                      {point.isMain ? 'Основной сервис' : 'Филиал'}
+                      {point.address ? ` · ${point.address}` : ''}
+                    </Text>
+                  </View>
+                  {busy === point.id ? (
+                    <ActivityIndicator color={palette.accent.primaryText} />
+                  ) : (
+                    <Ionicons name="chevron-forward" size={20} color={palette.text.tertiary} />
+                  )}
+                </Pressable>
+              ))}
+            </>
+          ) : form ? (
+            <>
+              <Text style={[styles.subtitle, { color: palette.text.secondary }]}>
+                {reauthId
+                  ? 'Введите телефон и пароль именно этого аккаунта.'
+                  : 'Войдите в другой рабочий аккаунт, чтобы быстро переключаться между ними.'}
+              </Text>
+              {reauthId ? (
+                <Text style={[styles.accountName, { color: palette.text.primary }]}>
+                  {auth.savedAccounts.find((account) => account.id === reauthId)?.displayName}
                 </Text>
-                {points.map((point) => (
-                  <Pressable
-                    key={point.id}
-                    disabled={!!busy}
-                    onPress={() => void choosePoint(point.id)}
-                    style={[styles.row, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-                  >
-                    <View style={styles.rowCopy}>
-                      <Text style={[styles.accountName, { color: palette.text.primary }]} numberOfLines={2}>
-                        {point.name}
-                      </Text>
-                      <Text style={[styles.meta, { color: palette.text.secondary }]}>
-                        {point.isMain ? 'Основной сервис' : 'Филиал'}
-                        {point.address ? ` · ${point.address}` : ''}
-                      </Text>
-                    </View>
-                    {busy === point.id ? (
-                      <ActivityIndicator color={palette.accent.primaryText} />
-                    ) : (
-                      <Ionicons name="chevron-forward" size={20} color={palette.text.tertiary} />
-                    )}
-                  </Pressable>
-                ))}
-              </>
-            ) : form ? (
-              <>
-                <Text style={[styles.subtitle, { color: palette.text.secondary }]}>
-                  {reauthId
-                    ? 'Введите телефон и пароль именно этого аккаунта.'
-                    : 'Добавьте ещё один рабочий аккаунт. Пароль останется только в памяти на время входа.'}
-                </Text>
+              ) : null}
+              <View style={styles.field}>
                 <Text style={[styles.label, { color: palette.text.secondary }]}>ТЕЛЕФОН</Text>
                 <TextInput
                   value={phone}
-                  onChangeText={setPhone}
-                  editable={!busy}
-                  placeholder="Телефон"
-                  keyboardType="phone-pad"
-                  autoComplete="tel"
-                  style={[
-                    styles.input,
-                    {
-                      color: palette.text.primary,
-                      backgroundColor: palette.bg.card,
-                      borderColor: palette.border.subtle,
-                    },
-                  ]}
-                />
-                <Text style={[styles.label, { color: palette.text.secondary }]}>ПАРОЛЬ</Text>
-                <TextInput
-                  value={password}
-                  onChangeText={setPassword}
-                  editable={!busy}
-                  placeholder="Пароль"
-                  secureTextEntry
-                  autoComplete="password"
-                  style={[
-                    styles.input,
-                    {
-                      color: palette.text.primary,
-                      backgroundColor: palette.bg.card,
-                      borderColor: palette.border.subtle,
-                    },
-                  ]}
-                />
-                <Pressable
-                  onPress={() => void submitCredentials()}
-                  disabled={!!busy}
-                  style={[styles.primary, { backgroundColor: palette.accent.primary }]}
-                >
-                  {busy === 'login' ? (
-                    <ActivityIndicator color={colors.white} />
-                  ) : (
-                    <Text style={styles.primaryText}>{reauthId ? 'Войти снова' : 'Продолжить'}</Text>
-                  )}
-                </Pressable>
-                <Pressable
-                  onPress={() => {
-                    setForm(false);
-                    setReauthId(null);
-                    setPassword('');
+                  onChangeText={(raw) => {
+                    const digits = raw.replace(/\D/g, '');
+                    setPhone(formatPhone(digits.startsWith('9') ? `7${digits}` : digits));
+                    setPhoneError('');
                     setError('');
                   }}
-                  disabled={!!busy}
-                  style={styles.secondary}
-                >
-                  <Text style={[styles.secondaryText, { color: palette.accent.primaryText }]}>К списку аккаунтов</Text>
-                </Pressable>
-              </>
-            ) : null}
-            {error ? (
-              <Text accessibilityRole="alert" style={[styles.error, { color: colors.red[600] }]}>
-                {error}
-              </Text>
-            ) : null}
-          </ScrollView>
-        </KeyboardAvoidingView>
+                  editable={!busy}
+                  accessibilityLabel="Телефон"
+                  placeholder="+7 (___) ___-__-__"
+                  placeholderTextColor={palette.text.tertiary}
+                  keyboardType="phone-pad"
+                  autoComplete="tel"
+                  textContentType="telephoneNumber"
+                  autoCorrect={false}
+                  style={[
+                    styles.input,
+                    {
+                      color: palette.text.primary,
+                      backgroundColor: palette.bg.muted,
+                      borderColor: phoneError ? colors.red[600] : palette.border.subtle,
+                    },
+                  ]}
+                />
+                {phoneError ? (
+                  <Text accessibilityRole="alert" style={styles.fieldError}>
+                    {phoneError}
+                  </Text>
+                ) : null}
+              </View>
+              <View style={styles.field}>
+                <Text style={[styles.label, { color: palette.text.secondary }]}>ПАРОЛЬ</Text>
+                <View style={styles.passwordWrap}>
+                  <TextInput
+                    ref={passwordInput}
+                    value={password}
+                    onChangeText={(value) => {
+                      setPassword(value);
+                      setPasswordError('');
+                      setError('');
+                    }}
+                    editable={!busy}
+                    accessibilityLabel="Пароль"
+                    placeholder="Введите пароль"
+                    placeholderTextColor={palette.text.tertiary}
+                    secureTextEntry={!showPassword}
+                    autoComplete="password"
+                    textContentType="password"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    returnKeyType="go"
+                    onSubmitEditing={() => void submitCredentials()}
+                    style={[
+                      styles.input,
+                      styles.passwordInput,
+                      {
+                        color: palette.text.primary,
+                        backgroundColor: palette.bg.muted,
+                        borderColor: passwordError ? colors.red[600] : palette.border.subtle,
+                      },
+                    ]}
+                  />
+                  <Pressable
+                    onPress={() => setShowPassword((value) => !value)}
+                    disabled={!!busy}
+                    accessibilityRole="button"
+                    accessibilityLabel={showPassword ? 'Скрыть пароль' : 'Показать пароль'}
+                    accessibilityState={{ checked: showPassword, disabled: !!busy }}
+                    style={styles.eyeButton}
+                  >
+                    <Ionicons name={showPassword ? 'eye' : 'eye-off'} size={20} color={palette.text.tertiary} />
+                  </Pressable>
+                </View>
+                {passwordError ? (
+                  <Text accessibilityRole="alert" style={styles.fieldError}>
+                    {passwordError}
+                  </Text>
+                ) : null}
+              </View>
+              {error ? (
+                <Text accessibilityRole="alert" style={[styles.error, { color: colors.red[600] }]}>
+                  {error}
+                </Text>
+              ) : null}
+              <Button
+                title={reauthId ? 'Войти снова' : 'Продолжить'}
+                onPress={() => void submitCredentials()}
+                loading={busy === 'login'}
+                disabled={!!busy}
+                size="md"
+              />
+              <Pressable
+                onPress={() => {
+                  setForm(false);
+                  setReauthId(null);
+                  setPassword('');
+                  setError('');
+                }}
+                disabled={!!busy}
+                style={styles.secondary}
+              >
+                <Text style={[styles.secondaryText, { color: palette.accent.primaryText }]}>К списку аккаунтов</Text>
+              </Pressable>
+            </>
+          ) : null}
+          {error && pending ? (
+            <Text accessibilityRole="alert" style={[styles.error, { color: colors.red[600] }]}>
+              {error}
+            </Text>
+          ) : null}
+        </KeyboardAwareScroll>
       </SafeAreaView>
     </Modal>
   );
@@ -557,7 +627,14 @@ const styles = StyleSheet.create({
   },
   headerAction: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   title: { fontSize: fontSize.lg, fontWeight: fontWeight.semibold },
-  content: { padding: spacing[4], gap: spacing[3], paddingBottom: spacing[8] },
+  content: {
+    width: '100%',
+    maxWidth: 440,
+    alignSelf: 'center',
+    padding: spacing[4],
+    gap: spacing[3],
+    paddingBottom: spacing[8],
+  },
   subtitle: { fontSize: fontSize.sm, lineHeight: 21, marginBottom: spacing[1] },
   accountCard: { borderWidth: StyleSheet.hairlineWidth, borderRadius: borderRadius.xl, overflow: 'hidden' },
   accountMain: { minHeight: 76, flexDirection: 'row', alignItems: 'center', padding: spacing[3], gap: spacing[3] },
@@ -597,22 +674,28 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[3],
     gap: spacing[2],
   },
-  label: { fontSize: 12, fontWeight: fontWeight.semibold, letterSpacing: 0.6, marginTop: spacing[2] },
+  field: { gap: spacing[2], marginBottom: spacing[1] },
+  label: { fontSize: 12, fontWeight: fontWeight.medium, letterSpacing: 1.5 },
   input: {
     minHeight: 50,
     borderWidth: 1,
-    borderRadius: borderRadius.lg,
-    paddingHorizontal: spacing[3],
-    fontSize: fontSize.base,
+    borderRadius: borderRadius.xl,
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+    fontSize: 15,
   },
-  primary: {
-    minHeight: 50,
-    borderRadius: borderRadius.lg,
+  passwordWrap: { position: 'relative' },
+  passwordInput: { paddingRight: 56 },
+  eyeButton: {
+    position: 'absolute',
+    right: 4,
+    top: 0,
+    bottom: 0,
+    width: 44,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: spacing[3],
   },
-  primaryText: { color: colors.white, fontSize: fontSize.base, fontWeight: fontWeight.semibold },
+  fieldError: { color: colors.red[600], fontSize: fontSize.sm, lineHeight: 20 },
   secondary: { minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   secondaryText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   error: { fontSize: fontSize.sm, lineHeight: 20, marginTop: spacing[2] },

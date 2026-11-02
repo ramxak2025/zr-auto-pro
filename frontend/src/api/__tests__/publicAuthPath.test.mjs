@@ -8,6 +8,7 @@ test('only the exact public booking and attendance routes stay open on staff-ses
     '/BOOK/Oil-Service',
     '/nfc/attendance',
     '/NFC/Attendance',
+    '/p/' + 'a'.repeat(43),
     '/A1b2C3d4E5f6G7h8',
     '/' + 'a'.repeat(32),
   ]) {
@@ -17,6 +18,8 @@ test('only the exact public booking and attendance routes stay open on staff-ses
     '/bookings',
     '/book',
     '/book/a/extra',
+    '/p',
+    '/p/' + 'a'.repeat(43) + '/extra',
     '/nfc/attendance/extra',
     '/checks',
     '/company-settings',

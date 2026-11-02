@@ -1,6 +1,7 @@
 import React from 'react';
 import { Alert, Switch, TextInput, Linking } from 'react-native';
-import * as Notifications from 'expo-notifications';
+import * as Notifications from '../../utils/notifications';
+import { inventoryInternal } from '../../utils/runtimeEnvironment';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { registerPushToken } from '../../contexts/AuthContext';
 import { Text } from '../../platform/Typography';
@@ -11,6 +12,22 @@ import { assertPlatformSession } from './platformSession';
 import { parseReminderDays } from './reminderSettingsValidation';
 import type { PlatformReminderSettings } from '../../../../shared/types';
 export default function AdminReminderSettingsScreen() {
+  return inventoryInternal ? <InternalReminderSettingsScreen /> : <PublicReminderSettingsScreen />;
+}
+function InternalReminderSettingsScreen() {
+  const p = useColors();
+  return (
+    <AdminPage title="Настройки напоминаний" back>
+      <AdminGroup>
+        <AdminRow label="Push-уведомления отключены" />
+        <Text variant="footnote" color={p.text.secondary}>
+          Во внутренней сборке склада настройки напоминаний и уведомления устройства недоступны.
+        </Text>
+      </AdminGroup>
+    </AdminPage>
+  );
+}
+function PublicReminderSettingsScreen() {
   const { session } = usePlatformSession();
   return <ReminderSettingsContent key={`${session.data.generation}:${session.authEpoch}`} />;
 }

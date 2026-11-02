@@ -1,4 +1,16 @@
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean, IsArray, IsInt, IsUUID, Min } from 'class-validator';
+import {
+  IsString,
+  IsNotEmpty,
+  IsOptional,
+  IsNumber,
+  IsBoolean,
+  IsArray,
+  IsInt,
+  IsUUID,
+  Min,
+  ArrayMaxSize,
+  ArrayUnique,
+} from 'class-validator';
 
 export class CreateProductDto {
   @IsOptional() @IsString() brand?: string;
@@ -16,6 +28,13 @@ export class CreateProductDto {
   @IsString()
   @IsOptional()
   photo?: string | null;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(4)
+  @ArrayUnique()
+  @IsString({ each: true })
+  photos?: string[];
 
   // Сообщения валидации — по-русски (см. UpdateProductDto): клиент показывает
   // текст сервера пользователю дословно.

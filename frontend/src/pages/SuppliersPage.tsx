@@ -126,7 +126,7 @@ export default function SuppliersPage() {
   };
 
   const isSubmitting = createMutation.isPending || updateMutation.isPending;
-  const suppliers = data?.data ?? [];
+  const suppliers = (data?.data ?? []).filter((supplier) => !supplier.isSystem && supplier.kind !== 'used_purchase');
   const total = data?.total ?? 0;
 
   const columns: DataTableColumn<Supplier>[] = [

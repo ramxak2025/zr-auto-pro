@@ -5,8 +5,9 @@ import {
   formatPurchaseOrderMoney,
   type PurchaseOrderLineValue,
 } from '../../../shared/utils/purchaseOrderInput';
-import { useState, useEffect, useCallback, useRef, type FormEvent } from 'react';
+import { lazy, Suspense, useState, useEffect, useCallback, useRef, type FormEvent } from 'react';
 import { useParams } from 'react-router-dom';
+import { isReceivableProduct } from '../../../shared/utils/supplierInvoiceReview';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Pencil, Plus, Minus, Truck, CreditCard, Package, User, Trash2, Undo2, Wallet } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -59,6 +60,7 @@ import { useProcurementRecovery } from '../hooks/useProcurementRecovery';
 import { ProcurementRecoveryPanel } from '../components/ProcurementRecoveryPanel';
 import { parseReturnQuantity, sumReceiptLineCents } from '../../../shared/utils/procurementInput';
 
+const SupplierInvoiceDialog = lazy(() => import('../components/supplierInvoices/SupplierInvoiceDialog'));
 type TabType = 'deliveries' | 'payments' | 'returns';
 
 interface SupplierFormData {
@@ -142,6 +144,7 @@ export default function SupplierDetailPage() {
 
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isDeliveryModalOpen, setIsDeliveryModalOpen] = useState(false);
+  const [invoiceOpen, setInvoiceOpen] = useState(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   // Возврат от поставщика (Round 14) — модал по образцу «Новая оплата».
   const [isRefundModalOpen, setIsRefundModalOpen] = useState(false);
@@ -784,15 +787,6 @@ export default function SupplierDetailPage() {
     });
   };
 
-  const openUsedPurchaseModal = () => {
-    if (!usedWarehouse) {
-      toast.error('Склад Б/У не найден');
-      return;
-    }
-    setUsedPurchaseForm({ productName: '', qty: '', purchasePrice: '', category: '', note: '' });
-    setIsUsedPurchaseModalOpen(true);
-  };
-
   // ── Состояния загрузки / ошибки ─────────────────────────────────────────────
   if (isLoading || isError || !supplier) {
     const is404 = (error as any)?.response?.status === 404;
@@ -1085,11 +1079,7 @@ export default function SupplierDetailPage() {
         }
         actions={
           canManage ? (
-            supplier.isSystem ? (
-              <Button icon={Package} onClick={openUsedPurchaseModal}>
-                Покупка б/у товара
-              </Button>
-            ) : (
+            supplier.isSystem ? null : (
               <Button variant="secondary" icon={Pencil} onClick={openEditModal}>
                 Редактировать
               </Button>
@@ -1447,6 +1437,16 @@ export default function SupplierDetailPage() {
         }
       >
         <form id="delivery-form" onSubmit={handleDeliverySubmit} className="space-y-4">
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => {
+              setIsDeliveryModalOpen(false);
+              setInvoiceOpen(true);
+            }}
+          >
+            Сканировать накладную
+          </Button>
           <Field label="Дата поставки" htmlFor="delivery-date">
             <Input
               id="delivery-date"
@@ -1470,6 +1470,9 @@ export default function SupplierDetailPage() {
               </Button>
             </div>
 
+            <p className="mb-2 text-xs text-ink-3">
+              Новая розница: пусто — сохранить текущую цену, 0 — установить ноль.
+            </p>
             {deliveryForm.items.length === 0 ? (
               <button
                 type="button"
@@ -1488,6 +1491,7 @@ export default function SupplierDetailPage() {
                 {deliveryForm.items.map((item, index) => {
                   const product = products.find((p) => p.id === item.productId);
                   const name = product?.name || 'Товар';
+                  const currentRetail = deliveryContextByProduct.get(item.productId)?.sellPrice;
                   return (
                     <li key={item.productId} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2.5">
                       <div className="min-w-0 flex-1 basis-40">
@@ -1543,7 +1547,17 @@ export default function SupplierDetailPage() {
                         onClick={() => removeDeliveryItem(index)}
                       />
                       <div className="grid w-full grid-cols-1 gap-2 border-t border-line pt-2 sm:grid-cols-2">
-                        <Field label="Розничная цена" hint="Пусто — сохранить текущую, 0 — установить ноль">
+                        <Field label="Новая розничная цена">
+                          <p className="mb-1.5 text-xs text-ink-2">
+                            Текущая:{' '}
+                            {deliveryPurchaseContext.isLoading
+                              ? 'загрузка…'
+                              : deliveryPurchaseContext.isError
+                                ? 'не удалось загрузить'
+                                : currentRetail !== undefined
+                                  ? formatPurchaseOrderMoney(currentRetail)
+                                  : 'недоступна'}
+                          </p>
                           <Input
                             size="sm"
                             inputMode="decimal"
@@ -1610,7 +1624,7 @@ export default function SupplierDetailPage() {
         onClose={() => setShowDeliveryPicker(false)}
         title="Товар в поставку"
         subtitle="Количество и закупочная цена прямо в строке товара"
-        products={products}
+        products={products.filter((product) => isReceivableProduct(product, warehouses))}
         onSelect={() => {}}
         purchaseOrder={{
           context: 'delivery',
@@ -2021,6 +2035,27 @@ export default function SupplierDetailPage() {
           </Field>
         </form>
       </Modal>
+      {invoiceOpen && (
+        <Suspense
+          fallback={
+            <p role="status" className="text-sm text-ink-2">
+              Загружаем проверку накладной…
+            </p>
+          }
+        >
+          <SupplierInvoiceDialog
+            isOpen={invoiceOpen}
+            supplierId={id as string}
+            supplierName={supplier.name}
+            onClose={() => setInvoiceOpen(false)}
+            onReceived={() => {
+              setInvoiceOpen(false);
+              setParam({ tab: 'deliveries' });
+              toast.success('Накладная принята. Поставка доступна в списке.');
+            }}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

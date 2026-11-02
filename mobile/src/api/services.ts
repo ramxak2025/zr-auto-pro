@@ -2,6 +2,8 @@ import { createStarterCatalogsApi } from '../../../shared/api/starterCatalogs';
 import api, { loginAcrossHosts, postPublicAcrossHosts } from './axios';
 import {
   createAuthApi,
+  createSupplierInvoicesApi,
+  createProductKitsApi,
   createVinApi,
   createReportBuilderApi,
   createStorageCellsApi,
@@ -270,3 +272,5 @@ export const uploadsApi = {
 export const starterCatalogsApi = createStarterCatalogsApi(api);
 
 export const dashboardApi = createDashboardApi(api);
+export const supplierInvoicesApi = createSupplierInvoicesApi(api);
+export const productKitsApi = createProductKitsApi(api);

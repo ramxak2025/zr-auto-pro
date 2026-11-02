@@ -1,5 +1,6 @@
 import type { Service, ServiceFolder } from '../types';
 import { normalizeServiceCategoryPath } from './normalizeServiceCategoryPath';
+import { smartSearch } from './smartSearch';
 
 /** Search deliberately ignores the current folder; counts use the complete catalog. */
 export function serviceBrowserLevel(
@@ -14,9 +15,7 @@ export function serviceBrowserLevel(
   if (query)
     return {
       folders: [] as [string, number][],
-      currentServices: services.filter((service) =>
-        `${service.name} ${service.category ?? ''}`.toLocaleLowerCase('ru').includes(query),
-      ),
+      currentServices: smartSearch(services, query, (service) => [service.name, service.category], { typos: true }),
     };
   const addFolder = (parts: string[], increment: number) => {
     if (path.some((part, index) => parts[index] !== part) || parts.length <= path.length) return;

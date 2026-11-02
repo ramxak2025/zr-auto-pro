@@ -1,10 +1,11 @@
+import { inventoryInternal } from '../utils/runtimeEnvironment';
 /** Recipient inbox for payouts, fines and legacy payment confirmations.
  * A push wakes the inbox; it never supplies the displayed amount or reason.
  * One native modal prevents competing presentations on iOS.
  */
 import React from 'react';
 import { AppState } from 'react-native';
-import * as Notifications from 'expo-notifications';
+import * as Notifications from '../utils/notifications';
 import { useQueryClient } from '@tanstack/react-query';
 import { createSalaryApi } from '../../../shared/api/createServices';
 import { captureAuthSession, createSessionBoundClient } from '../api/axios';
@@ -95,12 +96,14 @@ export function SalaryNotificationProvider({ children }: { children: React.React
     const foreground = AppState.addEventListener('change', (state) => {
       if (state === 'active') void checkOnce();
     });
-    const push = Notifications.addNotificationReceivedListener((notification) => {
-      if (isSalaryNoticePush(notification.request.content.data)) void checkOnce();
-    });
+    const push = inventoryInternal
+      ? null
+      : Notifications.addNotificationReceivedListener((notification) => {
+          if (isSalaryNoticePush(notification.request.content.data)) void checkOnce();
+        });
     return () => {
       foreground.remove();
-      push.remove();
+      push?.remove();
     };
   }, [checkOnce]);
 

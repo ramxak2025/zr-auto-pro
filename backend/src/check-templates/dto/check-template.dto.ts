@@ -66,6 +66,7 @@ export class CheckTemplateServiceDto {
 }
 
 export class CreateCheckTemplateDto {
+  @IsOptional() @IsBoolean() supportsKitRecipes?: boolean;
   @MaxLength(2000, { message: 'Название шаблона: слишком длинный текст (максимум 2000 символов)' })
   @IsString({ message: 'Название шаблона: укажите текст' })
   name!: string;
@@ -93,6 +94,7 @@ export class CreateCheckTemplateDto {
 }
 
 export class UpdateCheckTemplateDto {
+  @IsOptional() @IsBoolean() supportsKitRecipes?: boolean;
   @IsOptional()
   @MaxLength(2000, { message: 'Название шаблона: слишком длинный текст (максимум 2000 символов)' })
   @IsString({ message: 'Название шаблона: укажите текст' })

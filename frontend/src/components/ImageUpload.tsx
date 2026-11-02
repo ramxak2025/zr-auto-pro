@@ -7,6 +7,8 @@ import { focusRing } from '../ui/tokens';
 import { Button } from '../ui/Button';
 
 interface ImageUploadProps {
+  disabled?: boolean;
+  onBusyChange?: (busy: boolean) => void;
   value?: string;
   onChange: (url: string) => void;
   onClear?: () => void;
@@ -30,12 +32,15 @@ export default function ImageUpload({
   variant = 'product',
   className = '',
   label,
+  disabled = false,
+  onBusyChange,
 }: ImageUploadProps) {
   const [uploading, setUploading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const accessibleName = label ?? (variant === 'avatar' ? 'Фото' : 'Фото товара');
 
   const handleFile = async (file: File) => {
+    if (disabled || uploading) return;
     if (file.size > MAX_SIZE) {
       toast.error('Файл слишком большой (макс. 5 МБ)');
       return;
@@ -46,6 +51,7 @@ export default function ImageUpload({
     }
 
     setUploading(true);
+    onBusyChange?.(true);
     try {
       const res = await uploadsApi.upload(file);
       onChange(res.data.url);
@@ -53,6 +59,7 @@ export default function ImageUpload({
       toast.error('Ошибка загрузки');
     } finally {
       setUploading(false);
+      onBusyChange?.(false);
     }
   };
 
@@ -73,7 +80,7 @@ export default function ImageUpload({
         <button
           type="button"
           onClick={() => inputRef.current?.click()}
-          disabled={uploading}
+          disabled={uploading || disabled}
           aria-label={imageUrl ? `Заменить: ${accessibleName}` : `Загрузить: ${accessibleName}`}
           aria-busy={uploading || undefined}
           className={cn(
@@ -102,6 +109,7 @@ export default function ImageUpload({
           <button
             type="button"
             onClick={onClear}
+            disabled={uploading || disabled}
             aria-label={`Удалить: ${accessibleName}`}
             className={cn(
               'absolute -right-2 -top-2 flex h-6 w-6 items-center justify-center rounded-full bg-bad text-white shadow-sm',
@@ -123,7 +131,7 @@ export default function ImageUpload({
       <button
         type="button"
         onClick={() => inputRef.current?.click()}
-        disabled={uploading}
+        disabled={uploading || disabled}
         aria-label={imageUrl ? `Заменить: ${accessibleName}` : `Загрузить: ${accessibleName}`}
         aria-busy={uploading || undefined}
         className={cn(

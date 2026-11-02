@@ -1,4 +1,5 @@
-import { IsArray, IsDateString, IsIn, IsNumber, IsOptional, IsUUID, Min, ValidateNested } from 'class-validator';
+import { InvoiceUnitConfirmationDto } from '../../suppliers/dto/create-delivery.dto';
+import { IsArray, IsDateString, IsIn, IsNumber, IsOptional, IsUUID, IsInt, Min, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 
 /** One line being received in a receive operation. */
@@ -54,6 +55,15 @@ export class ReceivePurchaseOrderItemDto {
  * отклоняет (400).
  */
 export class ReceivePurchaseOrderDto {
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => InvoiceUnitConfirmationDto)
+  invoiceUnits?: InvoiceUnitConfirmationDto[];
+  @IsOptional() @IsUUID('4') invoiceDocumentId?: string;
+  @IsOptional() @IsDateString() invoiceDocumentDate?: string;
+  @IsOptional() @IsInt() @Min(1) expectedInvoiceVersion?: number;
+  @IsOptional() @IsArray() @IsUUID('4', { each: true }) invoiceLineIds?: string[];
   @IsOptional()
   @IsUUID()
   requestId?: string;

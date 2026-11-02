@@ -1,3 +1,4 @@
+import { kitConflict } from '../product-kits/kit-stock';
 import { BadRequestException } from '@nestjs/common';
 import { Pool, PoolClient } from 'pg';
 import { cents, decimal } from './procurement-money';
@@ -12,6 +13,7 @@ export interface PreviousPurchase {
 export interface ReceiptProduct {
   id: string;
   name: string;
+  assembly_id?: string | null;
   stock: string;
   warehouse_id: string | null;
   cost_price: string;
@@ -28,7 +30,7 @@ export async function lockReceiptProducts(
 ): Promise<ReceiptProduct[]> {
   const unique = [...new Set(ids)];
   const { rows } = await client.query<ReceiptProduct>(
-    `SELECT p.id, p.name, p.stock, p.warehouse_id, p.cost_price, p.sell_price, p.cost_price_is_placeholder, p.sell_price_is_placeholder FROM products p
+    `SELECT p.id, p.name, p.stock, p.warehouse_id, p.cost_price, p.sell_price, p.cost_price_is_placeholder, p.sell_price_is_placeholder, p.assembly_id FROM products p
      WHERE p.id = ANY($1::uuid[]) AND p.tenant_id=$2 AND p.deleted_at IS NULL
        AND ($3::uuid IS NULL OR EXISTS (SELECT 1 FROM warehouses w WHERE w.id=p.warehouse_id AND w.tenant_id=$2 AND w.point_id=$3))
      ORDER BY p.id FOR UPDATE OF p`,
@@ -36,6 +38,7 @@ export async function lockReceiptProducts(
   );
   if (rows.length !== unique.length)
     throw new BadRequestException({ message: 'Товар не найден на складе этого филиала' });
+  if (rows.some((row) => row.assembly_id)) throw kitConflict();
   return rows;
 }
 

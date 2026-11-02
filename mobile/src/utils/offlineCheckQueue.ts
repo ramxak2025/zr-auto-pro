@@ -911,8 +911,7 @@ export function setOfflineCheckQueuePointId(_pointId: string | null): void {
 function getQueue(): OfflineCheckQueueCore {
   if (!singleton) {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const AsyncStorage = require('@react-native-async-storage/async-storage')
-      .default as typeof import('@react-native-async-storage/async-storage').default;
+    const AsyncStorage = require('./environmentStorage').default as typeof import('./environmentStorage').default;
     singleton = createOfflineCheckQueueCore({
       storage: {
         getItem: (key) => AsyncStorage.getItem(key),

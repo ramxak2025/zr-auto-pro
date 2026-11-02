@@ -1,3 +1,4 @@
+jest.mock('expo-constants', () => ({ __esModule: true, default: { expoConfig: { extra: {} } } }));
 const mockDisk = new Map<string, string>();
 jest.mock('react-native', () => ({ Platform: { OS: 'android' } }));
 const mockNative = {

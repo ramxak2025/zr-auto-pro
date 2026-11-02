@@ -27,7 +27,7 @@ import Reanimated, {
   runOnJS,
   runOnUI,
 } from 'react-native-reanimated';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from '../utils/environmentStorage';
 // SafeAreaView no longer used — IosScreenHeader handles top inset
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';

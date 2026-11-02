@@ -31,6 +31,7 @@ import {
 } from '../utils/productPickerSession';
 import type { Product, PurchaseReceiptContext } from '../../../shared/types';
 import type { CreateDeliveryRequest } from '../../../shared/api/types';
+import { isReceivableProduct } from '../../../shared/utils/supplierInvoiceReview';
 import { spacing, colors, borderRadius } from '../theme';
 
 interface Line {
@@ -148,7 +149,8 @@ export default function DirectSupplyCreateScreen() {
     warrantyNames: new Set(),
     warehouseId,
     setWarehouseId,
-    warehouses,
+    warehouses: warehouses.filter((warehouse) => warehouse.kind !== 'used'),
+    filterProduct: (product) => isReceivableProduct(product, warehouses),
   };
   const bridgeRef = useRef(bridge);
   bridgeRef.current = bridge;
@@ -266,8 +268,16 @@ export default function DirectSupplyCreateScreen() {
       <IosScreenHeader title="Поставка без заказа" subtitle={supplierName} onBack={() => navigation.goBack()} />
       <KeyboardAwareScroll contentContainerStyle={styles.content}>
         <ProcurementRecoveryPanel recovery={recovery} onRecovered={recovered} />
+        <TouchableOpacity
+          accessibilityRole="button"
+          disabled={blocked}
+          onPress={() => navigation.navigate('SupplierInvoiceReview', { supplierId, supplierName })}
+        >
+          <Text style={styles.link}>Сканировать накладную</Text>
+        </TouchableOpacity>
         <Text style={{ color: palette.text.secondary }}>
           Остатки увеличатся после приёмки. Сумма поставки добавится в долг поставщику.
+          {'\n'}Новая розница: пусто — сохранить текущую цену, 0 — установить ноль.
         </Text>
         <TouchableOpacity accessibilityRole="button" disabled={blocked} onPress={() => setDateOpen(true)}>
           <Text style={styles.link}>Дата поставки: {formatSupplyDate(date)}</Text>
@@ -306,11 +316,25 @@ export default function DirectSupplyCreateScreen() {
                 </View>
               ))}
             </View>
-            <Text style={{ color: palette.text.secondary }}>Розничная цена: пусто — сохранить текущую</Text>
+            <Text style={{ color: palette.text.secondary }}>
+              Текущая розничная:{' '}
+              {context.isLoading
+                ? 'загрузка…'
+                : context.isError
+                  ? 'не удалось загрузить'
+                  : context.data?.some((item) => item.productId === line.productId)
+                    ? formatPurchaseOrderMoney(
+                        context.data.find((item) => item.productId === line.productId)!.sellPrice,
+                      )
+                    : 'недоступна'}
+            </Text>
+            <Text style={{ color: palette.text.secondary }}>Новая розничная цена, ₽</Text>
             <TextInput
               accessibilityLabel={`Розничная цена — ${line.name}`}
               editable={!blocked}
               value={line.sellPriceText}
+              placeholder="Без изменений"
+              placeholderTextColor={palette.text.tertiary}
               keyboardType="decimal-pad"
               style={[styles.input, { color: palette.text.primary, borderColor: palette.border.subtle }]}
               onChangeText={(text) =>

@@ -24,6 +24,12 @@ export function captureInventorySession() {
       if (!isCurrent()) throw canceled();
       return result;
     },
+    lookupBarcode: async (params: Parameters<typeof products.lookupBarcode>[0]) => {
+      if (!isCurrent()) throw new Error('Inventory session expired');
+      const result = await products.lookupBarcode(params);
+      if (!isCurrent()) throw new Error('Inventory session expired');
+      return result;
+    },
     loadProducts: (warehouseId: string) =>
       loadProductCatalog(
         async (params) => {

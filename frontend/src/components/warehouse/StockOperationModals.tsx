@@ -32,6 +32,24 @@ function ProductSummary({ product, stockLabel = 'Остаток' }: { product: P
   );
 }
 
+function PhysicalKitReadonly({ isOpen, onClose, product }: { isOpen: boolean; onClose: () => void; product: Product }) {
+  return (
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Собранный комплект"
+      footer={<Button onClick={onClose}>Закрыть</Button>}
+    >
+      <div className="space-y-3">
+        <ProductSummary product={product} />
+        <p className="text-sm text-ink-2">
+          Остаток собранного комплекта меняется через действия комплекта. Для разборки откройте его карточку.
+        </p>
+      </div>
+    </Modal>
+  );
+}
+
 // ─── Списание ────────────────────────────────────────────────────────────────
 
 interface WriteoffModalProps {
@@ -49,6 +67,8 @@ export function WriteoffModal({ isOpen, onClose, product, onSubmit, isLoading }:
   const [reason, setReason] = useState('');
   const [mode, setMode] = useState<WriteoffMode>('expense');
   const unit = unitLabel(product.unit);
+
+  if (product.assemblyId) return <PhysicalKitReadonly isOpen={isOpen} onClose={onClose} product={product} />;
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -243,6 +263,8 @@ export function InventoryModal({ isOpen, onClose, product, onSubmit, isLoading }
   const diff = actual - product.stock;
   const amount = Math.abs(diff) * product.costPrice;
   const unit = unitLabel(product.unit);
+
+  if (product.assemblyId) return <PhysicalKitReadonly isOpen={isOpen} onClose={onClose} product={product} />;
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();

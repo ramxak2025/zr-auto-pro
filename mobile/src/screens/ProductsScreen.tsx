@@ -1,4 +1,14 @@
+import ProductKitRecipes from '../components/ProductKitRecipes';
+import { canCountProduct, PHYSICAL_KIT_STOCK_NOTICE } from './inventory/model';
+import { loadProductBarcodeMatches } from '../../../shared/utils/productBarcodeLookup';
+import ProductLabelPrint from '../components/products/ProductLabelPrint';
+import { loadProductCatalog } from '../../../shared/api/productCatalog';
+import { formatKitUnitCost } from '../../../shared/utils/productKitDraft';
+import ProductPhotoGallery from '../components/ProductPhotoGallery';
+import { randomUUID } from 'expo-crypto';
+import { productPhotoUrls, productPhotoPatch, uploadProductPhotos } from '../../../shared/utils/productPhotos';
 import type { ProductsStackParamList } from '../navigation/AppNavigator';
+import { smartSearch } from '../../../shared/utils/smartSearch';
 import LowStockView from './dashboard/LowStockView';
 import { captureDataSession } from '../contexts/dataSession';
 import React, { useCallback, useMemo, useRef, useState } from 'react';
@@ -346,6 +356,11 @@ const ProductRow = React.memo(function ProductRow({
           <Text style={[styles.productName, { color: textPrimary }]} numberOfLines={2}>
             {item.name}
           </Text>
+          {item.assemblyId ? (
+            <Text style={{ fontSize: 12, color: accentColor }}>Собранный комплект</Text>
+          ) : item.isBundle ? (
+            <Text style={{ fontSize: 12, color: textTertiary }}>Набор позиций · без сборки</Text>
+          ) : null}
           <View style={styles.productPrices}>
             {missingSellPrice ? (
               <TouchableOpacity
@@ -376,7 +391,12 @@ const ProductRow = React.memo(function ProductRow({
             {hideCategory ? (
               canSeeCostPrice ? (
                 <Text style={[styles.productCostPrice, { color: textTertiary }]} numberOfLines={1}>
-                  с/с {item.costPriceIsPlaceholder ? 'не подтверждена' : formatMoney(item.costPrice)}
+                  с/с{' '}
+                  {item.costPriceIsPlaceholder
+                    ? 'не подтверждена'
+                    : item.assemblyId
+                      ? formatKitUnitCost(item.assemblyExactCost ?? item.costPrice)
+                      : formatMoney(item.costPrice)}
                 </Text>
               ) : null
             ) : item.category ? (
@@ -449,6 +469,7 @@ function ProductsScreenContents() {
   // #60 — «Удаление на складе». manage ⇒ delete; либо явное warehouse_delete.
   const canDeleteWarehouse = hasPermission('warehouse_manage') || hasPermission('warehouse_delete');
 
+  const [kitRecipesOpen, setKitRecipesOpen] = useState(false);
   const [search, setSearch] = useState('');
   const warehouseScroll = useWarehouseScroll();
   // Весь каталог склада одной страницей — см. PRODUCT_LIST_LIMIT.
@@ -494,7 +515,9 @@ function ProductsScreenContents() {
   // ВНУТРИ form-Modal, отдельный state открытия.
   const [formCell, setFormCell] = useState<{ id: string; code: string } | null>(null);
   const [cellPickerOpen, setCellPickerOpen] = useState(false);
-  const [photoUri, setPhotoUri] = useState<string | null>(null); // local image URI or existing server path
+  const [photoUris, setPhotoUris] = useState<string[]>([]);
+  const usedRequestId = useRef<string | null>(null);
+  const photoPickIndex = useRef<number | null>(null); // local image URI or existing server path
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const photoUploadPending = useRef(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -525,6 +548,9 @@ function ProductsScreenContents() {
   // the camera; a decoded code is matched against the loaded list's `barcode`
   // field (PRODUCT_LIST_FIELDS includes it) and opens that product, or offers
   // to create one when nothing matches.
+  const [barcodeMatches, setBarcodeMatches] = useState<Product[] | null>(null);
+  const barcodeEpoch = useRef(0);
+  const [labelTargets, setLabelTargets] = useState<Product[] | null>(null);
   const [showScanner, setShowScanner] = useState(false);
 
   // Inventory modal state
@@ -681,7 +707,12 @@ function ProductsScreenContents() {
     active: modalOpen,
     formKey: `${activeWarehouseId ?? ''}:${editingProduct?.id ?? 'new'}`,
     navigation,
-    onChange: setPhotoUri,
+    onChange: (uri) =>
+      setPhotoUris((current) =>
+        photoPickIndex.current === null
+          ? [...current, uri].slice(0, 4)
+          : current.map((value, index) => (index === photoPickIndex.current ? uri : value)),
+      ),
   });
   const folderWarehouseRef = useRef(activeWarehouseId);
   folderWarehouseRef.current = activeWarehouseId;
@@ -712,17 +743,14 @@ function ProductsScreenContents() {
     // the new slot's fresh data arrives in the background.
     queryKey: ['products', { search, limit, warehouseId: activeWarehouseId ?? null }],
     queryFn: async () => {
-      const res = await productsApi.getAll({
-        search,
-        page: 1,
-        limit,
-        // Project to the columns the list actually renders. Cast because
-        // `fields` is a pass-through axios query param, not part of the
-        // shared PaginationParams contract (which we must not touch).
-        fields: PRODUCT_LIST_FIELDS,
-        ...(activeWarehouseId ? { warehouseId: activeWarehouseId } : {}),
-      } as Parameters<typeof productsApi.getAll>[0] & { fields: string });
-      return res.data;
+      const products = await loadProductCatalog(
+        (params) =>
+          productsApi.getAll({ ...params, fields: PRODUCT_LIST_FIELDS } as Parameters<typeof productsApi.getAll>[0] & {
+            fields: string;
+          }),
+        { search: search, ...(activeWarehouseId ? { warehouseId: activeWarehouseId } : {}) },
+      );
+      return { data: products, total: products.length, page: 1, limit: Math.max(products.length, 1) };
     },
     // Defence-in-depth: the global QueryClient already sets
     // placeholderData = prev=>prev, but writing it here too makes the
@@ -805,7 +833,15 @@ function ProductsScreenContents() {
   }, [inventoryMovements]);
 
   const createMutation = useMutation({
-    mutationFn: (d: any) => productsApi.create(d),
+    mutationFn: async (d: any) => {
+      if (warehouses?.find((warehouse) => warehouse.id === d.warehouseId)?.kind === 'used') {
+        const { stock, supplierId, isBundle, bundleItems, ...fields } = d;
+        usedRequestId.current ??= randomUUID();
+        const result = await productsApi.usedIntake({ ...fields, quantity: stock, requestId: usedRequestId.current });
+        return { data: result.data.product };
+      }
+      return productsApi.create(d);
+    },
     onSuccess: () => {
       haptic('success');
       queryClient.invalidateQueries({ queryKey: ['products'] });
@@ -1074,10 +1110,12 @@ function ProductsScreenContents() {
   // и есть «товар на складе иногда не показывается, хотя он там есть».
   const listTruncated = typeof data?.total === 'number' && data.total > allProducts.length;
 
+  const scalarProducts = useMemo(() => allProducts.filter(canCountProduct), [allProducts]);
+
   // Compute folder annotations: last inventory date per folder
   const inventoryAnnotations = useMemo(() => {
     const annotations = new Map<string, FolderAnnotation>();
-    if (!inventoryMovements || !allProducts.length) return annotations;
+    if (!inventoryMovements || !scalarProducts.length) return annotations;
 
     const inventoryMoves = inventoryMovements.filter((m) => m.type === 'inventory');
     const lastInvByProduct = new Map<string, Date>();
@@ -1088,7 +1126,7 @@ function ProductsScreenContents() {
     }
 
     const folderProducts = new Map<string, string[]>();
-    for (const p of allProducts) {
+    for (const p of scalarProducts) {
       const cat = p.category || '';
       const catParts = cat ? cat.split('/') : [];
       if (catParts.length > 0) {
@@ -1114,7 +1152,7 @@ function ProductsScreenContents() {
     }
 
     return annotations;
-  }, [inventoryMovements, allProducts]);
+  }, [inventoryMovements, scalarProducts]);
 
   // Per-product last inventory date map
   const lastInventoryByProduct = useMemo(() => {
@@ -1132,14 +1170,19 @@ function ProductsScreenContents() {
   // Inventory folder structure (separate from main warehouse)
   const { invSubfolders, invCurrentProducts } = useMemo(() => {
     if (inventorySearch) {
-      const filtered = allProducts.filter((p) => p.name.toLowerCase().includes(inventorySearch.toLowerCase()));
+      const filtered = smartSearch(
+        scalarProducts,
+        inventorySearch,
+        (p) => [p.name, p.article, p.brand, p.barcode, p.internalBarcode, p.category, p.storageCellCode],
+        { typos: true },
+      );
       return { invSubfolders: new Map<string, { count: number }>(), invCurrentProducts: filtered };
     }
 
     const subs = new Map<string, { count: number }>();
     const prods: Product[] = [];
 
-    for (const p of allProducts) {
+    for (const p of scalarProducts) {
       const cat = p.category || '';
       const catParts = cat ? cat.split('/') : [];
 
@@ -1171,13 +1214,13 @@ function ProductsScreenContents() {
     }
 
     if (invActivePath.length === 0) {
-      for (const p of allProducts) {
+      for (const p of scalarProducts) {
         if (!p.category && !prods.includes(p)) prods.push(p);
       }
     }
 
     return { invSubfolders: subs, invCurrentProducts: prods };
-  }, [allProducts, invActivePath, inventorySearch, extraFolders]);
+  }, [scalarProducts, invActivePath, inventorySearch, extraFolders]);
 
   const invSortedFolders = Array.from(invSubfolders.entries()).sort((a, b) => a[0].localeCompare(b[0]));
 
@@ -1186,7 +1229,7 @@ function ProductsScreenContents() {
     const now = Date.now();
     const h24 = 24 * 60 * 60 * 1000;
     const prefix = [...invActivePath, folderName].join('/');
-    const folderProducts = allProducts.filter((p) => {
+    const folderProducts = scalarProducts.filter((p) => {
       const cat = p.category || '';
       return cat === prefix || cat.startsWith(prefix + '/');
     });
@@ -1232,7 +1275,7 @@ function ProductsScreenContents() {
     let excessAmount = 0;
     for (const item of checked) {
       const diff = (parseQtyInput(item.actualStock) ?? 0) - item.currentStock;
-      const product = allProducts.find((p) => p.id === item.productId);
+      const product = scalarProducts.find((p) => p.id === item.productId);
       const cost = product?.costPrice || 0;
       if (diff < 0) {
         shortageAmount += Math.abs(diff) * cost;
@@ -1241,7 +1284,7 @@ function ProductsScreenContents() {
       }
     }
     return { checkedCount: total.length, changedCount: checked.length, shortageAmount, excessAmount };
-  }, [inventoryItems, allProducts]);
+  }, [inventoryItems, scalarProducts]);
 
   // Stats
   const warehouseStats = useMemo(() => {
@@ -1500,6 +1543,7 @@ function ProductsScreenContents() {
   }, [bulkDeleteMutation, activeWarehouseId]);
 
   const openCreate = () => {
+    usedRequestId.current = null;
     invalidatePhotoPicker();
     setEditingProduct(null);
     setName('');
@@ -1511,7 +1555,7 @@ function ProductsScreenContents() {
     setUnit(DEFAULT_UNIT);
     setFormBarcode('');
     setFormCell(null);
-    setPhotoUri(null);
+    setPhotoUris([]);
     setModalOpen(true);
   };
 
@@ -1519,7 +1563,17 @@ function ProductsScreenContents() {
   // refetches; otherwise React.memo on ProductRow can't short-circuit
   // re-renders. The picker invalidation callback is stable as well.
   const openEdit = useCallback(
-    (p: Product) => {
+    async (p: Product) => {
+      const lease = captureDataSession();
+      if (!Array.isArray(p.photos) || p.assemblyId === undefined) {
+        try {
+          p = (await productsApi.getById(p.id)).data;
+        } catch {
+          if (lease.isCurrent()) Alert.alert('Не удалось загрузить карточку', 'Обновите товар и попробуйте ещё раз.');
+          return;
+        }
+        if (!lease.isCurrent() || navigation.isFocused?.() === false) return;
+      }
       invalidatePhotoPicker();
       setConfirmStarterPrices(false);
       setEditingProduct(p);
@@ -1527,7 +1581,7 @@ function ProductsScreenContents() {
       setCategory(p.category || '');
       // null-безопасно: у товара б/у-склада цена продажи может прийти пустой,
       // а String(null) = 'null' сделал бы поле невалидным при сохранении.
-      setCostPrice(p.costPrice != null ? String(p.costPrice) : '');
+      setCostPrice((p.assemblyExactCost ?? p.costPrice) != null ? String(p.assemblyExactCost ?? p.costPrice) : '');
       setSellPrice(p.sellPrice != null ? String(p.sellPrice) : '');
       setStock(p.stock != null ? String(p.stock) : '');
       setMinStock(p.minStock != null ? String(p.minStock) : '');
@@ -1535,7 +1589,7 @@ function ProductsScreenContents() {
       setUnit(unitLabel(p.unit));
       setFormBarcode(p.barcode || '');
       setFormCell(p.storageCellId ? { id: p.storageCellId, code: p.storageCellCode ?? '' } : null);
-      setPhotoUri(p.photo ? (p.photo.startsWith('http') ? p.photo : p.photo) : null);
+      setPhotoUris(productPhotoUrls(p));
       setModalOpen(true);
     },
     [invalidatePhotoPicker],
@@ -1551,43 +1605,77 @@ function ProductsScreenContents() {
     [navigation],
   );
 
-  // Barcode scan → find the matching product (by `barcode`) in the loaded list
-  // and open it; offer to create one when nothing matches. We match against
-  // the already-loaded warehouse list (no barcode lookup endpoint exists), so
-  // a code from a product on ANOTHER warehouse won't resolve here.
+  // Exact lookup distinguishes an authoritative miss from duplicates and network failure.
+  // Warehouse operations retain the currently selected warehouse context.
+  const openSelectedLabels = async () => {
+    if (selectedProductIds.size > 200) {
+      Alert.alert('Этикетки', 'Выберите не больше 200 товаров.');
+      return;
+    }
+    const lease = captureDataSession();
+    try {
+      const targets = await Promise.all(
+        [...selectedProductIds].map(
+          async (id) => allProducts.find((product) => product.id === id) ?? (await productsApi.getById(id)).data,
+        ),
+      );
+      if (lease.isCurrent()) setLabelTargets(targets);
+    } catch {
+      if (lease.isCurrent()) Alert.alert('Этикетки', 'Не удалось загрузить выбранные товары. Повторите по сети.');
+    }
+  };
+  const barcodeWarehouseRef = useRef(activeWarehouseId);
+  barcodeWarehouseRef.current = activeWarehouseId;
   const handleBarcodeScanned = useCallback(
-    (code: string) => {
+    async (code: string) => {
       setShowScanner(false);
       const needle = code.trim();
-      const match = allProducts.find((p) => String(p.barcode || '').trim() === needle);
-      if (match) {
-        haptic('success');
-        navigation.navigate('ProductDetail', { product: match });
-        return;
-      }
-      haptic('warning');
-      Alert.alert('Товар не найден', `Штрих-код ${needle} не привязан ни к одному товару этого склада.`, [
-        { text: 'Отмена', style: 'cancel' },
-        ...(canManageWarehouse && activeWarehouse?.kind === 'main'
-          ? [
-              {
-                text: 'Создать товар',
-                // Round 12 #6б: отсканированный код предзаполняет поле
-                // «Штрихкод» новой карточки — setFormBarcode ставится ПОСЛЕ
-                // openCreate (тот сбрасывает форму, включая barcode).
-                onPress: () => {
-                  openCreate();
-                  setFormBarcode(needle);
+      if (!needle) return;
+      const request = ++barcodeEpoch.current;
+      const lease = captureDataSession();
+      try {
+        const result = await loadProductBarcodeMatches(productsApi.lookupBarcode, {
+          barcode: needle,
+          ...(activeWarehouseId ? { warehouseId: activeWarehouseId } : {}),
+        });
+        if (
+          !lease.isCurrent() ||
+          request !== barcodeEpoch.current ||
+          barcodeWarehouseRef.current !== activeWarehouseId ||
+          navigation.isFocused?.() === false
+        )
+          return;
+        if (result.status === 'found') {
+          haptic('success');
+          navigation.navigate('ProductDetail', { product: result.matches[0] });
+          return;
+        }
+        if (result.status === 'ambiguous') {
+          setBarcodeMatches(result.matches);
+          return;
+        }
+        haptic('warning');
+        Alert.alert('Товар не найден', `Штрих-код ${needle} не привязан к товару этого склада.`, [
+          { text: 'Отмена', style: 'cancel' },
+          ...(canManageWarehouse && activeWarehouse?.kind === 'main'
+            ? [
+                {
+                  text: 'Создать товар',
+                  onPress: () => {
+                    if (!lease.isCurrent() || barcodeWarehouseRef.current !== activeWarehouseId) return;
+                    openCreate();
+                    setFormBarcode(needle);
+                  },
                 },
-              },
-            ]
-          : []),
-      ]);
+              ]
+            : []),
+        ]);
+      } catch {
+        if (lease.isCurrent() && request === barcodeEpoch.current)
+          Alert.alert('Штрихкод не проверен', 'Подключитесь к сети и повторите. Товар не добавлен.');
+      }
     },
-    // `openCreate` is a stable screen-scope function; allProducts/activeWarehouse
-    // change with data — intentionally included so the latest list is matched.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [allProducts, navigation, activeWarehouse, hasPermission],
+    [activeWarehouseId, activeWarehouse, canManageWarehouse, navigation],
   );
 
   // ProductDetailScreen's «Изменить» reuses THIS screen's edit modal: it sets
@@ -1604,7 +1692,7 @@ function ProductsScreenContents() {
     invalidatePhotoPicker();
     setModalOpen(false);
     setEditingProduct(null);
-    setPhotoUri(null);
+    setPhotoUris([]);
     setCellPickerOpen(false);
   };
 
@@ -1618,46 +1706,43 @@ function ProductsScreenContents() {
     )
       return;
     const continuation = capturePhotoForm();
-    // #63 — тип допускает null: убранное фото у существующего товара шлём как
-    // null (иначе поле просто не отправится и старое фото останется на сервере).
-    let uploadedPhotoPath: string | null | undefined = editingProduct?.photo || undefined;
-
-    // Upload new photo if it's a local file URI
-    if (photoUri && photoUri.startsWith('file://')) {
-      try {
-        photoUploadPending.current = true;
-        setUploadingPhoto(true);
-        const filename = photoUri.split('/').pop() || 'photo.jpg';
-        const res = await uploadsApi.upload(photoUri, filename);
-        if (!continuation.isCurrent()) return;
-        uploadedPhotoPath = res.data.url;
-      } catch {
-        if (!continuation.isCurrent()) return;
-        Alert.alert(
-          '\u041E\u0448\u0438\u0431\u043A\u0430',
-          '\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044C \u0444\u043E\u0442\u043E',
-        );
-        return;
-      } finally {
-        photoUploadPending.current = false;
-        setUploadingPhoto(false);
-      }
-    } else if (!photoUri) {
-      // #63 — фото убрали: у существующего товара шлём null (бэкенд очистит),
-      // у нового — undefined (поля просто нет в payload).
-      uploadedPhotoPath = editingProduct ? null : undefined;
+    let uploadedPhotos: string[];
+    try {
+      photoUploadPending.current = true;
+      setUploadingPhoto(true);
+      const result = await uploadProductPhotos(
+        photoUris,
+        async (uri) => {
+          const res = await uploadsApi.upload(uri, uri.split('/').pop() || 'photo.jpg');
+          return res.data.url;
+        },
+        continuation.isCurrent,
+      );
+      if (!result) return;
+      uploadedPhotos = result;
+    } catch {
+      if (continuation.isCurrent())
+        Alert.alert('Ошибка', 'Не удалось загрузить фотографии. Поля сохранены, попробуйте ещё раз.');
+      return;
+    } finally {
+      photoUploadPending.current = false;
+      setUploadingPhoto(false);
     }
-
     // Числовые поля читаем через readNumericField: запятая с русской цифровой
     // клавиатуры iOS — полноценный разделитель («1250,50» = 1250.5). Раньше
     // здесь стоял `Number(costPrice) || 0`, и такой ввод молча превращался в 0.
     // Мусор (null) НЕ отправляем нулём — показываем ошибку поля.
-    const parsedCost = readNumericField(costPrice, 'money');
+    const parsedCost = editingProduct?.assemblyId ? editingProduct.costPrice : readNumericField(costPrice, 'money');
     const parsedSell = readNumericField(sellPrice, 'money');
     const parsedStock = readNumericField(stock, 'qty');
     const parsedMinStock = readNumericField(minStock, 'qty');
     if (parsedCost === null || parsedSell === null || parsedStock === null || parsedMinStock === null) {
       Alert.alert('Ошибка', 'Цены и остаток вводятся числом — проверьте заполнение.');
+      return;
+    }
+
+    if (!editingProduct && activeWarehouse?.kind === 'used' && (!name.trim() || parsedStock <= 0)) {
+      Alert.alert('Проверьте приёмку', 'Укажите название и положительное количество товара Б/У.');
       return;
     }
 
@@ -1668,7 +1753,7 @@ function ProductsScreenContents() {
       // Round 12 #6б: у существующего товара '' ОЧИЩАЕТ штрихкод (PATCH сетит
       // поле только когда оно пришло); у нового пустое поле просто не шлём.
       barcode: editingProduct ? formBarcode.trim() : formBarcode.trim() || undefined,
-      photo: uploadedPhotoPath,
+      ...productPhotoPatch(uploadedPhotos),
       // New products inherit the currently selected warehouse. On edit
       // we don't override warehouseId — moving between warehouses is
       // done via dedicated transfer actions, not the edit form.
@@ -1687,12 +1772,13 @@ function ProductsScreenContents() {
       // Заодно не плодим лишние записи в price_history / stock_movements.
       if (
         canSeeCostPrice &&
+        !editingProduct.assemblyId &&
         (parsedCost !== editingProduct.costPrice || (confirmStarterPrices && editingProduct?.costPriceIsPlaceholder))
       )
         payload.costPrice = parsedCost;
       if (parsedSell !== editingProduct.sellPrice || (confirmStarterPrices && editingProduct?.sellPriceIsPlaceholder))
         payload.sellPrice = parsedSell;
-      if (parsedStock !== editingProduct.stock) payload.stock = parsedStock;
+      if (!editingProduct.assemblyId && parsedStock !== editingProduct.stock) payload.stock = parsedStock;
       if (parsedMinStock !== editingProduct.minStock) payload.minStock = parsedMinStock;
       // Ячейка хранения: PATCH принимает uuid / null (снять адрес) / отсутствие поля.
       // Шлём только при реальной смене — как числовые поля выше.
@@ -1728,7 +1814,7 @@ function ProductsScreenContents() {
     setInvActivePath([]);
     // Pre-fill all products with current stock
     setInventoryItems(
-      allProducts.map((p) => ({
+      scalarProducts.map((p) => ({
         productId: p.id,
         name: p.name,
         currentStock: p.stock,
@@ -1809,7 +1895,9 @@ function ProductsScreenContents() {
 
   const handleInventorySubmit = async () => {
     if (inventoryCommitProgress) return;
-    const changed = inventoryItems.filter((item) => String(item.currentStock) !== item.actualStock);
+    const changed = inventoryItems.filter(
+      (item) => scalarProducts.some((p) => p.id === item.productId) && String(item.currentStock) !== item.actualStock,
+    );
     if (changed.length === 0) {
       Alert.alert('Инвентаризация', 'Нет изменений в остатках');
       return;
@@ -1830,7 +1918,7 @@ function ProductsScreenContents() {
   };
 
   const filteredInventoryItems = inventorySearch
-    ? inventoryItems.filter((item) => item.name.toLowerCase().includes(inventorySearch.toLowerCase()))
+    ? smartSearch(inventoryItems, inventorySearch, (item) => [item.name], { typos: true })
     : inventoryItems;
 
   // --- Writeoff handlers ---
@@ -1845,6 +1933,10 @@ function ProductsScreenContents() {
   };
 
   const selectWriteoffProduct = (p: Product) => {
+    if (!canCountProduct(p)) {
+      Alert.alert('Собранный комплект', PHYSICAL_KIT_STOCK_NOTICE);
+      return;
+    }
     setWriteoffProductId(p.id);
     setWriteoffProductName(p.name);
     setWriteoffProductStock(p.stock);
@@ -1858,6 +1950,10 @@ function ProductsScreenContents() {
   };
 
   const handleWriteoffSubmit = async () => {
+    if (allProducts.some((p) => p.id === writeoffProductId && !canCountProduct(p))) {
+      Alert.alert('Собранный комплект', PHYSICAL_KIT_STOCK_NOTICE);
+      return;
+    }
     // 120: дробное списание («0,5 м») — запятая → точка, максимум 3 знака.
     const qty = parseQtyInput(writeoffQty) ?? 0;
     if (!qty || qty <= 0) {
@@ -1919,6 +2015,10 @@ function ProductsScreenContents() {
   };
 
   const addInventoryProduct = (p: Product) => {
+    if (!canCountProduct(p)) {
+      Alert.alert('Собранный комплект', PHYSICAL_KIT_STOCK_NOTICE);
+      return;
+    }
     // Only add if not already in the list
     if (!inventoryItems.find((item) => item.productId === p.id)) {
       setInventoryItems((prev) => [
@@ -2119,6 +2219,10 @@ function ProductsScreenContents() {
   };
 
   const selectCorrectionProduct = (p: Product) => {
+    if (!canCountProduct(p)) {
+      Alert.alert('Собранный комплект', PHYSICAL_KIT_STOCK_NOTICE);
+      return;
+    }
     setCorrectionProductId(p.id);
     setCorrectionProductName(p.name);
     setCorrectionProductStock(p.stock);
@@ -2131,6 +2235,10 @@ function ProductsScreenContents() {
   };
 
   const handleCorrectionSubmit = async () => {
+    if (allProducts.some((p) => p.id === correctionProductId && !canCountProduct(p))) {
+      Alert.alert('Собранный комплект', PHYSICAL_KIT_STOCK_NOTICE);
+      return;
+    }
     // 120: дробный остаток («12,5») — запятая → точка, максимум 3 знака.
     const newQty = parseQtyInput(correctionNewStock) ?? NaN;
     if (isNaN(newQty) || newQty < 0) {
@@ -2442,7 +2550,11 @@ function ProductsScreenContents() {
           setShowScanner(true);
         }}
         onOperations={canManageWarehouse ? () => setShowOpsModal(true) : undefined}
-        onAdd={canManageWarehouse && activeWarehouse?.kind === 'main' ? openCreate : undefined}
+        onAdd={
+          canManageWarehouse && (activeWarehouse?.kind === 'main' || activeWarehouse?.kind === 'used')
+            ? openCreate
+            : undefined
+        }
         onCreateFolder={
           canManageWarehouse && activeWarehouseId && !search && !selectMode && !cellFilterId
             ? () =>
@@ -2558,7 +2670,7 @@ function ProductsScreenContents() {
             activeWarehouse?.kind === 'defect'
               ? '\u0422\u043E\u0432\u0430\u0440\u044B \u043F\u043E\u043F\u0430\u0434\u0430\u044E\u0442 \u0432 \u0431\u0440\u0430\u043A \u0442\u043E\u043B\u044C\u043A\u043E \u0447\u0435\u0440\u0435\u0437 \u043F\u0435\u0440\u0435\u043C\u0435\u0449\u0435\u043D\u0438\u0435 \u0441\u043E \u0441\u043A\u043B\u0430\u0434\u0430 \u0438\u043B\u0438 \u0432\u043E\u0437\u0432\u0440\u0430\u0442 \u043E\u0442 \u043A\u043B\u0438\u0435\u043D\u0442\u0430'
               : activeWarehouse?.kind === 'used'
-                ? '\u0411/\u0423 \u0442\u043E\u0432\u0430\u0440\u044B \u0434\u043E\u0431\u0430\u0432\u043B\u044F\u044E\u0442\u0441\u044F \u0447\u0435\u0440\u0435\u0437 \u0441\u0438\u0441\u0442\u0435\u043C\u043D\u043E\u0433\u043E \u043F\u043E\u0441\u0442\u0430\u0432\u0449\u0438\u043A\u0430 \u00AB\u041F\u043E\u043A\u0443\u043F\u043A\u0430 \u0431/\u0443\u00BB'
+                ? 'Добавьте товар прямо на склад Б/У: название, количество и цены.'
                 : activePath.length > 0
                   ? '\u0412 \u044D\u0442\u043E\u0439 \u043F\u0430\u043F\u043A\u0435 \u043F\u0443\u0441\u0442\u043E'
                   : '\u0414\u043E\u0431\u0430\u0432\u044C\u0442\u0435 \u043F\u0435\u0440\u0432\u044B\u0439 \u0442\u043E\u0432\u0430\u0440'
@@ -2566,7 +2678,7 @@ function ProductsScreenContents() {
           action={
             // Action-\u043A\u043D\u043E\u043F\u043A\u0430 \u00AB\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C\u00BB \u2014 \u0442\u043E\u043B\u044C\u043A\u043E \u043D\u0430 \u043E\u0441\u043D\u043E\u0432\u043D\u043E\u043C \u0441\u043A\u043B\u0430\u0434\u0435:
             // \u043D\u0430 defect/used \u0441\u043E\u0437\u0434\u0430\u043D\u0438\u0435 \u0438\u0434\u0451\u0442 \u0434\u0440\u0443\u0433\u0438\u043C \u043F\u0443\u0442\u0451\u043C.
-            !activePath.length && activeWarehouse?.kind === 'main'
+            !activePath.length && (activeWarehouse?.kind === 'main' || activeWarehouse?.kind === 'used')
               ? { label: '\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C', onPress: openCreate }
               : undefined
           }
@@ -2627,72 +2739,27 @@ function ProductsScreenContents() {
         title={
           editingProduct
             ? '\u0420\u0435\u0434\u0430\u043A\u0442\u0438\u0440\u043E\u0432\u0430\u0442\u044C \u0442\u043E\u0432\u0430\u0440'
-            : '\u041D\u043E\u0432\u044B\u0439 \u0442\u043E\u0432\u0430\u0440'
+            : activeWarehouse?.kind === 'used'
+              ? 'Добавить товар Б/У'
+              : 'Новый товар'
         }
       >
-        {/* Photo section */}
-        <View style={styles.photoSection}>
-          <TouchableOpacity
-            style={[styles.photoPickerWrap, { borderColor: palette.border.subtle }]}
-            onPress={pickImage}
-            disabled={pickingPhoto || uploadingPhoto}
-            accessibilityLabel={photoUri ? 'Заменить фото товара' : 'Добавить фото товара'}
-          >
-            {photoUri ? (
-              <CachedImage
-                source={{ uri: getDisplayPhotoUri(photoUri) }}
-                style={styles.photoPreview}
-                resizeMode="cover"
-              />
-            ) : (
-              <View style={[styles.photoPickerPlaceholder, { backgroundColor: palette.bg.muted }]}>
-                <Ionicons name="camera-outline" size={28} color={palette.text.tertiary} />
-                <Text style={[styles.photoPickerText, { color: palette.text.tertiary }]}>
-                  {'\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u0444\u043E\u0442\u043E'}
-                </Text>
-              </View>
-            )}
-          </TouchableOpacity>
-          {photoUri && (
-            <View style={styles.photoActions}>
-              <TouchableOpacity
-                style={styles.photoActionBtn}
-                onPress={pickImage}
-                disabled={pickingPhoto || uploadingPhoto}
-              >
-                <Ionicons name="swap-horizontal" size={16} color={colors.primary[600]} />
-                <Text style={styles.photoActionText}>{'\u0417\u0430\u043C\u0435\u043D\u0438\u0442\u044C'}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.photoActionBtn}
-                onPress={() => setFullscreenPhoto(getDisplayPhotoUri(photoUri)!)}
-              >
-                <Ionicons name="expand-outline" size={16} color={colors.primary[600]} />
-                <Text style={styles.photoActionText}>{'\u041F\u0440\u043E\u0441\u043C\u043E\u0442\u0440'}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.photoActionBtn}
-                onPress={() => {
-                  invalidatePhotoPicker();
-                  setPhotoUri(null);
-                }}
-                disabled={pickingPhoto || uploadingPhoto}
-              >
-                <Ionicons name="trash-outline" size={16} color={colors.red[500]} />
-                <Text style={[styles.photoActionText, { color: colors.red[500] }]}>
-                  {'\u0423\u0434\u0430\u043B\u0438\u0442\u044C'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          )}
-        </View>
-
+        <ProductPhotoGallery
+          photos={photoUris}
+          onChange={setPhotoUris}
+          onPick={(index) => {
+            photoPickIndex.current = index;
+            void pickImage();
+          }}
+          disabled={pickingPhoto || uploadingPhoto || createMutation.isPending || updateMutation.isPending}
+        />
         <View style={styles.formField}>
           <Text style={[styles.formLabel, { color: palette.text.secondary }]}>
             {'\u041D\u0430\u0437\u0432\u0430\u043D\u0438\u0435'}
           </Text>
           <TextInput
             value={name}
+            accessibilityLabel="Название товара"
             onChangeText={setName}
             style={[styles.formInput, formInputThemed]}
             placeholder={'\u041C\u0430\u0441\u043B\u043E \u043C\u043E\u0442\u043E\u0440\u043D\u043E\u0435...'}
@@ -2738,6 +2805,8 @@ function ProductsScreenContents() {
             </Text>
             <TextInput
               value={costPrice}
+              editable={!editingProduct?.assemblyId}
+              accessibilityLabel="Себестоимость товара"
               onChangeText={setCostPrice}
               style={[styles.formInput, formInputThemed]}
               keyboardType="decimal-pad"
@@ -2751,6 +2820,7 @@ function ProductsScreenContents() {
             </Text>
             <TextInput
               value={sellPrice}
+              accessibilityLabel="Цена продажи товара"
               onChangeText={setSellPrice}
               style={[styles.formInput, formInputThemed]}
               keyboardType="decimal-pad"
@@ -2801,11 +2871,13 @@ function ProductsScreenContents() {
         <View style={styles.formRowFields}>
           <View style={{ flex: 1 }}>
             <Text style={[styles.formLabel, { color: palette.text.secondary }]}>
-              {'\u041E\u0441\u0442\u0430\u0442\u043E\u043A'}
+              {!editingProduct && activeWarehouse?.kind === 'used' ? 'Количество к приёмке' : 'Остаток'}
               {unit !== DEFAULT_UNIT ? ` (${unit})` : ''}
             </Text>
             <TextInput
               value={stock}
+              editable={!editingProduct?.assemblyId}
+              accessibilityLabel="Количество товара"
               onChangeText={setStock}
               style={[styles.formInput, formInputThemed]}
               keyboardType="decimal-pad"
@@ -2871,7 +2943,7 @@ function ProductsScreenContents() {
               value={formBarcode}
               onChangeText={setFormBarcode}
               style={[styles.formInput, formInputThemed, { flex: 1 }]}
-              placeholder="EAN-13 / QR / \u0441\u0432\u043E\u0439 \u043A\u043E\u0434"
+              placeholder="EAN-13 / QR / свой код"
               placeholderTextColor={palette.text.tertiary}
               autoCapitalize="none"
               autoCorrect={false}
@@ -2962,12 +3034,37 @@ function ProductsScreenContents() {
               <Text style={styles.submitBtnText}>
                 {editingProduct
                   ? '\u0421\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u044C'
-                  : '\u0421\u043E\u0437\u0434\u0430\u0442\u044C'}
+                  : activeWarehouse?.kind === 'used'
+                    ? 'Принять на склад Б/У'
+                    : 'Создать'}
               </Text>
             )}
           </TouchableOpacity>
         </View>
       </Modal>
+
+      {kitRecipesOpen && (
+        <ProductKitRecipes
+          onClose={() => setKitRecipesOpen(false)}
+          onEdit={(recipe) => {
+            setKitRecipesOpen(false);
+            navigation.navigate('ProductKitComposer', {
+              warehouseId: activeWarehouseId || '',
+              recipeId: recipe.id,
+              recipeVersion: recipe.version,
+              recipeEdit: true,
+            });
+          }}
+          onAssemble={(recipe) => {
+            setKitRecipesOpen(false);
+            navigation.navigate('ProductKitComposer', {
+              warehouseId: activeWarehouseId || '',
+              recipeId: recipe.id,
+              recipeVersion: recipe.version,
+            });
+          }}
+        />
+      )}
 
       {/* Warehouse Operations - bottom-sheet action list (#2/#7
           consistency). Pull-to-dismiss + blur backdrop. heightRatio
@@ -2980,6 +3077,45 @@ function ProductsScreenContents() {
         }
         heightRatio={0.82}
       >
+        {canManageWarehouse && activeWarehouseId ? (
+          <TouchableOpacity
+            accessibilityRole="button"
+            style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
+            onPress={() => {
+              setShowOpsModal(false);
+              setKitRecipesOpen(true);
+            }}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>Составы комплектов</Text>
+              <Text style={[styles.opsItemDesc, { color: palette.text.secondary }]}>
+                Собрать ещё по сохранённому составу
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+          </TouchableOpacity>
+        ) : null}
+        {canManageWarehouse && activeWarehouseId ? (
+          <TouchableOpacity
+            style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
+            accessibilityRole="button"
+            onPress={() => {
+              setShowOpsModal(false);
+              navigation.navigate('ProductKitComposer', { warehouseId: activeWarehouseId });
+            }}
+          >
+            <View style={[styles.opsIcon, { backgroundColor: palette.bg.muted }]}>
+              <Ionicons name="layers-outline" size={22} color={palette.accent.primaryText} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>Собрать комплект</Text>
+              <Text style={[styles.opsItemDesc, { color: palette.text.secondary }]}>
+                Выбрать компоненты из каталога
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+          </TouchableOpacity>
+        ) : null}
         <TouchableOpacity
           style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
           onPress={() => {
@@ -3198,8 +3334,43 @@ function ProductsScreenContents() {
         <TrashScreen onClose={() => setShowTrashModal(false)} />
       </RNModal>
 
+      {labelTargets && (
+        <ProductLabelPrint
+          visible
+          onClose={() => setLabelTargets(null)}
+          products={labelTargets}
+          onGenerateInternal={
+            canManageWarehouse
+              ? async (ids) => {
+                  const { data } = await productsApi.internalBarcodes(ids);
+                  queryClient.invalidateQueries({ queryKey: ['products'] });
+                  queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
+                  return data.products;
+                }
+              : undefined
+          }
+        />
+      )}
+      <ProductPickerModal
+        visible={!!barcodeMatches}
+        onClose={() => setBarcodeMatches(null)}
+        exactMatches={barcodeMatches ?? undefined}
+        notice="Этот штрихкод у нескольких товаров. Выберите нужный."
+        title="Совпадения штрихкода"
+        onSelectProduct={(product) => {
+          setBarcodeMatches(null);
+          navigation.navigate('ProductDetail', { product });
+        }}
+      />
       {/* Barcode scanner — header «Сканировать» → найти товар по штрих-коду. */}
-      <BarcodeScanner visible={showScanner} onClose={() => setShowScanner(false)} onScanned={handleBarcodeScanned} />
+      <BarcodeScanner
+        visible={showScanner}
+        onClose={() => {
+          barcodeEpoch.current++;
+          setShowScanner(false);
+        }}
+        onScanned={handleBarcodeScanned}
+      />
 
       {/* Inventory modal — pageSheet on iOS so the sheet drops in from
           the top of the screen leaving the previous content visible
@@ -3520,6 +3691,10 @@ function ProductsScreenContents() {
       {/* Inventory Product Picker */}
       <ProductPickerModal
         visible={showInventoryPicker}
+        productFilter={canCountProduct}
+        notice={PHYSICAL_KIT_STOCK_NOTICE}
+        warehouseId={activeWarehouseId}
+        lookupWarehouseId={activeWarehouseId || undefined}
         onClose={handleInventoryPickerClose}
         onSelectProduct={addInventoryProduct}
         title="Добавить товар в инвентаризацию"
@@ -3530,6 +3705,10 @@ function ProductsScreenContents() {
       {/* Writeoff Product Picker */}
       <ProductPickerModal
         visible={showWriteoffPicker}
+        productFilter={canCountProduct}
+        notice={PHYSICAL_KIT_STOCK_NOTICE}
+        warehouseId={activeWarehouseId}
+        lookupWarehouseId={activeWarehouseId || undefined}
         onClose={() => setShowWriteoffPicker(false)}
         onSelectProduct={selectWriteoffProduct}
         title="Выберите товар для списания"
@@ -3693,6 +3872,10 @@ function ProductsScreenContents() {
       {/* Correction Product Picker */}
       <ProductPickerModal
         visible={showCorrectionPicker}
+        productFilter={canCountProduct}
+        notice={PHYSICAL_KIT_STOCK_NOTICE}
+        warehouseId={activeWarehouseId}
+        lookupWarehouseId={activeWarehouseId || undefined}
         onClose={() => setShowCorrectionPicker(false)}
         onSelectProduct={selectCorrectionProduct}
         title="Выберите товар для корректировки"
@@ -4423,6 +4606,16 @@ function ProductsScreenContents() {
           ]}
         >
           <View style={styles.bulkBarRow}>
+            {selectedProductIds.size > 0 && selectedFolderNames.size === 0 && (
+              <TouchableOpacity
+                accessibilityRole="button"
+                style={[styles.bulkMoveBtn, { backgroundColor: palette.accent.primary }]}
+                onPress={() => void openSelectedLabels()}
+              >
+                <Ionicons name="print-outline" size={18} color={colors.white} />
+                <Text style={styles.bulkDeleteBtnText}>Этикетки</Text>
+              </TouchableOpacity>
+            )}
             {canManageWarehouse && (
               <TouchableOpacity
                 style={[styles.bulkMoveBtn, !bulkMoveEligible && styles.bulkDeleteBtnDisabled]}

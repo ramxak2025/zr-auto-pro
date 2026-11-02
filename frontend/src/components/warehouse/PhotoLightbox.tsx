@@ -1,7 +1,7 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
-import { X } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight } from 'lucide-react';
 import { IconButton } from '../../ui/IconButton';
 import { lockBodyScroll, unlockBodyScroll } from '../../ui/scrollLock';
 
@@ -10,6 +10,8 @@ interface PhotoLightboxProps {
   url: string | null;
   alt?: string;
   onClose: () => void;
+  urls?: string[];
+  initialIndex?: number;
 }
 
 /**
@@ -18,8 +20,15 @@ interface PhotoLightboxProps {
  * триггер, прокрутка страницы блокируется. Заменяет перехват правого клика
  * (onContextMenu) и «долгое нажатие» на миниатюре — открывается кнопкой.
  */
-export default function PhotoLightbox({ url, alt = '', onClose }: PhotoLightboxProps) {
+export default function PhotoLightbox({ url, alt = '', onClose, urls, initialIndex = 0 }: PhotoLightboxProps) {
   const open = !!url;
+  const [index, setIndex] = useState(initialIndex);
+  const swipe = useRef<number | null>(null);
+  const photos = urls?.length ? urls : url ? [url] : [];
+  useEffect(() => {
+    if (open) setIndex(initialIndex);
+  }, [open, initialIndex]);
+  const move = (delta: number) => setIndex((current) => Math.max(0, Math.min(photos.length - 1, current + delta)));
   const closeRef = useRef<HTMLButtonElement>(null);
   const lastActiveRef = useRef<HTMLElement | null>(null);
   // Свежий onClose без перезапуска эффекта на каждый рендер родителя.
@@ -72,10 +81,39 @@ export default function PhotoLightbox({ url, alt = '', onClose }: PhotoLightboxP
             onClick={onClose}
           />
           <img
-            src={url ?? undefined}
+            src={photos[Math.min(index, photos.length - 1)]}
             alt={alt}
             className="relative max-h-[85vh] max-w-full rounded-xl object-contain shadow-pop"
+            onTouchStart={(event) => {
+              swipe.current = event.touches[0].clientX;
+            }}
+            onTouchEnd={(event) => {
+              if (swipe.current !== null && Math.abs(event.changedTouches[0].clientX - swipe.current) > 40)
+                move(event.changedTouches[0].clientX < swipe.current ? 1 : -1);
+              swipe.current = null;
+            }}
           />
+          {photos.length > 1 && (
+            <div className="absolute bottom-6 flex items-center gap-4 rounded-full bg-ink/80 px-3 py-1 text-white">
+              <IconButton
+                label="Предыдущее фото"
+                icon={ChevronLeft}
+                disabled={index === 0}
+                onClick={() => move(-1)}
+                className="text-white"
+              />
+              <span className="text-sm tabular-nums">
+                {index + 1} / {photos.length}
+              </span>
+              <IconButton
+                label="Следующее фото"
+                icon={ChevronRight}
+                disabled={index >= photos.length - 1}
+                onClick={() => move(1)}
+                className="text-white"
+              />
+            </div>
+          )}
         </motion.div>
       )}
     </AnimatePresence>,

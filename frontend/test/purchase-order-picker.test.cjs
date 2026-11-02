@@ -102,6 +102,7 @@ const ui = {
   Select,
   Card: (p) => React.createElement('section', p, p.children),
   CardBody: (p) => React.createElement('div', p, p.children),
+  CardFooter: (p) => React.createElement('footer', {}, p.children),
   CardHeader: (p) => React.createElement('header', {}, p.title, p.actions),
   Badge: (p) => React.createElement('span', {}, p.children),
   TabPanel: (p) => React.createElement('div', {}, p.children),
@@ -130,6 +131,7 @@ const ui = {
   SkeletonCard: () => null,
   Textarea: (p) => React.createElement('textarea', p),
   Money: ({ value }) => React.createElement('span', {}, String(value)),
+  ConfirmDialog: (p) => (p.isOpen ? React.createElement('button', { onClick: p.onConfirm }, p.confirmText) : null),
 };
 const originalLoad = Module._load;
 Module._load = function (name, parent, main) {
@@ -142,7 +144,10 @@ Module._load = function (name, parent, main) {
   if (name === '../api/services' || name === '../../api/services') return api;
   if (name === '../hooks/useProcurementRecovery') return { useProcurementRecovery: () => directRecovery };
   if (name === '../hooks/useTenantTimezone')
-    return { useTenantCalendar: () => ({ today: '2026-10-22', month: '2026-10' }) };
+    return {
+      useTenantCalendar: () => ({ today: '2026-10-22', month: '2026-10' }),
+      useTenantTimezone: () => 'Europe/Moscow',
+    };
   if (name === '../components/warehouse/useUrlParams') return { useUrlParams: () => [new URLSearchParams(), () => {}] };
   if (name === '../contexts/AuthContext') return { useAuth: () => ({ hasPermission: can }) };
   if (name === 'react-router-dom')
@@ -166,9 +171,11 @@ Module._load = function (name, parent, main) {
                     ? [product]
                     : queryKey[0] === 'warehouses'
                       ? [{ id: 'main', name: 'Основной', kind: 'main' }]
-                      : queryKey[0] === 'purchase-order'
-                        ? existing
-                        : [],
+                      : queryKey[0] === 'supplier-purchase-context'
+                        ? [{ productId: 'product', sellPrice: 87.65, previousPurchase: null }]
+                        : queryKey[0] === 'purchase-order'
+                          ? existing
+                          : [],
       }),
       useMutation: (options) => ({
         isPending: false,
@@ -186,6 +193,7 @@ Module._load = function (name, parent, main) {
 };
 const Page = require('../src/pages/PurchaseOrderEditPage').default;
 const SupplierPage = require('../src/pages/SupplierDetailPage').default;
+const OrderDetailPage = require('../src/pages/PurchaseOrderDetailPage').default;
 const Drawer = require('../src/components/checks/ProductPickerDrawer').default;
 const Editor = require('../src/components/purchaseOrders/PurchaseOrderLineEditor').default;
 const WarehouseDrawer = require('../src/components/warehouse/ProductPickerDrawer').default;
@@ -228,6 +236,36 @@ function selectProduct(tree) {
       .props.onClick(),
   );
 }
+
+test('web catalog search combines fields and recovers keyboard/typo only on zero matches without selecting', () => {
+  const target = { ...product, name: 'Шланг топливный', category: 'Магистраль', article: 'AB-123' };
+  const other = { ...product, id: 'other', name: 'Насос', category: 'Двигатель' };
+  let selected = 0;
+  let tree;
+  Renderer.act(() => {
+    tree = Renderer.create(
+      React.createElement(Drawer, {
+        open: true,
+        products: [target, other],
+        onClose() {},
+        onSelectProduct() {
+          selected++;
+        },
+      }),
+    );
+  });
+  try {
+    for (const query of ['магистраль шланг', 'AB123', 'ikfyu', 'шлнаг']) {
+      const search = tree.root.findAllByType('input').find((node) => node.props['aria-label'] === 'Поиск товара');
+      Renderer.act(() => setInput(search, query));
+      assert.match(text(tree.root), /Шланг топливный/);
+      assert.doesNotMatch(text(tree.root), /Насос/);
+    }
+    assert.equal(selected, 0);
+  } finally {
+    Renderer.act(() => tree.unmount());
+  }
+});
 
 test('supplier picker confirms current keyboard quantity/price, reopens snapshots, supports comma/zero and preserves draft on save error', async () => {
   const tree = createPage();
@@ -537,6 +575,62 @@ async function submitDirect(tree) {
   });
 }
 
+for (const retail of ['', '0', '123,45']) {
+  test(`web PO receipt displays fresh retail reference and sends only intended new price: ${retail || 'blank'}`, async () => {
+    directMode = false;
+    existing = {
+      id: 'order',
+      supplierId: 'supplier',
+      status: 'ordered',
+      supplierName: 'Поставщик',
+      total: 51,
+      createdAt: '2026-10-22T12:00:00Z',
+      items: [
+        {
+          id: 'item',
+          productId: product.id,
+          name: product.name,
+          quantity: 2,
+          receivedQuantity: 0,
+          costPrice: 25.5,
+          sellPrice: 50,
+          total: 51,
+        },
+      ],
+    };
+    recoveryCalls.length = 0;
+    recoveryPending = [];
+    recoveryOwned = true;
+    failSave = false;
+    let tree;
+    Renderer.act(() => {
+      tree = Renderer.create(React.createElement(OrderDetailPage));
+    });
+    try {
+      await click(tree, 'Принять поставку');
+      assert.match(text(tree.root), /Текущая:.*87,65/);
+      assert.equal(labelledInput(tree, `Розничная цена — ${product.name}`).props.value, '');
+      assert.equal(labelledInput(tree, `Цена закупки — ${product.name}`).props.value, '25.5');
+      Renderer.act(() => setInput(labelledInput(tree, `Розничная цена — ${product.name}`), retail));
+      await click(tree, 'Принять без оплаты');
+      await click(tree, 'Принять в долг');
+      assert.equal(recoveryCalls.length, 1);
+      assert.deepEqual(recoveryCalls[0].target, { operation: 'po-receive', sourceId: 'order' });
+      assert.deepEqual(recoveryCalls[0].payload.items, [
+        {
+          itemId: 'item',
+          receivedQuantity: 2,
+          purchasePrice: 25.5,
+          ...(retail ? { sellPrice: Number(retail.replace(',', '.')) } : {}),
+        },
+      ]);
+    } finally {
+      Renderer.act(() => tree.unmount());
+      existing = undefined;
+    }
+  });
+}
+
 test('web direct invalid ENTIRE form blocks dispatch; explicit retail zero and failed-save draft remain exact', async () => {
   const tree = createDirectPage();
   try {
@@ -549,6 +643,8 @@ test('web direct invalid ENTIRE form blocks dispatch; explicit retail zero and f
       config.onConfirm(secondProduct, { quantity: 1, costPrice: 0 });
     });
     Renderer.act(() => tree.root.findByType(Drawer).props.onClose());
+    assert.match(text(tree.root), /Текущая:.*87,65/);
+    assert.equal(labelledInput(tree, `Розничная цена — ${product.name}`).props.value, '');
     Renderer.act(() => setInput(labelledInput(tree, `Цена за единицу — ${product.name}`), '12abc'));
     await submitDirect(tree);
     assert.equal(recoveryCalls.length, 0, 'a valid second row must not be posted while another row is invalid');

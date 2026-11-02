@@ -22,36 +22,6 @@ import Foundation
 //  (`widget_dashboard_data`), so it works without launching the app.
 // ═══════════════════════════════════════════════════════════════════
 
-private let kAppGroup = "group.com.autexa.mobile"
-private let kPendingKey = "autexa_pending_intent"
-private let kSnapshotKey = "widget_dashboard_data"
-
-@available(iOS 16.0, *)
-private func queuePendingAction(_ action: String) {
-    guard let defaults = UserDefaults(suiteName: kAppGroup) else { return }
-    let payload: [String: Any] = [
-        "action": action,
-        "at": ISO8601DateFormatter().string(from: Date()),
-    ]
-    if let data = try? JSONSerialization.data(withJSONObject: payload),
-       let json = String(data: data, encoding: .utf8) {
-        defaults.set(json, forKey: kPendingKey)
-    }
-}
-
-@available(iOS 16.0, *)
-private func readTodayRevenue() -> Double? {
-    guard let defaults = UserDefaults(suiteName: kAppGroup),
-          let json = defaults.string(forKey: kSnapshotKey),
-          let data = json.data(using: .utf8),
-          let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-    else { return nil }
-    // owner snapshot → revenue; master snapshot → earningsToday.
-    if let n = obj["revenue"] as? NSNumber { return n.doubleValue }
-    if let n = obj["earningsToday"] as? NSNumber { return n.doubleValue }
-    return nil
-}
-
 @available(iOS 16.0, *)
 private func formatRubForSiri(_ value: Double) -> String {
     let f = NumberFormatter()
@@ -70,7 +40,8 @@ struct CreateOrderIntent: AppIntent {
     static var openAppWhenRun: Bool = true
 
     func perform() async throws -> some IntentResult {
-        queuePendingAction("create_order")
+        guard !AutexaNativeEnvironment.inventoryInternal else { throw AutexaInternalIntentUnavailable() }
+        AutexaNativeEnvironment.queuePendingAction("create_order")
         return .result()
     }
 }
@@ -83,7 +54,8 @@ struct OpenCashIntent: AppIntent {
     static var openAppWhenRun: Bool = true
 
     func perform() async throws -> some IntentResult {
-        queuePendingAction("open_cash")
+        guard !AutexaNativeEnvironment.inventoryInternal else { throw AutexaInternalIntentUnavailable() }
+        AutexaNativeEnvironment.queuePendingAction("open_cash")
         return .result()
     }
 }
@@ -96,7 +68,10 @@ struct TodayRevenueIntent: AppIntent {
     static var openAppWhenRun: Bool = false
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        guard let revenue = readTodayRevenue() else {
+        if AutexaNativeEnvironment.inventoryInternal {
+            return .result(dialog: "Внутренний тест · отдельная база")
+        }
+        guard let revenue = AutexaNativeEnvironment.readTodayRevenue() else {
             return .result(dialog: "Откройте Autexa и войдите, чтобы посмотреть выручку за сегодня.")
         }
         return .result(dialog: "Выручка за сегодня: \(formatRubForSiri(revenue)).")

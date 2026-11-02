@@ -4,6 +4,7 @@ import type { Service } from '../../types';
 import { cn } from '../../ui/cn';
 import { controlBase, controlSize } from '../../ui/Input';
 import { Money } from '../../ui/Money';
+import { smartSearch } from '../../../../shared/utils/smartSearch';
 
 export interface ServiceComboboxProps {
   services: Service[];
@@ -53,9 +54,7 @@ export default function ServiceCombobox({
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const list = q
-      ? services.filter((s) => s.name.toLowerCase().includes(q) || (s.category ?? '').toLowerCase().includes(q))
-      : services;
+    const list = q ? smartSearch(services, q, (s) => [s.name, s.category], { typos: true }) : services;
     return list.slice(0, MAX_VISIBLE);
   }, [services, query]);
 

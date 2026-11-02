@@ -7,7 +7,8 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import NetInfo from '@react-native-community/netinfo';
 import * as Font from 'expo-font';
-import * as Notifications from 'expo-notifications';
+import * as Notifications from './src/utils/notifications';
+import { inventoryInternal } from './src/utils/runtimeEnvironment';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { AuthProvider } from './src/contexts/AuthContext';
@@ -90,15 +91,20 @@ const apiRoutingInitialization = ensureApiHostReady().catch(() => {});
 
 // Configure how notifications are handled when the app is in the foreground.
 // Must be set before any notification arrives — top-level call outside component.
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
-});
+// Same-bundle internal builds ignore existing public push registration. iOS can
+// still display earlier public alerts in the background; we do not mutate that
+// production registration or remove the user's OS notification history.
+if (!inventoryInternal) {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowAlert: !inventoryInternal,
+      shouldShowBanner: !inventoryInternal,
+      shouldShowList: !inventoryInternal,
+      shouldPlaySound: !inventoryInternal,
+      shouldSetBadge: false,
+    }),
+  });
+}
 
 const queryClient = new QueryClient({
   // Глобальный перехват ошибок мутаций (волна C «Связь 2.0», C-1). Раньше
@@ -300,19 +306,21 @@ function notifyQueuedCheckSent(entry: QueuedCheck, result: unknown): void {
   void (async () => {
     let delivered = false;
     try {
-      const perms = await Notifications.getPermissionsAsync();
-      if (!lease.isCurrent()) return;
-      const canNotify = perms.granted || perms.ios?.status === Notifications.IosAuthorizationStatus.PROVISIONAL;
-      if (canNotify) {
-        await Notifications.scheduleNotificationAsync({
-          content: {
-            title: 'Отложенный чек отправлен',
-            body: `${number ? `Чек №${number}` : 'Чек'}${client ? ` · ${client}` : ''} записан в журнал`,
-            sound: false,
-          },
-          trigger: null,
-        });
-        delivered = true;
+      if (!inventoryInternal) {
+        const perms = await Notifications.getPermissionsAsync();
+        if (!lease.isCurrent()) return;
+        const canNotify = perms.granted || perms.ios?.status === Notifications.IosAuthorizationStatus.PROVISIONAL;
+        if (canNotify) {
+          await Notifications.scheduleNotificationAsync({
+            content: {
+              title: 'Отложенный чек отправлен',
+              body: `${number ? `Чек №${number}` : 'Чек'}${client ? ` · ${client}` : ''} записан в журнал`,
+              sound: false,
+            },
+            trigger: null,
+          });
+          delivered = true;
+        }
       }
     } catch {
       // Права/шедулер недоступны — ниже покажем тост.
@@ -459,6 +467,7 @@ function openCheckFromPush(checkId: string): void {
 }
 
 function handleNotificationResponse(response: Notifications.NotificationResponse): void {
+  if (inventoryInternal) return;
   const id = response.notification.request.identifier;
   if (id && id === lastHandledNotificationId) return;
   lastHandledNotificationId = id;
@@ -634,6 +643,7 @@ export default function App() {
   // that launched the process; the identifier dedupe inside the handler
   // makes the two paths safe to run together.
   useEffect(() => {
+    if (inventoryInternal) return;
     const sub = Notifications.addNotificationResponseReceivedListener(handleNotificationResponse);
     Notifications.getLastNotificationResponseAsync()
       .then((response) => {
@@ -651,6 +661,7 @@ export default function App() {
   // Rapid pushes are coalesced (ignore if we invalidated < 2s ago) so a
   // burst of writes on another device triggers a single refetch wave here.
   useEffect(() => {
+    if (inventoryInternal) return;
     let lastInvalidatedAt = 0;
     const COALESCE_MS = 2000;
     const sub = Notifications.addNotificationReceivedListener((notification) => {

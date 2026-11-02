@@ -1,4 +1,4 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from './environmentStorage';
 import { captureDataSession, dataOwnerKey, type DataOwner } from '../contexts/dataSession';
 import { withIntentWrite } from '../contexts/intentWriteBarrier';
 import { createProcurementMutex } from '../../../shared/utils/durableProcurement';

@@ -1,3 +1,5 @@
+import type { AssembleKitRequest, KitOperationResult, PhysicalProductKit, KitRecipe } from './productKits';
+import type { AddManualSupplierInvoiceLine, SupplierInvoiceDocument, ConfirmSupplierInvoice } from './supplierInvoices';
 import type { TodayEarnings, DashboardAttention } from '../types';
 import type {
   OwnerHomeProfit,
@@ -860,7 +862,29 @@ export function createProductsApi(api: HttpClient) {
         lastMonthProductCost: number;
       }>('/products/warehouse-stats'),
     getById: (id: string) => api.get<Product>(`/products/${id}`),
+    internalBarcode: (id: string) =>
+      api.post<{ id: string; internalBarcode: string }>(`/products/${id}/internal-barcode`, {}),
+    internalBarcodes: (productIds: string[]) =>
+      api.post<{ products: Array<{ id: string; internalBarcode: string }> }>('/products/internal-barcodes', {
+        productIds,
+      }),
+    lookupBarcode: (params: { barcode: string; warehouseId?: string; page?: number; limit?: number }) =>
+      api.get<{
+        status: 'found' | 'ambiguous' | 'not_found';
+        matches: Product[];
+        total: number;
+        page: number;
+        limit: number;
+      }>('/products/lookup-barcode', { params }),
     create: (data: CreateProductRequest) => api.post<Product>('/products', data),
+    usedIntake: (
+      data: Omit<CreateProductRequest, 'stock' | 'supplierId' | 'isBundle' | 'bundleItems'> & {
+        quantity: number;
+        requestId: string;
+      },
+    ) => api.post<{ product: Product; requestId: string }>('/products/used-intake', data),
+    createShare: (id: string) => api.post<{ token: string; path: string }>(`/products/${id}/share`, {}),
+    revokeShare: (id: string) => api.delete<{ revoked: boolean }>(`/products/${id}/share`),
     update: (id: string, data: UpdateProductRequest) => api.patch<Product>(`/products/${id}`, data),
     /** Set just the sell price on an existing product. */
     setSellPrice: (id: string, sellPrice: number) => api.patch<Product>(`/products/${id}/sell-price`, { sellPrice }),
@@ -1718,6 +1742,20 @@ export function createWarrantyApi(api: HttpClient) {
 
 export function createStockMovementsApi(api: HttpClient) {
   return {
+    history: (params?: {
+      productId?: string;
+      warehouseId?: string;
+      type?: string;
+      dateFrom?: string;
+      dateTo?: string;
+      includeSales?: boolean;
+      cursor?: string;
+      limit?: number;
+    }) =>
+      api.get<{ data: StockMovement[]; limit: number; snapshotAt: string; nextCursor: string | null }>(
+        '/stock-movements/history',
+        { params },
+      ),
     list: (params?: {
       warehouseId?: string;
       productId?: string;
@@ -2063,7 +2101,7 @@ export function createCheckPhotosApi(api: HttpClient) {
 export function createCheckTemplatesApi(api: HttpClient) {
   return {
     // Both clients preserve server product sources through apply/save/offline.
-    list: () => api.get<CheckTemplate[]>('/check-templates', { params: { sourceAware: '1' } }),
+    list: () => api.get<CheckTemplate[]>('/check-templates', { params: { sourceAware: '1', kitRecipes: '1' } }),
     /**
      * `folderId` — put the new template into a folder in the matching scope.
      * `shared: true` — publish as a tenant-wide template; requires the explicit
@@ -2076,7 +2114,7 @@ export function createCheckTemplatesApi(api: HttpClient) {
       products: CheckTemplate['products'];
       folderId?: string | null;
       shared?: boolean;
-    }) => api.post<CheckTemplate>('/check-templates', data),
+    }) => api.post<CheckTemplate>('/check-templates', { ...data, supportsKitRecipes: true }),
     /** `folderId: null` moves the template back to the root (no folder). */
     update: (
       id: string,
@@ -2085,7 +2123,7 @@ export function createCheckTemplatesApi(api: HttpClient) {
         folderId?: string | null;
         shared?: boolean;
       },
-    ) => api.put<CheckTemplate>(`/check-templates/${id}`, data),
+    ) => api.put<CheckTemplate>(`/check-templates/${id}`, { ...data, supportsKitRecipes: true }),
     remove: (id: string) => api.delete(`/check-templates/${id}`),
     /** The current employee's private folders and all tenant-shared folders. */
     folders: {
@@ -3195,4 +3233,62 @@ export function createManagerCabinetApi(api: HttpClient) {
 
 export function createDashboardApi(api: HttpClient) {
   return { attention: () => api.get<DashboardAttention>('/dashboard/attention') };
+}
+
+/** Camera photos use multipart uploads; GET image URLs require the same bearer session. */
+export function createSupplierInvoicesApi(api: HttpClient) {
+  return {
+    prepare: (supplierId: string, orderId?: string) =>
+      api.post<SupplierInvoiceDocument>('/supplier-invoices/prepare', { supplierId, orderId }),
+    get: (id: string) => api.get<SupplierInvoiceDocument>(`/supplier-invoices/${id}`),
+    uploadPage: (id: string, data: FormData) =>
+      api.post<SupplierInvoiceDocument>(`/supplier-invoices/${id}/pages`, data, { timeout: 60000 }),
+    deletePage: (id: string, pageId: string, expectedVersion: number) =>
+      api.delete<SupplierInvoiceDocument>(`/supplier-invoices/${id}/pages/${pageId}`, { data: { expectedVersion } }),
+    extract: (id: string, expectedVersion: number) =>
+      api.post<SupplierInvoiceDocument>(`/supplier-invoices/${id}/extract`, { expectedVersion }, { timeout: 60000 }),
+    mapLine: (
+      id: string,
+      lineId: string,
+      data: {
+        expectedVersion: number;
+        productId: string;
+        remember?: boolean;
+        unitConfirmed?: boolean;
+        productUnit?: string;
+      },
+    ) => api.patch<SupplierInvoiceDocument>(`/supplier-invoices/${id}/lines/${lineId}`, data),
+    setOrder: (id: string, expectedVersion: number, orderId: string | null) =>
+      api.patch<SupplierInvoiceDocument>(`/supplier-invoices/${id}/context`, { expectedVersion, orderId }),
+    reviewLine: (id: string, lineId: string, data: { expectedVersion: number; excluded: boolean }) =>
+      api.patch<SupplierInvoiceDocument>(`/supplier-invoices/${id}/lines/${lineId}/review`, data),
+    addManualLine: (id: string, data: AddManualSupplierInvoiceLine) =>
+      api.post<SupplierInvoiceDocument>(`/supplier-invoices/${id}/manual-lines`, data),
+    confirm: (id: string, data: ConfirmSupplierInvoice) =>
+      api.post<{ id: string }>(`/supplier-invoices/${id}/confirm`, data),
+  };
+}
+
+export function createProductKitsApi(api: HttpClient) {
+  return {
+    get: (productId: string) => api.get<PhysicalProductKit>(`/product-kits/${productId}`),
+    recipes: () => api.get<KitRecipe[]>('/product-kits/recipes'),
+    recipe: (id: string, version?: number) => api.get<KitRecipe>(`/product-kits/recipes/${id}`, { params: { version } }),
+    createRecipe: (data: Pick<KitRecipe, 'name' | 'components'>) => api.post<KitRecipe>('/product-kits/recipes', data),
+    updateRecipe: (id: string, data: Pick<KitRecipe, 'name' | 'components'> & { expectedVersion: number }) =>
+      api.patch<KitRecipe>(`/product-kits/recipes/${id}`, data),
+    assemble: (data: AssembleKitRequest) => api.post<KitOperationResult>('/product-kits/assemble', data),
+    disassemble: (productId: string, data: { requestId: string; expectedRevision: number; quantity: number }) =>
+      api.post<{
+        assemblyId: string;
+        revision: number;
+        operationId: string;
+        sources: Array<{ sourceProductId: string; productId: string; quantity: number; costPrice: number }>;
+      }>(`/product-kits/${productId}/disassemble`, data),
+    recompose: (productId: string, data: AssembleKitRequest & { expectedRevision: number }) =>
+      api.post<KitOperationResult & { previousAssemblyId: string; previousRevision: number }>(
+        `/product-kits/${productId}/recompose`,
+        data,
+      ),
+  };
 }

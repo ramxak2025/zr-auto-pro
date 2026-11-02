@@ -21,7 +21,9 @@ import { countLabel, parseNumberInput } from './format';
 
 /** Поиск по названию и по коду ячейки: кладовщик идёт по стеллажу и вводит адрес. */
 const matchesProduct = (p: Product, q: string) =>
-  p.name.toLowerCase().includes(q) || (p.storageCellCode ?? '').toLowerCase().includes(q);
+  [p.name, p.article, p.brand, p.barcode, p.internalBarcode, p.storageCellCode].some((value) =>
+    (value ?? '').toLowerCase().includes(q),
+  );
 
 /** «… · A-01-03» после остатка; без ячейки не рисуется, строка выглядит как раньше. */
 function CellSuffix({ code }: { code?: string | null }) {
@@ -36,6 +38,10 @@ function CellSuffix({ code }: { code?: string | null }) {
 
 const searchPlaceholder = (products: Product[]) =>
   products.some((p) => p.storageCellCode) ? 'Поиск по названию или ячейке…' : 'Поиск товара…';
+
+const physicalKitNotice =
+  'Собранные комплекты исключены. Их остаток меняется через действия комплекта; для разборки откройте карточку.';
+const canUseScalarStock = (product: Product) => !product.isBundle && !product.assemblyId;
 
 // ─── Отчёт после инвентаризации ──────────────────────────────────────────────
 
@@ -206,12 +212,12 @@ export function GlobalInventoryForm({
 
   const productMap = useMemo(() => {
     const map = new Map<string, Product>();
-    products.forEach((p) => map.set(p.id, p));
+    products.filter(canUseScalarStock).forEach((p) => map.set(p.id, p));
     return map;
   }, [products]);
 
   const filtered = useMemo(() => {
-    let list = products.filter((p) => !p.isBundle);
+    let list = products.filter(canUseScalarStock);
     if (filterCat) {
       list = list.filter((p) => p.category === filterCat || (p.category && p.category.startsWith(filterCat + '/')));
     }
@@ -222,11 +228,14 @@ export function GlobalInventoryForm({
     return list;
   }, [products, filterCat, search]);
 
-  const countedIds = useMemo(() => new Set(Object.keys(entries).filter((id) => entries[id].actual !== '')), [entries]);
+  const countedIds = useMemo(
+    () => new Set(Object.keys(entries).filter((id) => productMap.has(id) && entries[id].actual !== '')),
+    [entries, productMap],
+  );
 
   const handleSubmit = async () => {
     const items = Object.entries(entries)
-      .filter(([, v]) => v.actual !== '')
+      .filter(([id, v]) => productMap.has(id) && v.actual !== '')
       .map(([productId, v]) => ({
         productId,
         actual: parseNumberInput(v.actual) ?? 0,
@@ -268,6 +277,7 @@ export function GlobalInventoryForm({
 
   return (
     <div className="flex max-h-[70vh] flex-col space-y-4">
+      {products.some((p) => p.assemblyId) && <p className="text-sm text-ink-2">{physicalKitNotice}</p>}
       <div className="flex flex-col gap-2 sm:flex-row">
         <SearchInput
           value={search}
@@ -286,8 +296,11 @@ export function GlobalInventoryForm({
       </div>
 
       <p className="text-xs text-ink-3">
-        Посчитано: <span className="font-semibold tabular-nums text-accent-text">{countedIds.size}</span> /{' '}
-        {countLabel(filtered.length, ['товар', 'товара', 'товаров'])}
+        Посчитано:{' '}
+        <span className="font-semibold tabular-nums text-accent-text">
+          {filtered.filter((p) => countedIds.has(p.id)).length}
+        </span>{' '}
+        / {countLabel(filtered.length, ['товар', 'товара', 'товаров'])}
       </p>
 
       {filtered.length === 0 ? (
@@ -373,7 +386,7 @@ export function GlobalWriteoffForm({
   const [reason, setReason] = useState('');
 
   const filtered = useMemo(() => {
-    let list = products.filter((p) => !p.isBundle && p.stock > 0);
+    let list = products.filter((p) => canUseScalarStock(p) && p.stock > 0);
     if (search) {
       const q = search.toLowerCase();
       list = list.filter((p) => matchesProduct(p, q));
@@ -383,7 +396,12 @@ export function GlobalWriteoffForm({
 
   const handleSubmit = async () => {
     const items = Object.entries(entries)
-      .filter(([, v]) => v.quantity !== '' && (parseNumberInput(v.quantity) ?? 0) > 0)
+      .filter(
+        ([id, v]) =>
+          products.some((p) => p.id === id && canUseScalarStock(p)) &&
+          v.quantity !== '' &&
+          (parseNumberInput(v.quantity) ?? 0) > 0,
+      )
       .map(([productId, v]) => ({
         productId,
         quantity: parseNumberInput(v.quantity) ?? 0,
@@ -401,12 +419,16 @@ export function GlobalWriteoffForm({
     }
   };
 
-  const count = Object.values(entries).filter(
-    (v) => v.quantity !== '' && (parseNumberInput(v.quantity) ?? 0) > 0,
+  const count = Object.entries(entries).filter(
+    ([id, v]) =>
+      products.some((p) => p.id === id && canUseScalarStock(p)) &&
+      v.quantity !== '' &&
+      (parseNumberInput(v.quantity) ?? 0) > 0,
   ).length;
 
   return (
     <div className="flex max-h-[70vh] flex-col space-y-4">
+      {products.some((p) => p.assemblyId) && <p className="text-sm text-ink-2">{physicalKitNotice}</p>}
       <SearchInput value={search} onChange={setSearch} placeholder={searchPlaceholder(products)} />
 
       <Field

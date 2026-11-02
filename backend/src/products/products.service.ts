@@ -1,3 +1,9 @@
+import { rethrowBarcodeReservationError } from './barcode-reservation-policy';
+import { CreateProductDto } from './dto/create-product.dto';
+import { decimal, stockUnits } from '../suppliers/procurement-money';
+import { searchPage } from '../common/smart-search';
+import { kitConflict } from '../product-kits/kit-stock';
+import { productPhotos, validateProductPhotos } from './product-photos';
 import { lockMotivation } from '../motivation/motivation-rules';
 import {
   Injectable,
@@ -92,6 +98,7 @@ export class ProductsService {
       costPriceIsPlaceholder: canSeeCost ? row.cost_price_is_placeholder === true : undefined,
       category: row.category,
       photo: row.photo,
+      photos: productPhotos(row.photos, row.photo),
       // Себестоимость скрывается у тех, кто не управляет складом (см. canSeeCost).
       costPrice: canSeeCost ? parseFloat(row.cost_price) || 0 : 0,
       sellPrice: parseFloat(row.sell_price) || 0,
@@ -99,11 +106,17 @@ export class ProductsService {
       minStock: parseFloat(row.min_stock) || 0,
       unit: row.unit || 'шт',
       isBundle: row.is_bundle || false,
-      bundleItems: row.bundle_items || [],
+      assemblyId: row.assembly_id ?? null,
+      assemblyRevision: row.assembly_revision ?? 0,
+      assemblyExactCost: canSeeCost && row.assembly_exact_cost != null ? Number(row.assembly_exact_cost) : undefined,
+      // Old POS clients expand nonempty virtual bundles before saving. Physical
+      // stock must stay one SKU; its captured composition is available via kits.
+      bundleItems: row.assembly_id ? [] : row.bundle_items || [],
       supplierId: row.supplier_id,
       warehouseId: row.warehouse_id ?? null,
       warrantyDays: row.warranty_days !== null && row.warranty_days !== undefined ? parseInt(row.warranty_days) : null,
       barcode: row.barcode ?? null,
+      internalBarcode: row.internal_barcode ?? null,
       // 172 — адрес хранения; код/подпись приходят из JOIN'а (см. CELL_COLUMNS_SQL).
       storageCellId: row.storage_cell_id ?? null,
       storageCellCode: row.storage_cell_code ?? null,
@@ -114,6 +127,12 @@ export class ProductsService {
       p.supplier = { id: row.supplier_id, name: row.supplier_name };
     }
     return p;
+  }
+
+  /** Internal read projection for exact barcode queries. The caller must scope
+   * its SQL to the authenticated tenant/point; cost visibility fails closed. */
+  projectProductForActor(row: Record<string, unknown>, actor?: ProductActor) {
+    return this.mapProduct(row, this.canSeeCost(actor));
   }
 
   /**
@@ -132,12 +151,13 @@ export class ProductsService {
     warehouseId?: string | null,
     opts: { forCreate?: boolean } = {},
     pointId: string | null = null,
+    db: Pool | PoolClient = this.pool,
   ): Promise<string | null> {
     if (warehouseId) {
       // 169 — склад обязан быть складом ФИЛИАЛА сессии: устаревший id склада
       // другого филиала (экран пережил переключение) — «не найден», а не
       // тихая запись в чужой автосервис.
-      const { rows } = await this.pool.query(
+      const { rows } = await db.query(
         'SELECT id, kind FROM warehouses WHERE id=$1 AND tenant_id=$2 AND ($3::uuid IS NULL OR point_id = $3::uuid) LIMIT 1',
         [warehouseId, tenantID, pointId],
       );
@@ -151,7 +171,7 @@ export class ProductsService {
     }
     // Склад не указан → ОСНОВНОЙ склад филиала сессии (169).
     const params: unknown[] = [tenantID];
-    const { rows } = await this.pool.query(`SELECT ${mainWarehouseOfPointSql('$1', pointId, params)} AS id`, params);
+    const { rows } = await db.query(`SELECT ${mainWarehouseOfPointSql('$1', pointId, params)} AS id`, params);
     if (rows.length > 0 && rows[0].id) return rows[0].id as string;
 
     // НАБОРА СКЛАДОВ У ФИЛИАЛА ЕЩЁ НЕТ — САМОЛЕЧИМСЯ, А НЕ РОЖДАЕМ СИРОТУ.
@@ -162,9 +182,9 @@ export class ProductsService {
     // внутрь оставалась карточка товара — отсюда «товар есть, а на складе
     // его нет». Сеем набор тем же SQL, что и модуль складов, и перечитываем.
     if (tenantID === NO_TENANT_ID) return null; // sentinel-тенант не может владеть складом (FK)
-    await seedWarehousesForPoint(this.pool, tenantID, pointId);
+    await seedWarehousesForPoint(db, tenantID, pointId);
     const retryParams: unknown[] = [tenantID];
-    const { rows: retry } = await this.pool.query(
+    const { rows: retry } = await db.query(
       `SELECT ${mainWarehouseOfPointSql('$1', pointId, retryParams)} AS id`,
       retryParams,
     );
@@ -177,9 +197,14 @@ export class ProductsService {
    * конвенция, что у common/point-scope.assertRowPointForWrite). Без филиала
    * (тенант без филиалов) гейта нет.
    */
-  private async assertProductInPoint(id: string, tenantID: string, pointId: string | null): Promise<void> {
+  private async assertProductInPoint(
+    id: string,
+    tenantID: string,
+    pointId: string | null,
+    db: Pool | PoolClient = this.pool,
+  ): Promise<void> {
     if (!pointId) return;
-    const { rows } = await this.pool.query(
+    const { rows } = await db.query(
       `SELECT 1 FROM products p
         WHERE p.id = $1 AND p.tenant_id = $2
           AND EXISTS (SELECT 1 FROM warehouses wpt WHERE wpt.id = p.warehouse_id AND wpt.point_id = $3)`,
@@ -190,25 +215,20 @@ export class ProductsService {
 
   async getAll(tenantID: string, query: any, actor?: ProductActor) {
     const canSeeCost = this.canSeeCost(actor);
-    const page = parseInt(query.page) || 1;
+    const page = Math.max(1, parseInt(query.page) || 1);
     // Cap 10 000 (not lower): the mobile warehouse picker legitimately fetches
     // the full catalogue today — see cap-limit.ts.
     const limit = capLimit(query.limit, 100, 10000);
     const offset = (page - 1) * limit;
     const search = query.search || '';
 
-    let where = 'p.tenant_id = $1 AND p.deleted_at IS NULL';
+    // Physical batches leave the active catalog when sold or dismantled. Their
+    // product identity/history stays addressable; ordinary zero-stock SKUs stay.
+    let where = 'p.tenant_id = $1 AND p.deleted_at IS NULL AND (p.assembly_id IS NULL OR p.stock > 0)';
     if (query.lowStock === true || query.lowStock === 'true')
       where += ' AND p.min_stock > 0 AND p.stock <= p.min_stock';
     const params: any[] = [tenantID];
     let idx = 2;
-
-    if (search) {
-      // 172 — поиск находит и по коду ячейки («A-01-03» → всё, что лежит на этой полке).
-      where += ` AND (p.name ILIKE $${idx} OR p.barcode ILIKE $${idx} OR sc.code ILIKE $${idx})`;
-      params.push(`%${search}%`);
-      idx++;
-    }
 
     // 172 — «содержимое ячейки»: uuid ячейки либо 'none' (товары без адреса). Всё
     // остальное — мусор от битых клиентов ('undefined', ' '): фильтр не применяем,
@@ -243,23 +263,18 @@ export class ProductsService {
     // ФИЛИАЛА сессии: устаревший id склада другого филиала даёт пустоту, а не
     // чужой товар.
     where += warehousePointFilterSql('p', pointId, params);
-    idx = params.length + 1;
 
-    // JOIN ячеек нужен и счётчику: `where` может ссылаться на sc.code (поиск).
-    const countResult = await this.pool.query(
-      `SELECT COUNT(*) as total FROM products p ${CELL_JOIN_SQL} WHERE ${where}`,
+    const { rows, total } = await searchPage(this.pool, {
+      select: `p.*, s.name AS supplier_name, ${CELL_COLUMNS_SQL}`,
+      from: `FROM products p LEFT JOIN suppliers s ON s.id=p.supplier_id AND s.tenant_id=p.tenant_id ${CELL_JOIN_SQL}`,
+      where,
       params,
-    );
-    const total = parseInt(countResult.rows[0].total);
-
-    params.push(limit, offset);
-    const { rows } = await this.pool.query(
-      `SELECT p.*, s.name as supplier_name, ${CELL_COLUMNS_SQL}
-       FROM products p LEFT JOIN suppliers s ON s.id = p.supplier_id
-       ${CELL_JOIN_SQL}
-       WHERE ${where} ORDER BY p.name, p.id LIMIT $${idx} OFFSET $${idx + 1}`,
-      params,
-    );
+      query: search,
+      fields: ['p.name', 'p.brand', 'p.article', 'p.barcode', 'p.internal_barcode', 'sc.code', 'sc.name'],
+      order: 'name, id',
+      limit,
+      offset,
+    });
 
     // Slim payload for list responses unless explicit fields were requested.
     // `description` and `notes` are not on the products table today, but
@@ -281,7 +296,7 @@ export class ProductsService {
        FROM products p LEFT JOIN suppliers s ON s.id = p.supplier_id
        ${CELL_JOIN_SQL}
        WHERE p.tenant_id = $1 AND p.deleted_at IS NULL
-         AND p.stock <= p.min_stock AND p.min_stock > 0${pointFilter}
+         AND (p.assembly_id IS NULL OR p.stock>0) AND p.stock <= p.min_stock AND p.min_stock > 0${pointFilter}
        ORDER BY p.name`,
       params,
     );
@@ -346,7 +361,7 @@ export class ProductsService {
     const stockPointFilter = warehousePointFilterSql('p', pointId, stockParams);
     const { rows } = await this.pool.query(
       `SELECT
-         COALESCE(SUM(p.cost_price * p.stock), 0) as total_cost_value,
+         COALESCE(SUM(COALESCE(p.assembly_exact_cost,p.cost_price) * p.stock), 0) as total_cost_value,
          COALESCE(SUM(p.sell_price * p.stock), 0) as total_sell_value,
          COALESCE(SUM(p.stock), 0) as total_items
        FROM products p WHERE p.tenant_id = $1 AND p.deleted_at IS NULL${stockPointFilter}`,
@@ -395,23 +410,55 @@ export class ProductsService {
     return this.mapProduct(rows[0], this.canSeeCost(actor));
   }
 
-  async create(tenantID: string, dto: any, pointId: string | null = null) {
+  async create(
+    tenantID: string,
+    dto: any,
+    pointId: string | null = null,
+    transaction?: PoolClient,
+    userId: string | null = null,
+  ) {
+    if (transaction) return this.createProductTx(tenantID, dto, pointId, transaction, userId);
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await this.createProductTx(tenantID, dto, pointId, client, userId);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      rethrowBarcodeReservationError(error);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async createProductTx(
+    tenantID: string,
+    dto: CreateProductDto,
+    pointId: string | null,
+    db: PoolClient,
+    userId: string | null,
+  ) {
     // If a supplier is referenced, it must belong to the caller's tenant.
     if (dto.supplierId) {
-      await this.assertSupplierInTenant(dto.supplierId, tenantID);
+      await this.assertSupplierInTenant(dto.supplierId, tenantID, db);
     }
     // 169 — склад филиала сессии (явный или его основной).
-    const warehouseId = await this.resolveWarehouseId(tenantID, dto.warehouseId, { forCreate: true }, pointId);
+    const warehouseId = await this.resolveWarehouseId(tenantID, dto.warehouseId, { forCreate: true }, pointId, db);
     const warrantyDays = this.normalizeWarrantyDays(dto.warrantyDays);
     // 172 — адрес обязан быть ячейкой ТОГО ЖЕ склада (до любой записи).
-    const cell = dto.storageCellId ? await this.loadCellOfWarehouse(tenantID, dto.storageCellId, warehouseId) : null;
-    const { rows } = await this.pool.query(
-      `INSERT INTO products (name, category, photo, cost_price, sell_price, stock, min_stock, unit, is_bundle, bundle_items, supplier_id, tenant_id, warehouse_id, warranty_days, barcode, storage_cell_id, brand, article, packaging)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) RETURNING *`,
+    const cell = dto.storageCellId
+      ? await this.loadCellOfWarehouse(tenantID, dto.storageCellId, warehouseId, db)
+      : null;
+    const photos = dto.photos === undefined ? productPhotos(undefined, dto.photo) : validateProductPhotos(dto.photos);
+    const { rows } = await db.query(
+      `INSERT INTO products (name, category, photo, cost_price, sell_price, stock, min_stock, unit, is_bundle, bundle_items, supplier_id, tenant_id, warehouse_id, warranty_days, barcode, storage_cell_id, brand, article, packaging, photos)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) RETURNING *`,
       [
         dto.name,
         dto.category,
-        this.normalizePhoto(dto.photo),
+        photos[0] ?? null,
         dto.costPrice || 0,
         dto.sellPrice || 0,
         dto.stock || 0,
@@ -428,13 +475,46 @@ export class ProductsService {
         dto.brand?.trim() ?? '',
         dto.article?.trim() ?? '',
         dto.packaging?.trim() ?? '',
+        JSON.stringify(photos),
       ],
     );
+    await this.recordInventoryEffectTx(db, tenantID, userId, rows[0], 0, 'Начальный остаток', true);
     return this.mapProduct({
       ...rows[0],
       storage_cell_code: cell?.code ?? null,
       storage_cell_name: cell?.name ?? null,
     });
+  }
+
+  /** Writes only the effect that actually committed; no debt, expense or legacy backfill. */
+  private async recordInventoryEffectTx(
+    client: PoolClient,
+    tenantId: string,
+    userId: string | null,
+    product: { id: string; stock: string | number; warehouse_id: string | null },
+    beforeStock: string | number | null,
+    reason: string,
+    opening = false,
+  ) {
+    const after = stockUnits(product.stock ?? 0),
+      before = beforeStock === null ? null : stockUnits(beforeStock);
+    if (before !== null && before === after) return;
+    const delta = before === null ? after : after - before;
+    await client.query(
+      `INSERT INTO stock_movements(product_id,type,quantity,stock_before,stock_after,reason,tenant_id,user_id,warehouse_id)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [
+        product.id,
+        opening && delta > 0n ? 'income' : 'inventory',
+        decimal(after, 3),
+        before === null ? null : decimal(before, 3),
+        decimal(after, 3),
+        reason,
+        tenantId,
+        userId,
+        product.warehouse_id,
+      ],
+    );
   }
 
   /**
@@ -447,8 +527,9 @@ export class ProductsService {
     tenantID: string,
     cellId: string,
     warehouseId: string | null,
+    db: Pool | PoolClient = this.pool,
   ): Promise<{ id: string; code: string; name: string | null }> {
-    const { rows } = await this.pool.query(
+    const { rows } = await db.query(
       'SELECT id, code, name FROM storage_cells WHERE id = $1 AND tenant_id = $2 AND warehouse_id = $3::uuid',
       [cellId, tenantID, warehouseId],
     );
@@ -482,8 +563,12 @@ export class ProductsService {
     return s.length > 0 ? s : null;
   }
 
-  private async assertSupplierInTenant(supplierId: string, tenantID: string): Promise<void> {
-    const { rows } = await this.pool.query('SELECT 1 FROM suppliers WHERE id = $1 AND tenant_id = $2 LIMIT 1', [
+  private async assertSupplierInTenant(
+    supplierId: string,
+    tenantID: string,
+    db: Pool | PoolClient = this.pool,
+  ): Promise<void> {
+    const { rows } = await db.query('SELECT 1 FROM suppliers WHERE id = $1 AND tenant_id = $2 LIMIT 1', [
       supplierId,
       tenantID,
     ]);
@@ -504,16 +589,25 @@ export class ProductsService {
       throw new BadRequestException('Остаток меняется отдельной складской операцией');
     const db = transaction ?? this.pool;
     // 169 — товар чужого филиала не правится.
-    await this.assertProductInPoint(id, tenantID, pointId);
+    await this.assertProductInPoint(id, tenantID, pointId, db);
     if (dto.supplierId !== undefined && dto.supplierId !== null) {
-      await this.assertSupplierInTenant(dto.supplierId, tenantID);
+      await this.assertSupplierInTenant(dto.supplierId, tenantID, db);
     }
 
     // Get current prices (и остаток, склад) before update for price history
     const { rows: current } = await db.query(
-      'SELECT cost_price, sell_price, stock, warehouse_id FROM products WHERE id=$1 AND tenant_id=$2',
+      'SELECT cost_price, sell_price, stock, warehouse_id, assembly_id, bundle_items FROM products WHERE id=$1 AND tenant_id=$2',
       [id, tenantID],
     );
+
+    if (
+      current[0]?.assembly_id &&
+      ((dto.costPrice !== undefined && Number(dto.costPrice) !== Number(current[0].cost_price)) ||
+        (dto.stock !== undefined && Number(dto.stock) !== Number(current[0].stock)) ||
+        (dto.isBundle !== undefined && dto.isBundle !== true) ||
+        (dto.bundleItems !== undefined && JSON.stringify(dto.bundleItems) !== JSON.stringify(current[0].bundle_items)))
+    )
+      throw kitConflict();
 
     // NEW-3: валидируем значение остатка ДО любой записи (то же правило, что в
     // applyStockPatch), чтобы невалидный минус отклонял ВЕСЬ запрос до того, как
@@ -555,10 +649,12 @@ export class ProductsService {
       sets.push(`category=$${idx++}`);
       vals.push(dto.category);
     }
-    if (dto.photo !== undefined) {
-      // #63 — REPLACE the photo with exactly what the client sent. An explicit
-      // null / '' / blank clears it to NULL (a removed photo is gone); a URL is
-      // stored as-is. Omitting `photo` leaves the current value untouched.
+    if (dto.photos !== undefined) {
+      const photos = validateProductPhotos(dto.photos);
+      sets.push(`photos=$${idx++}`, `photo=$${idx++}`);
+      vals.push(JSON.stringify(photos), photos[0] ?? null);
+    } else if (dto.photo !== undefined) {
+      // The DB trigger replaces/removes the cover and preserves the other photos.
       sets.push(`photo=$${idx++}`);
       vals.push(this.normalizePhoto(dto.photo));
     }
@@ -596,7 +692,7 @@ export class ProductsService {
     let finalWarehouseId: string | null = current.length > 0 ? (current[0].warehouse_id ?? null) : null;
     let warehouseChanged = false;
     if (dto.warehouseId !== undefined) {
-      const resolved = await this.resolveWarehouseId(tenantID, dto.warehouseId, {}, pointId);
+      const resolved = await this.resolveWarehouseId(tenantID, dto.warehouseId, {}, pointId, db);
       sets.push(`warehouse_id=$${idx++}`);
       vals.push(resolved);
       warehouseChanged = current.length > 0 && resolved !== finalWarehouseId;
@@ -616,7 +712,7 @@ export class ProductsService {
       sets.push('storage_cell_id=NULL');
     } else if (dto.storageCellId !== undefined) {
       if (current.length === 0) throw new NotFoundException({ message: 'Товар не найден' });
-      const cell = await this.loadCellOfWarehouse(tenantID, dto.storageCellId, finalWarehouseId);
+      const cell = await this.loadCellOfWarehouse(tenantID, dto.storageCellId, finalWarehouseId, db);
       sets.push(`storage_cell_id=$${idx++}`);
       vals.push(cell.id);
     } else if (warehouseChanged) {
@@ -634,14 +730,19 @@ export class ProductsService {
       vals.push(id, tenantID);
       // 172 — CTE вместо голого UPDATE ... RETURNING *: тем же запросом подтягиваем код
       // и подпись ячейки, чтобы ответ PATCH не расходился с GET (без лишнего круга в БД).
-      const { rows } = await db.query(
-        `WITH upd AS (
+      const { rows } = await db
+        .query(
+          `WITH upd AS (
            UPDATE products SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx} RETURNING *
          )
          SELECT upd.*, sc.code AS storage_cell_code, sc.name AS storage_cell_name
            FROM upd LEFT JOIN storage_cells sc ON sc.id = upd.storage_cell_id`,
-        vals,
-      );
+          vals,
+        )
+        .catch((error: unknown) => {
+          rethrowBarcodeReservationError(error);
+          throw error;
+        });
       if (rows.length === 0) throw new NotFoundException({ message: 'Товар не найден' });
       mainRow = rows[0];
 
@@ -1265,12 +1366,12 @@ export class ProductsService {
   // INNER JOIN products и берёт оттуда имя и цены, так что движение с пустым
   // product_id пропадёт из журнала ровно так же — только ещё незаметнее.
   // Лечить надо не ключ, а само удаление.
-  private static readonly NO_HARD_REFS_SQL = `NOT EXISTS (SELECT 1 FROM stock_movements sm WHERE sm.product_id = p.id)
+  private static readonly NO_HARD_REFS_SQL = `NOT EXISTS (SELECT 1 FROM stock_movements sm WHERE (sm.product_id = p.id OR sm.source_product_id=p.id OR sm.target_product_id=p.id))
        AND NOT EXISTS (SELECT 1 FROM purchase_order_items poi WHERE poi.product_id = p.id)
        AND NOT EXISTS (SELECT 1 FROM check_return_lines crl WHERE crl.product_id = p.id)`;
 
   /** Те же три ссылки, но флагами — чтобы объяснить человеку, что держит товар. */
-  private static readonly HARD_REF_FLAGS_SQL = `EXISTS (SELECT 1 FROM stock_movements sm WHERE sm.product_id = p.id) AS has_movements,
+  private static readonly HARD_REF_FLAGS_SQL = `EXISTS (SELECT 1 FROM stock_movements sm WHERE (sm.product_id = p.id OR sm.source_product_id=p.id OR sm.target_product_id=p.id)) AS has_movements,
               EXISTS (SELECT 1 FROM purchase_order_items poi WHERE poi.product_id = p.id) AS has_orders,
               EXISTS (SELECT 1 FROM check_return_lines crl WHERE crl.product_id = p.id) AS has_returns`;
 
@@ -1386,7 +1487,7 @@ export class ProductsService {
     const params: unknown[] = [tenantID];
     const pointFilter = warehousePointFilterSql('p', pointId, params);
     const { rows } = await this.pool.query(
-      `SELECT p.name, p.category, p.unit, p.sell_price, p.cost_price, p.stock, p.min_stock,
+      `SELECT p.name, p.category, p.unit, p.sell_price, COALESCE(p.assembly_exact_cost,p.cost_price) AS cost_price, p.stock, p.min_stock,
               sc.code AS storage_cell_code
        FROM products p ${CELL_JOIN_SQL}
        WHERE p.tenant_id = $1 AND p.deleted_at IS NULL${pointFilter}
@@ -1412,7 +1513,7 @@ export class ProductsService {
     return [header, ...lines].join('\n');
   }
 
-  async importCsv(tenantID: string, items: unknown, pointId: string | null = null) {
+  async importCsv(tenantID: string, items: unknown, pointId: string | null = null, userId: string | null = null) {
     this.logger.log(`[importCsv] received ${Array.isArray(items) ? items.length : 0} items for tenant ${tenantID}`);
 
     // Top-level try/catch so we always return a meaningful error instead of 500.
@@ -1512,11 +1613,12 @@ export class ProductsService {
       // половины товара на складе нет.
       const names = normalized.map((r) => r.name);
       const { rows: existingRows } = await this.pool.query(
-        `SELECT id, name FROM products
+        `SELECT id, name, assembly_id FROM products
           WHERE tenant_id = $1 AND name = ANY($2::text[]) AND deleted_at IS NULL
             AND warehouse_id IS NOT DISTINCT FROM $3::uuid`,
         [tenantID, names, importWarehouseId],
       );
+      if (existingRows.some((row) => row.assembly_id)) throw kitConflict();
       const existingMap = new Map<string, string>();
       for (const row of existingRows) existingMap.set(row.name, row.id);
 
@@ -1560,6 +1662,17 @@ export class ProductsService {
           for (const row of cellRows) cellIdByCode.set(row.requested, row.id);
         }
 
+        const existingIds = [...new Set(existingMap.values())].sort();
+        const lockedExisting = existingIds.length
+          ? (
+              await client.query(
+                'SELECT id,stock,warehouse_id FROM products WHERE tenant_id=$1 AND id=ANY($2::uuid[]) AND warehouse_id IS NOT DISTINCT FROM $3::uuid AND deleted_at IS NULL ORDER BY id FOR UPDATE',
+                [tenantID, existingIds, importWarehouseId],
+              )
+            ).rows
+          : [];
+        const existingBefore = new Map(lockedExisting.map((row) => [row.id, row]));
+
         // Batch INSERT new items — chunk by 100 to stay under param limit (65535/10 ≈ 6.5k max).
         const newItems = normalized.filter((r) => !existingMap.has(r.name));
         for (let i = 0; i < newItems.length; i += 100) {
@@ -1585,10 +1698,12 @@ export class ProductsService {
             );
           });
           try {
-            await client.query(
-              `INSERT INTO products (name, category, cost_price, sell_price, stock, min_stock, unit, tenant_id, warehouse_id, storage_cell_id) VALUES ${placeholders.join(', ')}`,
+            const inserted = await client.query(
+              `INSERT INTO products (name, category, cost_price, sell_price, stock, min_stock, unit, tenant_id, warehouse_id, storage_cell_id) VALUES ${placeholders.join(', ')} RETURNING id,stock,warehouse_id`,
               values,
             );
+            for (const row of inserted.rows)
+              await this.recordInventoryEffectTx(client, tenantID, userId, row, 0, 'Импорт товаров', true);
             created += chunk.length;
           } catch (err) {
             // Full driver error goes to the server log only — raw DB error
@@ -1598,6 +1713,9 @@ export class ProductsService {
             this.logger.error(`[importCsv] batch INSERT failed at chunk ${i}-${i + chunk.length}: ${msg}`);
             skipped += chunk.length;
             if (errors.length < 5) errors.push(`Строки ${i + 1}–${i + chunk.length}: не удалось создать товары`);
+            // A failed SQL statement aborts PostgreSQL's transaction: never return
+            // invented partial-success counts or a product without its opening.
+            throw err;
           }
         }
 
@@ -1605,14 +1723,20 @@ export class ProductsService {
         const updateItems = normalized.filter((r) => existingMap.has(r.name));
         for (const it of updateItems) {
           const existingId = existingMap.get(it.name);
+          const before = existingBefore.get(existingId);
+          if (!before) {
+            skipped++;
+            if (errors.length < 5) errors.push(`«${it.name}»: товар перемещён или удалён, повторите импорт`);
+            continue;
+          }
           try {
             // 172 — пустая колонка «Ячейка» адрес не меняет (COALESCE держит прежний).
-            await client.query(
+            const changed = await client.query(
               `UPDATE products SET category=$3, cost_price=CASE WHEN $10 THEN $4 ELSE cost_price END, sell_price=CASE WHEN $11 THEN $5 ELSE sell_price END,
                       cost_price_is_placeholder=CASE WHEN $10 THEN false ELSE cost_price_is_placeholder END,
                       sell_price_is_placeholder=CASE WHEN $11 THEN false ELSE sell_price_is_placeholder END, stock=$6, min_stock=$7, unit=$8,
                       storage_cell_id=COALESCE($9::uuid, storage_cell_id)
-                WHERE id=$1 AND tenant_id=$2`,
+                WHERE id=$1 AND tenant_id=$2 RETURNING id,stock,warehouse_id`,
               [
                 existingId,
                 tenantID,
@@ -1627,6 +1751,15 @@ export class ProductsService {
                 it.hasSellPrice,
               ],
             );
+            if (changed.rows[0])
+              await this.recordInventoryEffectTx(
+                client,
+                tenantID,
+                userId,
+                changed.rows[0],
+                before.stock,
+                'Импорт товаров',
+              );
             updated++;
           } catch (err) {
             // Same rule as above: log the raw error, return a sanitized one.
@@ -1634,12 +1767,14 @@ export class ProductsService {
             this.logger.error(`[importCsv] UPDATE failed for "${it.name}": ${msg}`);
             skipped++;
             if (errors.length < 5) errors.push(`«${it.name}»: не удалось обновить товар`);
+            throw err;
           }
         }
 
         await client.query('COMMIT');
       } catch (err) {
         await client.query('ROLLBACK');
+        rethrowBarcodeReservationError(err);
         throw err;
       } finally {
         client.release();
@@ -1648,7 +1783,7 @@ export class ProductsService {
       this.logger.log(`[importCsv] done: ${created} created, ${updated} updated, ${skipped} skipped`);
       return { created, updated, skipped, total: created + updated, errors };
     } catch (err) {
-      if (err instanceof BadRequestException) throw err;
+      if (err instanceof BadRequestException || err instanceof ConflictException) throw err;
       // Raw DB/driver error text stays in the server log; the client gets a
       // generic message (no schema/constraint internals leak).
       const msg = err instanceof Error ? err.message : 'неизвестная ошибка';
@@ -1735,7 +1870,7 @@ export class ProductsService {
 
       // 169 — товар обязан лежать на складе филиала сессии (чужой — «не найден»).
       const { rows } = await client.query(
-        `SELECT stock, warehouse_id, cost_price, cost_price_is_placeholder, deleted_at FROM products WHERE id=$1 AND tenant_id=$2
+        `SELECT stock, warehouse_id, cost_price, cost_price_is_placeholder, deleted_at, assembly_id FROM products WHERE id=$1 AND tenant_id=$2
            AND ($3::uuid IS NULL OR EXISTS (SELECT 1 FROM warehouses wpt
                   WHERE wpt.id = products.warehouse_id AND wpt.point_id = $3::uuid))
          FOR UPDATE`,
@@ -1765,6 +1900,7 @@ export class ProductsService {
         }
       }
 
+      if (rows[0].assembly_id) throw kitConflict();
       const stockBefore = parseFloat(rows[0].stock) || 0;
       const productWarehouseId = (rows[0].warehouse_id as string | null) ?? null;
       if (

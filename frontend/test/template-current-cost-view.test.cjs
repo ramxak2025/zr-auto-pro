@@ -47,6 +47,7 @@ Module._load = function (request, parent, isMain) {
         default: ({ isOpen, title, children }) =>
           isOpen ? React.createElement('section', { 'aria-label': title }, children) : null,
       };
+    if (request === './warehouse/ProductKitRecipes') return { KitRecipeComposition: () => null };
     if (request === './ConfirmDialog') return { __esModule: true, default: () => null };
   }
   return originalLoad.call(this, request, parent, isMain);

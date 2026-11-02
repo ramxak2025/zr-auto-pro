@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { isReceivableProduct } from '../../../shared/utils/supplierInvoiceReview';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, Package, ShoppingCart, Sparkles, Send } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -122,7 +123,7 @@ export default function PurchaseOrderEditPage() {
     }
   }, [warehouses, pickerWarehouseId]);
   const pickerProducts = useMemo(() => {
-    const list = allProducts ?? [];
+    const list = (allProducts ?? []).filter((product) => isReceivableProduct(product, warehouses ?? []));
     if (!pickerWarehouseId) return list;
     const isMain = warehouses?.find((w) => w.id === pickerWarehouseId)?.kind === 'main';
     return list.filter((p) => p.warehouseId === pickerWarehouseId || (isMain && !p.warehouseId));
@@ -505,7 +506,7 @@ export default function PurchaseOrderEditPage() {
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}
         products={pickerProducts}
-        warehouses={warehouses}
+        warehouses={warehouses?.filter((warehouse) => warehouse.kind !== 'used')}
         selectedWarehouseId={pickerWarehouseId}
         onSelectWarehouse={setPickerWarehouseId}
         selectedIds={items.map((it) => it.productId)}

@@ -1,9 +1,13 @@
+import { exactKitLineCost } from '../product-kits/kit-stock';
+import { resolveSavedKitPositions } from '../product-kits/kit-checks';
+import { captureCheckProductHistory } from '../checks/check-product-events';
 import { lockMotivationRead } from '../motivation/motivation-rules';
 import { returnRevenueMotivation } from '../motivation/check-motivation';
 import {
   Injectable,
   Inject,
   BadRequestException,
+  ConflictException,
   NotFoundException,
   InternalServerErrorException,
   Logger,
@@ -126,7 +130,7 @@ export class ReturnsService {
       // drives the default refund for partial scope (money-audit M6), the cost
       // side drives the COGS reversal for warehouse returns (money-audit C1).
       const allProductLines = await client.query(
-        `SELECT id, product_id, quantity, sell_price, cost_price, total_sell, total_cost
+        `SELECT id, product_id, quantity, sell_price, cost_price, total_sell, total_cost, kit_source, kit_exact_unit_cost
            FROM check_product_lines WHERE check_id = $1`,
         [checkId],
       );
@@ -147,7 +151,13 @@ export class ReturnsService {
         if (lineQty > 0 && qty >= lineQty) return { sell: totalSell, cost: totalCost };
         const unitSell = lineQty > 0 ? totalSell / lineQty : parseFloat(row.sell_price) || 0;
         const unitCost = lineQty > 0 ? totalCost / lineQty : parseFloat(row.cost_price) || 0;
-        return { sell: round2(unitSell * qty), cost: round2(unitCost * qty) };
+        return {
+          sell: round2(unitSell * qty),
+          cost:
+            row.kit_exact_unit_cost == null
+              ? round2(unitCost * qty)
+              : exactKitLineCost(String(row.kit_exact_unit_cost), qty),
+        };
       };
 
       // For full scope we move every product line; for partial we honour the
@@ -156,6 +166,8 @@ export class ReturnsService {
       const productMoves: Array<{
         productLineId: string | null;
         productId: string | null;
+        sourceProductId?: string | null;
+        kitSource?: { intentId: string; sourceProductId: string };
         quantity: number;
         /** Себестоимость возвращаемого количества — реверс COGS (C1). */
         cost: number;
@@ -175,6 +187,8 @@ export class ReturnsService {
           productMoves.push({
             productLineId: pl.id,
             productId: pl.product_id,
+            sourceProductId: pl.kit_source?.sourceProductId ?? pl.product_id,
+            kitSource: pl.kit_source ?? undefined,
             quantity: qty,
             cost: lineMoney(pl, qty).cost,
           });
@@ -196,6 +210,8 @@ export class ReturnsService {
             productMoves.push({
               productLineId: match.id,
               productId: match.product_id,
+              sourceProductId: match.kit_source?.sourceProductId ?? match.product_id,
+              kitSource: match.kit_source ?? undefined,
               quantity: qty,
               cost: money.cost,
             });
@@ -320,15 +336,30 @@ export class ReturnsService {
       // вернувшимся в сток (товар не удалён). Брак (defect) — реальный убыток:
       // сток ОСНОВНОГО склада не восстанавливается (единицы ложатся на склад
       // брака ниже), cost остаётся на чеке.
+      if (productMoves.some((move) => move.kitSource)) {
+        await resolveSavedKitPositions(client, tenantID, actorPointId(actor), checkId, sourceIds);
+        const positions = (
+          await client.query('SELECT id,product_id FROM check_product_lines WHERE check_id=$1', [checkId])
+        ).rows;
+        for (const move of productMoves) {
+          const position = positions.find((row) => row.id === move.productLineId);
+          if (position) move.productId = position.product_id;
+        }
+      }
+      // Freeze legacy document facts once; the existing return movement remains
+      // the only physical return event (no duplicate synthetic delta).
+      await captureCheckProductHistory(client, tenantID, checkId, 'sale_correction', userID);
       let reversedCost = 0;
       for (const mv of productMoves) {
         if (!mv.productId || mv.quantity <= 0) continue;
         const { rows: prodRows } = await client.query(
-          `SELECT stock, warehouse_id, name, unit FROM products WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
+          `SELECT stock, warehouse_id, name, unit, cost_price, assembly_id FROM products WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
           [mv.productId, tenantID],
         );
         if (prodRows.length === 0) continue; // product deleted — skip stock, but keep the return line
 
+        if (prodRows[0].assembly_id && !Number.isInteger(mv.quantity))
+          throw new BadRequestException('Собранный комплект возвращается только целиком');
         const stockBefore = parseFloat(prodRows[0].stock) || 0;
 
         if (dto.destination === 'warehouse') {
@@ -343,8 +374,8 @@ export class ReturnsService {
           await client.query(
             `INSERT INTO stock_movements
                (product_id, type, quantity, stock_before, stock_after, reason,
-                tenant_id, user_id, warehouse_id)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+                tenant_id, user_id, warehouse_id, check_id, return_id, source_product_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
             [
               mv.productId,
               // Customer return to the main warehouse gets its OWN type so the
@@ -358,7 +389,10 @@ export class ReturnsService {
               dto.reason ?? `Возврат заказ-наряда`,
               tenantID,
               userID || null,
-              targetWh.id,
+              mv.kitSource ? prodRows[0].warehouse_id : targetWh.id,
+              checkId,
+              returnId,
+              mv.sourceProductId ?? mv.productId,
             ],
           );
           continue;
@@ -388,9 +422,18 @@ export class ReturnsService {
           const { rows: targetRows } = await client.query(
             `SELECT id, stock FROM products
               WHERE tenant_id=$1 AND warehouse_id=$2 AND name=$3 AND unit IS NOT DISTINCT FROM $4
-                AND deleted_at IS NULL AND id <> $5
-              ORDER BY created_at LIMIT 1 FOR UPDATE`,
-            [tenantID, targetWh.id, prodRows[0].name, prodRows[0].unit, mv.productId],
+                AND deleted_at IS NULL AND id <> $5 AND ($6::numeric IS NULL OR cost_price=$6::numeric)
+                AND assembly_id IS NOT DISTINCT FROM $7::uuid
+              ORDER BY created_at LIMIT 1 FOR UPDATE${mv.kitSource ? ' NOWAIT' : ''}`,
+            [
+              tenantID,
+              targetWh.id,
+              prodRows[0].name,
+              prodRows[0].unit,
+              mv.productId,
+              mv.kitSource ? prodRows[0].cost_price : null,
+              prodRows[0].assembly_id ?? null,
+            ],
           );
           if (targetRows.length > 0) {
             defectProductId = targetRows[0].id;
@@ -405,11 +448,11 @@ export class ReturnsService {
             defectBefore = 0;
             defectAfter = mv.quantity;
             const { rows: insRows } = await client.query(
-              `INSERT INTO products (name, category, photo, cost_price, sell_price, stock, min_stock, unit,
-                                     is_bundle, bundle_items, supplier_id, tenant_id, warehouse_id, warranty_days, barcode,
+              `INSERT INTO products (name, category, photo, photos, cost_price, sell_price, stock, min_stock, unit,
+                                     is_bundle, bundle_items, supplier_id, tenant_id, warehouse_id, warranty_days, barcode, assembly_id, assembly_revision, assembly_exact_cost,
                                      brand, article, packaging, source_url, sell_price_is_placeholder, cost_price_is_placeholder)
-               SELECT name, category, photo, cost_price, sell_price, $3, 0, unit,
-                      is_bundle, bundle_items, supplier_id, tenant_id, $4, warranty_days, barcode,
+               SELECT name, category, photo, photos, cost_price, sell_price, $3, 0, unit,
+                      is_bundle, bundle_items, supplier_id, tenant_id, $4, warranty_days, barcode, assembly_id, assembly_revision, assembly_exact_cost,
                       brand, article, packaging, source_url, sell_price_is_placeholder, cost_price_is_placeholder
                  FROM products WHERE id=$1 AND tenant_id=$2
                RETURNING id`,
@@ -427,8 +470,8 @@ export class ReturnsService {
         await client.query(
           `INSERT INTO stock_movements
              (product_id, type, quantity, stock_before, stock_after, reason,
-              tenant_id, user_id, warehouse_id, target_warehouse_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+              tenant_id, user_id, warehouse_id, target_warehouse_id, check_id, return_id, source_product_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
           [
             defectProductId,
             'defect_transfer',
@@ -440,6 +483,9 @@ export class ReturnsService {
             userID || null,
             targetWh.id,
             targetWh.id,
+            checkId,
+            returnId,
+            mv.sourceProductId ?? mv.productId,
           ],
         );
       }
@@ -520,6 +566,11 @@ export class ReturnsService {
       };
     } catch (err) {
       await client.query('ROLLBACK');
+      if ((err as { code?: string }).code === '55P03')
+        throw new ConflictException({
+          code: 'KIT_STOCK_BUSY',
+          message: 'Остатки компонентов сейчас меняются. Повторите возврат',
+        });
       if (err instanceof BadRequestException || err instanceof NotFoundException) throw err;
       this.logger.error(`Return create error: ${err}`);
       throw new InternalServerErrorException({ message: 'Ошибка сервера' });

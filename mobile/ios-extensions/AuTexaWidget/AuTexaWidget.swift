@@ -75,8 +75,7 @@ struct WidgetPayload: Codable {
 }
 
 func loadWidgetPayload() -> WidgetPayload? {
-    guard let defaults = UserDefaults(suiteName: "group.com.autexa.mobile"),
-          let json = defaults.string(forKey: "widget_dashboard_data"),
+    guard let json = AutexaNativeEnvironment.widgetSnapshot(),
           let data = json.data(using: .utf8),
           let decoded = try? JSONDecoder().decode(WidgetPayload.self, from: data)
     else { return nil }
@@ -660,7 +659,16 @@ struct AuTexaWidgetEntryView: View {
 
     var body: some View {
         Group {
-            if let payload = entry.payload, !payload.isCleared {
+            if AutexaNativeEnvironment.inventoryInternal {
+                VStack(spacing: 8) {
+                    BrandHeader()
+                    Text(AutexaNativeEnvironment.internalMessage)
+                        .font(.system(size: 13, weight: .medium))
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let payload = entry.payload, !payload.isCleared {
                 if payload.isMaster {
                     switch family {
                     case .systemLarge: MasterLargeView(payload: payload)

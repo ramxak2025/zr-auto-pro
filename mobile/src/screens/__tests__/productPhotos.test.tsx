@@ -13,6 +13,9 @@ const mockCameraPermission = jest.fn();
 const mockUpload = jest.fn();
 const mockUpdate = jest.fn();
 const mockCreate = jest.fn();
+const mockInternalBarcodes = jest.fn();
+let mockCatalog: unknown[] = [];
+const mockUsedIntake = jest.fn();
 const mockSettings = jest.fn();
 const mockSheet = jest.fn();
 const mockAlert = jest.fn();
@@ -33,7 +36,11 @@ const mockNavigation = {
 const mockProduct = {
   id: 'product-A',
   name: 'Фильтр',
+  barcode: '4601234567893',
+  internalBarcode: null,
   photo: '/uploads/old.jpg',
+  assemblyId: null,
+  photos: ['/uploads/old.jpg'],
   category: 'Масла',
   costPrice: 100,
   sellPrice: 200,
@@ -135,6 +142,7 @@ jest.mock('react-native-safe-area-context', () => ({
   SafeAreaView: 'SafeAreaView',
   useSafeAreaInsets: () => ({ bottom: 34 }),
 }));
+jest.mock('../../components/ProductKitRecipes', () => ({ __esModule: true, default: 'ProductKitRecipes' }));
 jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 jest.mock('expo-linear-gradient', () => ({ LinearGradient: 'LinearGradient' }));
 jest.mock('expo-blur', () => ({ BlurView: 'BlurView' }));
@@ -157,12 +165,17 @@ jest.mock('../../components/SectionHeader', () => ({ __esModule: true, default: 
 jest.mock('expo-document-picker', () => ({}));
 jest.mock('expo-file-system/legacy', () => ({}));
 jest.mock('expo-sharing', () => ({}));
-jest.mock('expo-crypto', () => ({}));
+jest.mock('expo-crypto', () => ({ randomUUID: () => '00000000-0000-4000-8000-000000000001' }));
 jest.mock('xlsx', () => ({}));
 jest.mock('../../api/services', () => ({
   warehouseCategoriesApi: { create: (...args: unknown[]) => mockCreateProductFolder(...args) },
   servicesApi: { folders: { create: (...args: unknown[]) => mockCreateServiceFolder(...args) } },
-  productsApi: { create: mockCreate, update: mockUpdate },
+  productsApi: {
+    create: mockCreate,
+    update: mockUpdate,
+    usedIntake: mockUsedIntake,
+    internalBarcodes: mockInternalBarcodes,
+  },
   uploadsApi: { upload: mockUpload },
   warehousesApi: {},
   stockMovementsApi: {},
@@ -199,7 +212,7 @@ jest.mock('@tanstack/react-query', () => ({
               : kind === 'product'
                 ? mockRoute.params.product
                 : kind === 'products'
-                  ? { data: [], total: 0 }
+                  ? { data: mockCatalog, total: mockCatalog.length }
                   : kind === 'service-folders'
                     ? mockServiceFolders
                     : kind === 'service-visibility-config'
@@ -275,6 +288,9 @@ jest.doMock('../../components/TabBarScrollable', () => ({
   TabBarScrollView: 'ScrollView',
 }));
 jest.doMock('../TrashScreen', () => ({ __esModule: true, default: 'TrashScreen' }));
+jest.doMock('../../components/ProductPhotoGallery', () => ({ __esModule: true, default: 'ProductPhotoGallery' }));
+jest.doMock('../../components/ProductShareButton', () => ({ __esModule: true, default: 'ProductShareButton' }));
+jest.doMock('../../components/ProductKitPanel', () => ({ __esModule: true, default: 'ProductKitPanel' }));
 
 jest.doMock('../../components/ProductMovementHistoryModal', () => ({
   __esModule: true,
@@ -325,6 +341,34 @@ const nodes = (node: React.ReactNode): Element[] =>
           ...nodes((node as Element).props.trailing as React.ReactNode),
           ...nodes((node as Element).props.actions as React.ReactNode),
           ...nodes((node as Element).props.ListHeaderComponent as React.ReactNode),
+          ...nodes(
+            node.type === 'ProductPhotoGallery' && (node as Element).props.onPick
+              ? (() => {
+                  const props = (node as Element).props;
+                  const photos = props.photos as string[];
+                  return [
+                    React.createElement('TouchableOpacity', {
+                      key: 'pick-photo',
+                      accessibilityLabel: photos.length ? 'Заменить фото товара' : 'Добавить фото товара',
+                      onPress: () => (props.onPick as (index: number | null) => void)(photos.length ? 0 : null),
+                    }),
+                    photos.length
+                      ? React.createElement('CachedImage', { key: 'photo-preview', source: { uri: photos[0] } })
+                      : null,
+                    photos.length
+                      ? React.createElement(
+                          'TouchableOpacity',
+                          {
+                            key: 'remove-photo',
+                            onPress: () => (props.onChange as (photos: string[]) => void)(photos.slice(1)),
+                          },
+                          'Удалить',
+                        )
+                      : null,
+                  ];
+                })()
+              : null,
+          ),
         ]
       : [];
 const words = (node: React.ReactNode): string =>
@@ -382,6 +426,10 @@ beforeEach(() => {
   jest.clearAllMocks();
   Platform.OS = 'ios';
   mockRoute = { params: {} };
+  mockCatalog = [];
+  mockInternalBarcodes.mockResolvedValue({
+    data: { products: [{ id: mockProduct.id, internalBarcode: 'AX00000001' }] },
+  });
   setDataSession({ tenantId: 'tenant', userId: 'admin', pointId: 'A' });
   mockGallery.mockResolvedValue(select());
   mockCamera.mockResolvedValue(select());
@@ -389,6 +437,9 @@ beforeEach(() => {
   mockUpload.mockResolvedValue({ data: { url: '/uploads/new.jpg' } });
   mockUpdate.mockResolvedValue({ data: mockProduct });
   mockCreate.mockResolvedValue({ data: mockProduct });
+  mockUsedIntake.mockResolvedValue({
+    data: { product: mockProduct, requestId: '00000000-0000-4000-8000-000000000001' },
+  });
   mockSettings.mockResolvedValue(undefined);
 });
 afterEach(resetHooks);
@@ -425,12 +476,63 @@ const open = (kind: 'create' | 'list-edit' | 'detail') => {
         kind === 'detail'
           ? labelled(tree, 'Сохранить изменения')
           : nodes(tree).find(
-              (node) => node.type === 'TouchableOpacity' && ['Создать', 'Сохранить'].includes(words(node)),
+              (node) =>
+                node.type === 'TouchableOpacity' &&
+                ['Создать', 'Сохранить', 'Принять на склад Б/У'].includes(words(node)),
             ),
       );
     },
   };
 };
+
+it.each(['list-edit', 'detail'] as const)(
+  '%s persists all four ordered photos, cover promotion and clearing',
+  async (kind) => {
+    const form = open(kind);
+    const photos = ['/one.jpg', '/two.jpg', '/three.jpg', '/four.jpg'];
+    const gallery = () =>
+      nodes(render(form.screen)).find((node) => node.type === 'ProductPhotoGallery' && node.props.onChange)!;
+    (gallery().props.onChange as (photos: string[]) => void)([photos[2], photos[0], photos[1], photos[3]]);
+    await form.save();
+    expect(mockUpdate.mock.calls[0][1]).toEqual(
+      expect.objectContaining({ photo: '/three.jpg', photos: ['/three.jpg', '/one.jpg', '/two.jpg', '/four.jpg'] }),
+    );
+    (gallery().props.onChange as (photos: string[]) => void)([]);
+    await form.save();
+    expect(mockUpdate.mock.calls[1][1]).toEqual(expect.objectContaining({ photo: null, photos: [] }));
+  },
+);
+
+it('used warehouse accepts a direct atomic intake with positive quantity and reuses its request ID', async () => {
+  mockRoute.params.warehouseId = 'used';
+  const form = open('create');
+  for (const [label, value] of [
+    ['Название товара', 'Фара Б/У'],
+    ['Себестоимость товара', '20,50'],
+    ['Цена продажи товара', '50'],
+    ['Количество товара', '2,5'],
+  ]) {
+    (labelled(render(form.screen), label)!.props.onChangeText as (value: string) => void)(value);
+  }
+  await form.save();
+  await form.save();
+  expect(mockCreate).not.toHaveBeenCalled();
+  expect(mockUsedIntake).toHaveBeenCalledTimes(2);
+  const first = mockUsedIntake.mock.calls[0][0];
+  expect(first).toEqual(
+    expect.objectContaining({
+      name: 'Фара Б/У',
+      quantity: 2.5,
+      costPrice: 20.5,
+      sellPrice: 50,
+      warehouseId: 'used',
+      requestId: '00000000-0000-4000-8000-000000000001',
+    }),
+  );
+  expect(first.stock).toBeUndefined();
+  expect(first.supplierId).toBeUndefined();
+  expect(mockUsedIntake.mock.calls[1][0].requestId).toBe(first.requestId);
+});
 
 it.each(['create', 'list-edit', 'detail'] as const)(
   '%s real photo handler opens native choices, preserves cancel, and saves the camera photo through existing upload',
@@ -681,4 +783,47 @@ it('permission resolving after a form closes does not open camera or report deni
   await flush();
   expect(mockCamera).not.toHaveBeenCalled();
   expect(mockAlert).not.toHaveBeenCalled();
+});
+
+it('real native product detail opens labels and generates only the immutable internal code by server ID', async () => {
+  mockRoute.params.product = mockProduct;
+  let tree = render(ProductDetailScreen);
+  await press(nodes(tree).find((node) => node.type === 'TouchableOpacity' && words(node) === 'Этикетки'));
+  tree = render(ProductDetailScreen);
+  const dialog = nodes(tree).find(
+    (node) =>
+      node.props.visible === true &&
+      typeof node.props.onGenerateInternal === 'function' &&
+      Array.isArray(node.props.products),
+  )!;
+  expect(dialog).toBeDefined();
+  const result = await (dialog.props.onGenerateInternal as (ids: string[]) => Promise<unknown>)([mockProduct.id]);
+  expect(result).toEqual([{ id: mockProduct.id, internalBarcode: 'AX00000001' }]);
+  expect(mockInternalBarcodes).toHaveBeenCalledWith([mockProduct.id]);
+  expect(mockProduct.barcode).toBe('4601234567893');
+  expect(mockUpdate).not.toHaveBeenCalled();
+});
+it('real warehouse multi-select opens labels for selected products without a stock/product write', async () => {
+  const item = { ...mockProduct, category: '' };
+  mockCatalog = [item];
+  let tree = render(ProductsScreen);
+  const list = nodes(tree).find((node) => node.type === 'FlashList' && typeof node.props.renderItem === 'function')!;
+  expect(list).toBeDefined();
+  const row = (list.props.renderItem as (arg: { item: typeof item }) => Element)({ item });
+  (row.props.onLongPress as (product: typeof item) => void)(item);
+  tree = render(ProductsScreen);
+  await press(nodes(tree).find((node) => node.type === 'TouchableOpacity' && words(node) === 'Этикетки'));
+  await flush();
+  tree = render(ProductsScreen);
+  const dialog = nodes(tree).find(
+    (node) =>
+      node.props.visible === true &&
+      Array.isArray(node.props.products) &&
+      typeof node.props.onGenerateInternal === 'function',
+  )!;
+  expect(dialog).toBeDefined();
+  expect((dialog.props.products as (typeof item)[]).map((product) => product.id)).toEqual([item.id]);
+  expect(mockInternalBarcodes).not.toHaveBeenCalled();
+  expect(mockUpdate).not.toHaveBeenCalled();
+  expect(mockCreate).not.toHaveBeenCalled();
 });

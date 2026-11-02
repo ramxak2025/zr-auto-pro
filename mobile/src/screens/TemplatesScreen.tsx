@@ -115,7 +115,8 @@ export function templateSummary(t: CheckTemplate): string {
   if (t.products.length > 0) parts.push(`${t.products.length} тов.`);
   if (parts.length === 0) return 'Пустой шаблон';
   const total = templateTotal(t);
-  if (total > 0) parts.push(formatTemplateMoney(total));
+  if (t.products.some((product) => product.sellPrice === undefined)) parts.push('цена после выбора партий');
+  else if (total > 0) parts.push(formatTemplateMoney(total));
   return parts.join(' · ');
 }
 

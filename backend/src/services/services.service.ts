@@ -1,3 +1,4 @@
+import { searchPage } from '../common/smart-search';
 import { BadRequestException, ConflictException, Injectable, Inject, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { Pool, PoolClient } from 'pg';
@@ -107,7 +108,7 @@ export class ServicesService {
   }
 
   async getAll(tenantID: string, query: ServiceListQuery, actor: JwtPayload) {
-    const page = parseInt(String(query.page ?? ''), 10) || 1;
+    const page = Math.max(1, parseInt(String(query.page ?? ''), 10) || 1);
     // Cap 10 000 (not lower): the cash-screen service picker fetches the full
     // catalogue today — see cap-limit.ts.
     const limit = capLimit(query.limit, 100, 10000);
@@ -123,11 +124,6 @@ export class ServicesService {
     const params: unknown[] = [tenantID];
     let idx = 2;
 
-    if (search) {
-      where += ` AND (s.name ILIKE $${idx} OR COALESCE(s.category, '') ILIKE $${idx})`;
-      params.push(`%${search}%`);
-      idx++;
-    }
     if (category) {
       where += ` AND s.category = $${idx}`;
       params.push(category);
@@ -162,14 +158,17 @@ export class ServicesService {
         ' AND (visibility_rule.visible_role_ids IS NULL OR visibility_viewer.role_id = ANY(visibility_rule.visible_role_ids))';
     }
 
-    const countResult = await this.pool.query(`SELECT COUNT(*) as total ${from} WHERE ${where}`, params);
-    const total = parseInt(countResult.rows[0].total);
-
-    params.push(limit, offset);
-    const { rows } = await this.pool.query(
-      `SELECT s.* ${from} WHERE ${where} ORDER BY s.name LIMIT $${idx} OFFSET $${idx + 1}`,
+    const { rows, total } = await searchPage(this.pool, {
+      select: 's.*',
+      from,
+      where,
       params,
-    );
+      query: search,
+      fields: ['s.name', 's.category'],
+      order: 'name, id',
+      limit,
+      offset,
+    });
 
     return { data: rows.map(this.mapService), total, page, limit };
   }

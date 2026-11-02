@@ -1,3 +1,4 @@
+jest.mock('expo-constants', () => ({ __esModule: true, default: { expoConfig: { extra: {} } } }));
 const mockMap = new Map<string, string>();
 const mockNative = {
   start: jest.fn(),

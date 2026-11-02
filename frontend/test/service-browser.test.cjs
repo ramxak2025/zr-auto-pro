@@ -42,3 +42,12 @@ test('empty folders, normalized legacy categories and uncategorized services ret
     ],
   );
 });
+
+test('service search uses every token across fields, ё normalization and safe layout/typo fallback', () => {
+  const ids = (query) => serviceBrowserLevel(services, [], ['Не та папка'], query).currentServices.map((s) => s.id);
+  assert.deepEqual(ids('масло замена'), ['1']);
+  assert.deepEqual(ids('двигатель диагностика'), ['2']);
+  assert.deepEqual(ids('pfvtyf'), ['1']); // замена entered in the EN keyboard layout
+  assert.deepEqual(ids('замнеа'), ['1']); // one adjacent swap
+  assert.deepEqual(ids('масло тормоза'), []);
+});

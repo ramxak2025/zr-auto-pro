@@ -1,6 +1,11 @@
 import type { Product } from '../../../../shared/types';
 import { buildProductFolderLevel } from '../../../../shared/utils/productFolders';
-import { cellCodeMatchesQuery } from '../../utils/storageCellsUi';
+import { smartSearch } from '../../../../shared/utils/smartSearch';
+
+export const PHYSICAL_KIT_STOCK_NOTICE =
+  'Остаток собранного комплекта меняется через действия комплекта. Для разборки откройте его карточку.';
+
+export const canCountProduct = (product: Product): boolean => !product.assemblyId;
 
 /** Inventory is an absolute count. Keep the original text, never round or strip it. */
 export function parseInventoryQuantity(raw: string): number | null {
@@ -37,18 +42,17 @@ export function inventoryRows(
   search: string,
   folders: { path?: string; name?: string; sort_order?: number }[],
 ): InventoryRow[] {
+  products = products.filter(canCountProduct);
   const query = search.trim().toLowerCase();
   if (query) {
-    return products
-      .filter(
-        (p) =>
-          p.name.toLowerCase().includes(query) ||
-          String(p.barcode ?? '')
-            .toLowerCase()
-            .includes(query) ||
-          cellCodeMatchesQuery(p.storageCellCode, query),
-      )
-      .map((product) => ({ type: 'product', key: product.id, product }));
+    return smartSearch(
+      products,
+      query,
+      (p) => [p.name, p.article, p.brand, p.barcode, p.internalBarcode, p.category, p.storageCellCode],
+      {
+        typos: true,
+      },
+    ).map((product) => ({ type: 'product', key: product.id, product }));
   }
   const level = buildProductFolderLevel(products, path, folders);
   return [
@@ -62,8 +66,10 @@ export function inventorySummary(drafts: InventoryDrafts, products: Product[]) {
     changed = 0,
     invalid = 0,
     review = 0;
-  const ids = new Set(products.map((p) => p.id));
+  const ids = new Set(products.filter(canCountProduct).map((p) => p.id));
+  const assemblyIds = new Set(products.filter((p) => !canCountProduct(p)).map((p) => p.id));
   for (const [id, draft] of Object.entries(drafts)) {
+    if (assemblyIds.has(id)) continue;
     if (draft.needsReview) {
       review++;
       continue;

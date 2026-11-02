@@ -1,3 +1,4 @@
+import type { KitSplitIntent, KitSourceReference } from './productKits';
 // ═══════════════════════════════════════════════════════════════════════════════
 //  Shared API Request/Response types
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -427,6 +428,8 @@ export interface CreateProductRequest {
   category?: string;
   /** Photo URL. Send `null` or `''` to store no photo. */
   photo?: string | null;
+  /** Ordered maximum four. Omit to preserve; [] removes all photos. */
+  photos?: string[];
   costPrice: number;
   sellPrice: number;
   stock: number;
@@ -460,6 +463,8 @@ export interface UpdateProductRequest {
    * with the previous photo. Omitting the field leaves the photo unchanged (#63).
    */
   photo?: string | null;
+  /** Ordered maximum four. Omit to preserve; [] removes all photos. */
+  photos?: string[];
   costPrice?: number;
   sellPrice?: number;
   stock?: number;
@@ -734,6 +739,7 @@ export type PutServiceVisibilityRuleRequest =
   | { categoryPath: string; visibleRoleIds: string[] };
 
 export interface CreateCheckRequest {
+  kitSplits?: KitSplitIntent[];
   /**
    * Идемпотентность (офлайн-очередь): UUID, сгенерированный клиентом один раз
    * на логический чек и повторяемый с каждым ретраем. Сервер гарантирует
@@ -772,6 +778,7 @@ export interface CreateCheckRequest {
     /** Existing saved check-product-line UUID on edit; omit for a new line. */
     id?: string;
     sourceTemplateProduct?: TemplateProductSource;
+    kitSource?: KitSourceReference;
     productId?: string;
     name: string;
     sellPrice: number;
@@ -816,6 +823,7 @@ export interface CreateCheckRequest {
 }
 
 export interface UpdateCheckRequest {
+  kitSplits?: KitSplitIntent[];
   date?: string;
   paymentMethod?: string;
   isDeferred?: boolean;
@@ -840,6 +848,7 @@ export interface UpdateCheckRequest {
     /** Stable identity returned as CheckProductLine.id; verified against this check. */
     id?: string;
     sourceTemplateProduct?: TemplateProductSource;
+    kitSource?: KitSourceReference;
     productId?: string;
     name: string;
     sellPrice: number;

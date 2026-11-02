@@ -1,5 +1,5 @@
 import { withIntentWrite } from '../contexts/intentWriteBarrier';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from './environmentStorage';
 import { Platform } from 'react-native';
 import {
   createDurableProcurement,

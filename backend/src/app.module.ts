@@ -1,3 +1,5 @@
+import { ProductKitsModule } from './product-kits/product-kits.module';
+import { SupplierInvoicesModule } from './supplier-invoices/supplier-invoices.module';
 import { StarterCatalogsModule } from './starter-catalogs/starter-catalogs.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { Module } from '@nestjs/common';
@@ -79,6 +81,8 @@ import { OneCModule } from './one-c/one-c.module';
     ProductsModule,
     ChecksModule,
     SuppliersModule,
+    SupplierInvoicesModule,
+    ProductKitsModule,
     SalaryModule,
     ReportsModule,
     ShiftsModule,

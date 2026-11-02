@@ -166,12 +166,12 @@ export class ProductsBuilder implements ReportBuilder {
           GROUP BY pl.product_id
        )
        SELECT * FROM (
-         SELECT p.id, p.name, p.category, p.stock, p.cost_price,
-                p.stock * COALESCE(p.cost_price, 0) AS stock_value,
+         SELECT p.id, p.name, p.category, p.stock, COALESCE(p.assembly_exact_cost,p.cost_price) AS cost_price,
+                p.stock * COALESCE(p.assembly_exact_cost,p.cost_price, 0) AS stock_value,
                 ${dayKey('s.last_sale')} AS last_sale,
                 ($5::date - COALESCE(${localDate('s.last_sale')}, ${localDate('p.created_at')}))::int AS days_idle,
                 COUNT(*) OVER () AS total_count,
-                SUM(p.stock * COALESCE(p.cost_price, 0)) OVER () AS total_value
+                SUM(p.stock * COALESCE(p.assembly_exact_cost,p.cost_price, 0)) OVER () AS total_value
            FROM products p
            LEFT JOIN sold s ON s.product_id = p.id
           WHERE p.tenant_id = $1 AND p.deleted_at IS NULL AND p.stock > 0
@@ -216,8 +216,8 @@ export class ProductsBuilder implements ReportBuilder {
     const { rows } = await this.pool.query(
       `SELECT * FROM (
          SELECT sm.id, ${dayKey('sm.created_at')} AS day, sm.created_at, p.name, sm.quantity, sm.type, sm.reason,
-                sm.quantity * COALESCE(p.cost_price, 0) AS amount,
-                SUM(CASE WHEN sm.type = 'writeoff' THEN sm.quantity * COALESCE(p.cost_price, 0) ELSE 0 END) OVER () AS writeoff_value
+                sm.quantity * COALESCE(p.assembly_exact_cost,p.cost_price, 0) AS amount,
+                SUM(CASE WHEN sm.type = 'writeoff' THEN sm.quantity * COALESCE(p.assembly_exact_cost,p.cost_price, 0) ELSE 0 END) OVER () AS writeoff_value
            FROM stock_movements sm
            JOIN products p ON p.id = sm.product_id
           WHERE sm.tenant_id = $1 AND sm.type IN ('writeoff', 'defect_transfer') AND ${inPeriod('sm.created_at')}${whPoint}

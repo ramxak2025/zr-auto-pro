@@ -1,3 +1,12 @@
+import ProductLabelPrint from '../components/products/ProductLabelPrint';
+import { formatKitUnitCost } from '../../../shared/utils/productKitDraft';
+import ProductPhotoGallery from '../components/ProductPhotoGallery';
+import ProductShareButton from '../components/ProductShareButton';
+import ProductKitPanel from '../components/ProductKitPanel';
+import { captureDataSession } from '../contexts/dataSession';
+import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
+import { movementAmount, movementDocumentDate } from '../components/ProductMovementHistoryModal';
+import { productPhotoUrls, productPhotoPatch, uploadProductPhotos } from '../../../shared/utils/productPhotos';
 /**
  * ProductDetailScreen — premium drill-down for ONE warehouse product.
  *
@@ -38,8 +47,6 @@ import {
   RefreshControl,
   TouchableOpacity,
   TextInput,
-  Pressable,
-  Modal as RNModal,
   Platform,
   Dimensions,
   ActivityIndicator,
@@ -48,14 +55,12 @@ import {
   type ViewStyle,
 } from 'react-native';
 import Svg, { Defs, LinearGradient as SvgGrad, Path, Stop } from 'react-native-svg';
-import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import { useProductPhotoPicker } from '../hooks/useProductPhotoPicker';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
 
 import BarcodeScanner, { isBarcodeScannerAvailable } from '../components/BarcodeScanner';
-import CachedImage from '../components/CachedImage';
 import { KeyboardAwareView } from '../components/KeyboardAware';
 import IosScreenHeader from '../components/IosScreenHeader';
 import SectionHeader from '../components/SectionHeader';
@@ -72,7 +77,6 @@ import { readNumericField } from '../utils/numberInput';
 import { storageCellFailureText, withRequestedStorageCell } from '../utils/storageCellsUi';
 import { Text } from '../platform/Typography';
 import { productsApi, stockMovementsApi, uploadsApi } from '../api/services';
-import { getImageUrl } from '../api/axios';
 import { useColors } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
@@ -171,7 +175,8 @@ export default function ProductDetailScreen() {
   const productId = passedProduct?.id ?? (route.params as ProductDetailParams).productId ?? '';
 
   const [refreshing, setRefreshing] = useState(false);
-  const [fullscreenPhoto, setFullscreenPhoto] = useState<string | null>(null);
+  const [labelsOpen, setLabelsOpen] = useState(false);
+  const [generatingBarcode, setGeneratingBarcode] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
 
   // ── Edit-on-detail state ────────────────────────────────────────────────
@@ -199,7 +204,8 @@ export default function ProductDetailScreen() {
   // сканер-модалка презентуется без сиблинг-Modal проблем iOS.
   const [barcodeScanOpen, setBarcodeScanOpen] = useState(false);
   const [warranty, setWarranty] = useState('');
-  const [photoUri, setPhotoUri] = useState<string | null>(null);
+  const [photoUris, setPhotoUris] = useState<string[]>([]);
+  const photoPickIndex = useRef<number | null>(null);
   const {
     pickImage,
     isPicking: pickingPhoto,
@@ -209,7 +215,12 @@ export default function ProductDetailScreen() {
     active: editing,
     formKey: productId,
     navigation,
-    onChange: setPhotoUri,
+    onChange: (uri) =>
+      setPhotoUris((current) =>
+        photoPickIndex.current === null
+          ? [...current, uri].slice(0, 4)
+          : current.map((value, index) => (index === photoPickIndex.current ? uri : value)),
+      ),
   });
   // Ячейка хранения (2026-09-30). В режиме правки выбор меняет только это локальное
   // значение и уходит вместе с формой; из режима просмотра пикер сохраняет адрес сразу.
@@ -241,10 +252,26 @@ export default function ProductDetailScreen() {
     queryKey: ['product', productId],
     queryFn: async () => (await productsApi.getById(productId)).data,
     initialData: passedProduct,
+    initialDataUpdatedAt: 0,
     enabled: !!productId,
     retry: (failureCount, err: any) => (err?.response?.status === 404 ? false : failureCount < 2),
     staleTime: 60_000,
   });
+  const labelProducts = useMemo(() => (product ? [product] : []), [product]);
+  const generateLabelCodes = async (ids: string[]) => {
+    const lease = captureDataSession();
+    setGeneratingBarcode(true);
+    try {
+      const { data } = await productsApi.internalBarcodes(ids);
+      if (!lease.isCurrent()) throw new Error('Сессия изменилась. Откройте товар заново.');
+      queryClient.invalidateQueries({ queryKey: ['product', productId] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
+      return data.products;
+    } finally {
+      setGeneratingBarcode(false);
+    }
+  };
 
   // Price-change ledger (newest first). Typed via the new productsApi.priceHistory.
   const { data: priceHistory, isLoading: priceLoading } = useQuery<ProductPriceHistoryEntry[]>({
@@ -253,21 +280,26 @@ export default function ProductDetailScreen() {
     staleTime: 60_000,
   });
 
-  // Recent movements — SAME cache key the modal uses
-  // (['stock-movements','product',id,null]) so opening «Вся история» is
-  // instant and the two never fight over a slot.
-  const { data: movements } = useQuery<StockMovement[]>({
-    queryKey: ['stock-movements', 'product', productId, null],
-    queryFn: async () => (await stockMovementsApi.list({ productId })).data,
+  // Four recent rows seed the full cursor list, preserving its snapshot/cursor.
+  const {
+    data: movementPage,
+    isPending: movementsLoading,
+    isError: movementsError,
+    refetch: refetchMovements,
+    dataUpdatedAt: movementsUpdatedAt,
+  } = useQuery({
+    queryKey: ['stock-movements', 'history-first', productId],
+    queryFn: async () => (await stockMovementsApi.history({ productId, includeSales: true, limit: 4 })).data,
     staleTime: 60_000,
   });
+  const movements = movementPage?.data ?? [];
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['product', productId] }),
       queryClient.invalidateQueries({ queryKey: ['product-price-history', productId] }),
-      queryClient.invalidateQueries({ queryKey: ['stock-movements', 'product', productId, null] }),
+      queryClient.invalidateQueries({ queryKey: ['stock-movements'] }),
     ]);
     setRefreshing(false);
   }, [queryClient, productId]);
@@ -279,7 +311,7 @@ export default function ProductDetailScreen() {
       setConfirmStarterPrices(false);
       setName(p.name);
       setCategory(p.category || '');
-      setCostPrice(p.costPrice != null ? String(p.costPrice) : '');
+      setCostPrice((p.assemblyExactCost ?? p.costPrice) != null ? String(p.assemblyExactCost ?? p.costPrice) : '');
       setSellPrice(p.sellPrice != null ? String(p.sellPrice) : '');
       setStock(p.stock != null ? String(p.stock) : '');
       setMinStock(p.minStock != null ? String(p.minStock) : '');
@@ -288,7 +320,7 @@ export default function ProductDetailScreen() {
       setUnit(unitLabel(p.unit));
       setBarcode(p.barcode || '');
       setWarranty(p.warrantyDays != null ? String(p.warrantyDays) : '');
-      setPhotoUri(p.photo || null);
+      setPhotoUris(productPhotoUrls(p));
       setEditCell(
         p.storageCellId ? { id: p.storageCellId, code: p.storageCellCode ?? '', name: p.storageCellName } : null,
       );
@@ -299,12 +331,23 @@ export default function ProductDetailScreen() {
   // «Изменить» → enter inline edit mode (NOT the old modal). `product` can be
   // undefined while an id-only navigation is still loading — the affordance
   // isn't rendered then, the guard is for type-safety.
-  const enterEdit = useCallback(() => {
+  const enterEdit = useCallback(async () => {
     if (!product) return;
+    const lease = captureDataSession();
+    let complete = product;
+    if (!Array.isArray(product.photos) || product.assemblyId === undefined) {
+      try {
+        complete = (await productsApi.getById(product.id)).data;
+      } catch {
+        if (lease.isCurrent()) Alert.alert('Не удалось загрузить карточку', 'Обновите товар и попробуйте ещё раз.');
+        return;
+      }
+      if (!lease.isCurrent() || navigation.isFocused?.() === false) return;
+    }
     haptic('tap');
-    seedFromProduct(product);
+    seedFromProduct(complete);
     setEditing(true);
-  }, [product, seedFromProduct]);
+  }, [product, seedFromProduct, navigation]);
 
   const cancelEdit = useCallback(() => {
     invalidatePhotoPicker();
@@ -393,12 +436,6 @@ export default function ProductDetailScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [product?.name]);
 
-  const getDisplayPhotoUri = useCallback((photo: string | null): string | undefined => {
-    if (!photo) return undefined;
-    if (photo.startsWith('file://')) return photo;
-    return getImageUrl(photo);
-  }, []);
-
   const handleSave = useCallback(async () => {
     if (photoUploadPending.current || pickingPhoto || uploadingPhoto || saveMutation.isPending) return;
     const continuation = capturePhotoForm();
@@ -406,38 +443,33 @@ export default function ProductDetailScreen() {
       Alert.alert('Ошибка', 'Укажите название товара');
       return;
     }
-    // #63 — определяем, какое фото сохранить:
-    //   • фото убрали (photoUri пуст) → null → бэкенд ОЧИЩАЕТ фото. Раньше
-    //     здесь слался старый product.photo, поэтому удаление не «прилипало».
-    //   • выбрали новое (file://) → загружаем и берём вернувшийся URL;
-    //   • не трогали (существующий серверный путь) → отправляем как есть.
-    let uploadedPhotoPath: string | null;
-    if (!photoUri) {
-      uploadedPhotoPath = null;
-    } else if (photoUri.startsWith('file://')) {
-      try {
-        photoUploadPending.current = true;
-        setUploadingPhoto(true);
-        const filename = photoUri.split('/').pop() || 'photo.jpg';
-        const res = await uploadsApi.upload(photoUri, filename);
-        if (!continuation.isCurrent()) return;
-        uploadedPhotoPath = res.data.url;
-      } catch {
-        if (!continuation.isCurrent()) return;
-        Alert.alert('Ошибка', 'Не удалось загрузить фото');
-        return;
-      } finally {
-        photoUploadPending.current = false;
-        setUploadingPhoto(false);
-      }
-    } else {
-      uploadedPhotoPath = photoUri;
+    let uploadedPhotos: string[];
+    try {
+      photoUploadPending.current = true;
+      setUploadingPhoto(true);
+      const result = await uploadProductPhotos(
+        photoUris,
+        async (uri) => {
+          const res = await uploadsApi.upload(uri, uri.split('/').pop() || 'photo.jpg');
+          return res.data.url;
+        },
+        continuation.isCurrent,
+      );
+      if (!result) return;
+      uploadedPhotos = result;
+    } catch {
+      if (continuation.isCurrent())
+        Alert.alert('Ошибка', 'Не удалось загрузить фотографии. Поля сохранены, попробуйте ещё раз.');
+      return;
+    } finally {
+      photoUploadPending.current = false;
+      setUploadingPhoto(false);
     }
     // Числа читаем через readNumericField: запятая с русской цифровой
     // клавиатуры iOS — полноценный разделитель («1250,50» = 1250.5), тогда как
     // прежний `Number(costPrice) || 0` молча превращал такой ввод в 0. Мусор
     // (null) не отправляем нулём — показываем ошибку поля.
-    const parsedCost = readNumericField(costPrice, 'money');
+    const parsedCost = product?.assemblyId ? product.costPrice : readNumericField(costPrice, 'money');
     const parsedSell = readNumericField(sellPrice, 'money');
     const parsedStock = readNumericField(stock, 'qty');
     const parsedMinStock = readNumericField(minStock, 'qty');
@@ -453,7 +485,7 @@ export default function ProductDetailScreen() {
       // @IsInt на бэкенде: дробная гарантия отклонила бы весь PATCH.
       warrantyDays: warranty.trim() === '' ? null : Math.max(0, Math.floor(Number(warranty) || 0)),
       barcode: barcode.trim(),
-      photo: uploadedPhotoPath,
+      ...productPhotoPatch(uploadedPhotos),
     };
 
     // PATCH — ЧАСТИЧНЫЙ: числовое поле уходит на сервер, только если владелец
@@ -468,12 +500,13 @@ export default function ProductDetailScreen() {
     // Masters never see cost — don't let a hidden field zero it out.
     if (
       canSeeCostPrice &&
+      !product?.assemblyId &&
       (parsedCost !== product?.costPrice || (confirmStarterPrices && product?.costPriceIsPlaceholder))
     )
       payload.costPrice = parsedCost;
     if (parsedSell !== product?.sellPrice || (confirmStarterPrices && product?.sellPriceIsPlaceholder))
       payload.sellPrice = parsedSell;
-    if (parsedStock !== product?.stock) payload.stock = parsedStock;
+    if (!product?.assemblyId && parsedStock !== product?.stock) payload.stock = parsedStock;
     if (parsedMinStock !== product?.minStock) payload.minStock = parsedMinStock;
     // Адрес хранения (2026-09-30) — тоже только если поменяли: uuid ячейки либо null («снять»).
     // Не тронутое поле не уходит, чтобы форма не затирала адрес, выставленный с другого экрана.
@@ -498,7 +531,7 @@ export default function ProductDetailScreen() {
     costPrice,
     confirmStarterPrices,
     canSeeCostPrice,
-    photoUri,
+    photoUris,
     editCell,
     saveMutation,
     product,
@@ -536,11 +569,15 @@ export default function ProductDetailScreen() {
 
   // NULL-SAFE while an id-only navigation is loading (no initialData) — the
   // early terminal-state return below fires before the main JSX reads these.
-  const displayPhotoUri = product ? getImageUrl(product.photo) : undefined;
   const lowStock = !!product && product.stock <= product.minStock && product.minStock > 0;
   const margin =
-    product && !product.costPriceIsPlaceholder && !product.sellPriceIsPlaceholder && product.costPrice > 0
-      ? ((product.sellPrice - product.costPrice) / product.costPrice) * 100
+    product &&
+    !product.costPriceIsPlaceholder &&
+    !product.sellPriceIsPlaceholder &&
+    (product.assemblyExactCost ?? product.costPrice) > 0
+      ? ((product.sellPrice - (product.assemblyExactCost ?? product.costPrice)) /
+          (product.assemblyExactCost ?? product.costPrice)) *
+        100
       : null;
   const categoryLabel = product?.category ? product.category.split('/').pop() : undefined;
 
@@ -661,53 +698,15 @@ export default function ProductDetailScreen() {
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
           >
-            {/* PHOTO picker */}
-            <TouchableOpacity
-              style={[styles.photoWrap, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-              onPress={pickImage}
+            <ProductPhotoGallery
+              photos={photoUris}
+              onChange={setPhotoUris}
+              onPick={(index) => {
+                photoPickIndex.current = index;
+                void pickImage();
+              }}
               disabled={pickingPhoto || uploadingPhoto || saveMutation.isPending}
-              accessibilityLabel={photoUri ? 'Заменить фото товара' : 'Добавить фото товара'}
-              activeOpacity={0.85}
-            >
-              {photoUri ? (
-                <CachedImage source={{ uri: getDisplayPhotoUri(photoUri) }} style={styles.photo} resizeMode="cover" />
-              ) : (
-                <View style={styles.photoPlaceholder}>
-                  <Ionicons name="camera-outline" size={40} color={palette.text.tertiary} />
-                  <Text variant="footnote" color={palette.text.tertiary} style={{ marginTop: spacing[2] }}>
-                    Добавить фото
-                  </Text>
-                </View>
-              )}
-            </TouchableOpacity>
-            {photoUri ? (
-              <View style={styles.photoActions}>
-                <TouchableOpacity
-                  style={styles.photoActionBtn}
-                  onPress={pickImage}
-                  disabled={pickingPhoto || uploadingPhoto || saveMutation.isPending}
-                >
-                  <Ionicons name="swap-horizontal" size={16} color={palette.accent.primary} />
-                  <Text variant="footnote" color={palette.accent.primary}>
-                    Заменить
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.photoActionBtn}
-                  onPress={() => {
-                    invalidatePhotoPicker();
-                    setPhotoUri(null);
-                  }}
-                  disabled={pickingPhoto || uploadingPhoto || saveMutation.isPending}
-                >
-                  <Ionicons name="trash-outline" size={16} color={colors.red[500]} />
-                  <Text variant="footnote" color={colors.red[500]}>
-                    Удалить
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            ) : null}
-
+            />
             {/* Name */}
             <EditField label="Название" palette={palette}>
               <TextInput
@@ -759,6 +758,7 @@ export default function ProductDetailScreen() {
                 <EditField label="Себестоимость" palette={palette} style={{ flex: 1 }}>
                   <TextInput
                     value={costPrice}
+                    editable={!product?.assemblyId}
                     onChangeText={setCostPrice}
                     style={[styles.input, inputThemed]}
                     keyboardType="decimal-pad"
@@ -788,6 +788,7 @@ export default function ProductDetailScreen() {
               >
                 <TextInput
                   value={stock}
+                  editable={!product?.assemblyId}
                   onChangeText={setStock}
                   style={[styles.input, inputThemed]}
                   keyboardType="decimal-pad"
@@ -950,32 +951,13 @@ export default function ProductDetailScreen() {
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />
           }
         >
-          {/* PHOTO — tap to open fullscreen preview. */}
-          <TouchableOpacity
-            activeOpacity={displayPhotoUri ? 0.9 : 1}
-            disabled={!displayPhotoUri}
-            onPress={() => {
-              if (displayPhotoUri) {
-                haptic('tap');
-                setFullscreenPhoto(displayPhotoUri);
-              }
-            }}
-            style={[styles.photoWrap, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-          >
-            {displayPhotoUri ? (
-              <CachedImage source={{ uri: displayPhotoUri }} style={styles.photo} resizeMode="cover" />
-            ) : (
-              <View style={styles.photoPlaceholder}>
-                <Ionicons name="cube-outline" size={56} color={palette.text.tertiary} />
-              </View>
-            )}
-            {displayPhotoUri ? (
-              <View style={styles.expandBadge}>
-                <Ionicons name="expand-outline" size={15} color={colors.white} />
-              </View>
-            ) : null}
-          </TouchableOpacity>
-
+          <ProductPhotoGallery photos={productPhotoUrls(product)} />
+          {canManageWarehouse ? <ProductShareButton id={product.id} name={product.name} /> : null}
+          {product.assemblyId ? (
+            <ProductKitPanel product={product} canManage={canManageWarehouse} />
+          ) : product.isBundle ? (
+            <Text color={palette.text.secondary}>Набор позиций · без сборки</Text>
+          ) : null}
           {/* NAME + category + low-stock pill */}
           <View style={styles.titleBlock}>
             <Text variant="title1" color={palette.text.primary} style={styles.name}>
@@ -1030,7 +1012,9 @@ export default function ProductDetailScreen() {
                   value={
                     product.costPriceIsPlaceholder
                       ? 'Заготовка · ' + formatMoney(product.costPrice)
-                      : formatMoney(product.costPrice)
+                      : product.assemblyId
+                        ? formatKitUnitCost(product.assemblyExactCost ?? product.costPrice)
+                        : formatMoney(product.costPrice)
                   }
                   accent={colors.orange[500]}
                   palette={palette}
@@ -1072,6 +1056,25 @@ export default function ProductDetailScreen() {
             </TouchableOpacity>
           ) : null}
 
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginVertical: 12 }}>
+            <TouchableOpacity accessibilityRole="button" onPress={() => setLabelsOpen(true)} style={{ padding: 12 }}>
+              <Text color={palette.accent.primaryText}>Этикетки</Text>
+            </TouchableOpacity>
+            {canManageWarehouse && !product.internalBarcode && (
+              <TouchableOpacity
+                accessibilityRole="button"
+                disabled={generatingBarcode}
+                onPress={() =>
+                  void generateLabelCodes([product.id]).catch(() =>
+                    Alert.alert('Штрихкод не создан', 'Подключитесь к сети и повторите.'),
+                  )
+                }
+                style={{ padding: 12 }}
+              >
+                <Text color={palette.accent.primaryText}>{generatingBarcode ? 'Создание…' : 'Создать штрихкод'}</Text>
+              </TouchableOpacity>
+            )}
+          </View>
           {/* INFO card — cell / supplier / barcode / unit / warranty */}
           <SectionHeader title="Информация" />
           <View style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
@@ -1105,6 +1108,13 @@ export default function ProductDetailScreen() {
               value={product.barcode || 'Не указан'}
               palette={palette}
               mono={!!product.barcode}
+            />
+            <InfoRow
+              icon="barcode-outline"
+              label="Внутренний штрихкод"
+              value={product.internalBarcode || 'Не создан'}
+              palette={palette}
+              mono={!!product.internalBarcode}
             />
             <InfoRow icon="scale-outline" label="Единица измерения" value={unitLabel(product.unit)} palette={palette} />
             <InfoRow
@@ -1208,7 +1218,19 @@ export default function ProductDetailScreen() {
           {/* RECENT MOVEMENTS — slice; «Вся история» opens the full modal. */}
           <SectionHeader title="Движение товара" />
           <View style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
-            {recentMovements.length === 0 ? (
+            {movementsLoading && !recentMovements.length ? (
+              <Text style={{ padding: spacing[4] }} color={palette.text.secondary}>
+                Загрузка истории…
+              </Text>
+            ) : movementsError && !recentMovements.length ? (
+              <TouchableOpacity
+                accessibilityRole="button"
+                onPress={() => void refetchMovements()}
+                style={{ padding: spacing[4] }}
+              >
+                <Text color={palette.accent.primaryText}>Не удалось загрузить историю · Повторить</Text>
+              </TouchableOpacity>
+            ) : recentMovements.length === 0 ? (
               <View style={styles.emptyInline}>
                 <View style={[styles.emptyIcon, { backgroundColor: palette.bg.muted }]}>
                   <Ionicons name="swap-horizontal-outline" size={22} color={palette.text.tertiary} />
@@ -1218,9 +1240,20 @@ export default function ProductDetailScreen() {
                 </Text>
               </View>
             ) : (
-              recentMovements.map((m, i) => (
-                <MovementLine key={m.id} movement={m} palette={palette} last={i === recentMovements.length - 1} />
-              ))
+              recentMovements.map((m, i) =>
+                m.checkId && m.receiptAvailable !== false && hasPermission('checks_view') ? (
+                  <TouchableOpacity
+                    key={m.id}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Открыть чек ${m.checkNumber ?? ''}`}
+                    onPress={() => navigation.navigate('Checks', { screen: 'CheckDetail', params: { id: m.checkId } })}
+                  >
+                    <MovementLine movement={m} palette={palette} last={i === recentMovements.length - 1} />
+                  </TouchableOpacity>
+                ) : (
+                  <MovementLine key={m.id} movement={m} palette={palette} last={i === recentMovements.length - 1} />
+                ),
+              )
             )}
             {recentMovements.length > 0 ? (
               <TouchableOpacity
@@ -1298,6 +1331,8 @@ export default function ProductDetailScreen() {
         productId={historyOpen ? productId : null}
         productName={product.name}
         productUnit={product.unit}
+        initialPage={movementPage}
+        initialPageUpdatedAt={movementsUpdatedAt}
         onOpenCheck={(checkId) => {
           // Закрываем модалку и уходим кросс-таб в Журнал → CheckDetail:
           // CheckDetail недостижим из ProductsStack напрямую.
@@ -1306,34 +1341,15 @@ export default function ProductDetailScreen() {
         }}
       />
 
-      {/* Fullscreen photo preview — mirrors the warehouse list preview UX. */}
-      <RNModal
-        visible={!!fullscreenPhoto}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setFullscreenPhoto(null)}
-      >
-        <Pressable style={styles.fullscreenOverlay} onPress={() => setFullscreenPhoto(null)}>
-          <BlurView intensity={Platform.OS === 'android' ? 24 : 40} tint="dark" style={StyleSheet.absoluteFill} />
-          {Platform.OS === 'android' && <View pointerEvents="none" style={styles.fullscreenScrim} />}
-          {fullscreenPhoto ? (
-            <Pressable style={styles.fullscreenImageWrap} onPress={(e) => e.stopPropagation?.()}>
-              <CachedImage source={{ uri: fullscreenPhoto }} style={styles.fullscreenImage} resizeMode="cover" />
-            </Pressable>
-          ) : null}
-          <Pressable
-            style={styles.fullscreenClose}
-            onPress={() => setFullscreenPhoto(null)}
-            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-          >
-            <Ionicons name="close" size={20} color={colors.white} />
-          </Pressable>
-        </Pressable>
-      </RNModal>
-
       {/* Камера-скан для поля «Штрихкод» (round 12 #6a). Открывается ТОЛЬКО
           когда другие модалки экрана закрыты — сиблинг-Modal конфликтов iOS
           нет. Одноразовый скан: код падает в поле, сканер закрывается. */}
+      <ProductLabelPrint
+        visible={labelsOpen}
+        onClose={() => setLabelsOpen(false)}
+        products={labelProducts}
+        onGenerateInternal={canManageWarehouse ? generateLabelCodes : undefined}
+      />
       <BarcodeScanner
         visible={barcodeScanOpen}
         onClose={() => setBarcodeScanOpen(false)}
@@ -1457,6 +1473,9 @@ interface MovementLineProps {
 }
 function MovementLine({ movement, palette, last }: MovementLineProps) {
   const v = visualFor(movement.type);
+  const timezone = useTenantTimezone();
+  const amount = movementAmount(movement);
+  const documentDate = movementDocumentDate(movement, timezone);
   return (
     <View
       style={[
@@ -1469,21 +1488,28 @@ function MovementLine({ movement, palette, last }: MovementLineProps) {
       </View>
       <View style={styles.moveBody}>
         <Text variant="bodyEmph" color={palette.text.primary} numberOfLines={1}>
-          {v.label}
+          {movement.legacyBaseline ? 'Из истории чека' : v.label}
         </Text>
         <Text variant="caption" color={palette.text.tertiary}>
           {formatMovementDateTime(movement.createdAt)}
         </Text>
+        {documentDate ? (
+          <Text variant="caption" color={palette.text.tertiary}>
+            {documentDate}
+          </Text>
+        ) : null}
       </View>
       <View style={styles.moveRight}>
         <Text variant="bodyEmph" color={v.sign === '' ? palette.text.primary : v.color}>
-          {v.sign}
-          {formatQty(movement.quantity)}
+          {amount.sign}
+          {formatQty(amount.quantity)}
         </Text>
-        <Text variant="caption" color={palette.text.tertiary}>
-          {'→ '}
-          {formatQty(movement.stockAfter)}
-        </Text>
+        {movement.stockAfter !== null && (
+          <Text variant="caption" color={palette.text.tertiary}>
+            {'→ '}
+            {formatQty(movement.stockAfter)}
+          </Text>
+        )}
       </View>
     </View>
   );

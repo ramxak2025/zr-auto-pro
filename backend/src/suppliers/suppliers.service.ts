@@ -1,3 +1,6 @@
+import { searchPage } from '../common/smart-search';
+import { validateInvoiceUnitsTx } from '../supplier-invoices/invoice-units';
+import { lockInvoiceReceipt, linkInvoiceReceipt } from '../supplier-invoices/invoice-receipt';
 import {
   Injectable,
   Inject,
@@ -104,34 +107,22 @@ export class SuppliersService {
   }
 
   async getAll(tenantID: string, query: any) {
-    const page = parseInt(query.page) || 1;
+    const page = Math.max(1, parseInt(query.page) || 1);
     const limit = capLimit(query.limit, 50, 1000);
     const offset = (page - 1) * limit;
     const search = query.search || '';
 
-    let where = 'tenant_id = $1';
-    const params: any[] = [tenantID];
-    let idx = 2;
-
-    if (search) {
-      where += ` AND (name ILIKE $${idx} OR phone ILIKE $${idx})`;
-      params.push(`%${search}%`);
-      idx++;
-    }
-
-    const countResult = await this.pool.query(`SELECT COUNT(*) as total FROM suppliers WHERE ${where}`, params);
-    const total = parseInt(countResult.rows[0].total);
-
-    params.push(limit, offset);
-    // ORDER: system rows first (is_system DESC puts true above false),
-    // then alphabetical. The FE renders the system row as a pinned
-    // header card; this keeps the order stable across pagination.
-    const { rows } = await this.pool.query(
-      `SELECT * FROM suppliers WHERE ${where}
-        ORDER BY is_system DESC, name
-        LIMIT $${idx} OFFSET $${idx + 1}`,
-      params,
-    );
+    const { rows, total } = await searchPage(this.pool, {
+      select: '*',
+      from: 'FROM suppliers',
+      where: 'tenant_id=$1',
+      params: [tenantID],
+      query: search,
+      fields: ['name', 'phone', 'contact_person'],
+      order: 'is_system DESC, name, id',
+      limit,
+      offset,
+    });
 
     return { data: rows.map(this.mapSupplier), total, page, limit };
   }
@@ -623,6 +614,17 @@ export class SuppliersService {
         await client.query('COMMIT');
         return request.replay;
       }
+      if (dto.invoiceDocumentId)
+        await lockInvoiceReceipt(
+          client,
+          tenantID,
+          pointId,
+          dto.invoiceDocumentId,
+          dto.supplierId,
+          dto.expectedInvoiceVersion,
+          dto.invoiceLineIds,
+          dto.items,
+        );
       const { rows: suppliers } = await client.query('SELECT id FROM suppliers WHERE id=$1 AND tenant_id=$2', [
         dto.supplierId,
         tenantID,
@@ -634,6 +636,15 @@ export class SuppliersService {
         dto.items.map((item) => item.productId),
         pointId,
       );
+      if (dto.invoiceDocumentId)
+        await validateInvoiceUnitsTx(
+          client,
+          tenantID,
+          dto.invoiceDocumentId,
+          dto.invoiceLineIds ?? [],
+          dto.items,
+          dto.invoiceUnits,
+        );
       const byProduct = new Map(products.map((product) => [product.id, product]));
       const context = await purchaseContext(
         client,
@@ -701,6 +712,8 @@ export class SuppliersService {
         `UPDATE suppliers SET total_purchases=total_purchases+$1, current_debt=current_debt+$1 WHERE id=$2 AND tenant_id=$3`,
         [decimal(invoice, 2), dto.supplierId, tenantID],
       );
+      if (dto.invoiceDocumentId)
+        await linkInvoiceReceipt(client, tenantID, dto.invoiceDocumentId, id, dto.invoiceDocumentDate);
       const result = { id };
       await saveProcurementRequest(client, tenantID, dto.requestId, request.fingerprint, result);
       await client.query('COMMIT');

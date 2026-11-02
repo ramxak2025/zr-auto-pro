@@ -22,7 +22,7 @@
  *   • the source file is added to the existing "Autexa" PBXGroup (path
  *     "Autexa") with a BARE filename, so it resolves to ios/Autexa/<file>.
  */
-const { withXcodeProject } = require('@expo/config-plugins');
+const { withXcodeProject, withInfoPlist } = require('@expo/config-plugins');
 const path = require('path');
 const fs = require('fs');
 
@@ -33,11 +33,11 @@ function stripQuotes(s) {
   return (s || '').replace(/^"|"$/g, '');
 }
 
-function alreadyAdded(proj) {
+function alreadyAdded(proj, filename = APP_INTENTS_FILENAME) {
   const refs = proj.pbxFileReferenceSection();
   return Object.values(refs).some((r) => {
     if (!r || typeof r !== 'object') return false;
-    return stripQuotes(r.path || r.name).endsWith(APP_INTENTS_FILENAME);
+    return stripQuotes(r.path || r.name).endsWith(filename);
   });
 }
 
@@ -46,24 +46,23 @@ const withNativeCapabilities = (config) =>
     const iosRoot = path.join(mod.modRequest.projectRoot, 'ios');
     const proj = mod.modResults;
 
-    // Idempotent guard — never add the source / frameworks twice.
-    if (alreadyAdded(proj)) {
-      return mod;
-    }
-
-    // 1. Copy the App Intents source to the ios ROOT. We attach it to the
-    //    project's main group (which resolves to SOURCE_ROOT = ios/), so a
-    //    bare filename resolves to ios/AutexaAppIntents.swift deterministically
-    //    — independent of how Expo names the per-app PBXGroup.
-    fs.copyFileSync(APP_INTENTS_SRC, path.join(iosRoot, APP_INTENTS_FILENAME));
-
-    // 2. Resolve the main app target (first target) + the project main group.
+    const hadAppIntents = alreadyAdded(proj);
     const mainTarget = proj.getFirstTarget();
     const mainTargetUuid = mainTarget.uuid;
     const mainGroupKey = proj.getFirstProject().firstProject.mainGroup;
-
-    // 3. Add the Swift file to the main target's Sources build phase.
-    proj.addSourceFile(APP_INTENTS_FILENAME, { target: mainTargetUuid }, mainGroupKey);
+    const files = [
+      [APP_INTENTS_SRC, APP_INTENTS_FILENAME],
+      [
+        path.join(__dirname, '..', 'ios-extensions', 'AuTexaWidget', 'AutexaNativeEnvironment.swift'),
+        'AutexaAppNativeEnvironment.swift',
+      ],
+    ];
+    for (const [source, filename] of files) {
+      // Refresh guards even in an incremental prebuild; add references once.
+      fs.copyFileSync(source, path.join(iosRoot, filename));
+      if (!alreadyAdded(proj, filename)) proj.addSourceFile(filename, { target: mainTargetUuid }, mainGroupKey);
+    }
+    if (hadAppIntents) return mod;
 
     // 4. Weak-link the iOS-16 frameworks into the app binary.
     proj.addFramework('AppIntents.framework', { target: mainTargetUuid, weak: true });
@@ -72,4 +71,11 @@ const withNativeCapabilities = (config) =>
     return mod;
   });
 
-module.exports = withNativeCapabilities;
+module.exports = (config) =>
+  withNativeCapabilities(
+    withInfoPlist(config, (mod) => {
+      if (mod.extra?.inventoryInternal === 'ios-v1') mod.modResults.AutexaInventoryInternal = true;
+      else delete mod.modResults.AutexaInventoryInternal;
+      return mod;
+    }),
+  );

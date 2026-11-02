@@ -1,3 +1,4 @@
+import { inventoryInternal } from '../utils/runtimeEnvironment';
 /**
  * CashierPaymentScreen — центральный таб кассира «Оплата»
  * (Round 14, режим «Кассир», CASHIER_MODE_SPEC).
@@ -22,7 +23,7 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { RefreshControl, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import * as Notifications from 'expo-notifications';
+import * as Notifications from '../utils/notifications';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { checksApi } from '../api/services';
@@ -189,6 +190,7 @@ export default function CashierPaymentScreen() {
   // (data.type='order-ready'; см. checks.service). Если приложение открыто —
   // очередь обновляется сама, без pull-to-refresh.
   React.useEffect(() => {
+    if (inventoryInternal) return;
     const sub = Notifications.addNotificationReceivedListener((notification) => {
       const data = notification.request.content.data as Record<string, unknown> | undefined;
       const t = typeof data?.type === 'string' ? data.type : '';

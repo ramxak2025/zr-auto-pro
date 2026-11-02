@@ -1,3 +1,5 @@
+import { kitConflict } from '../product-kits/kit-stock';
+import { loadStockHistory, StockHistoryQuery } from './stock-history';
 import {
   Injectable,
   Inject,
@@ -84,7 +86,7 @@ export class StockMovementsService {
     // 169 — товар обязан лежать на складе ФИЛИАЛА сессии: движение по чужому
     // товару = «не найден» (существование чужой строки не подтверждаем).
     const { rows } = await client.query(
-      `SELECT p.id, p.tenant_id, p.warehouse_id, p.cost_price FROM products p WHERE p.id=$1 AND p.tenant_id=$2
+      `SELECT p.id, p.tenant_id, p.warehouse_id, p.cost_price, p.assembly_id FROM products p WHERE p.id=$1 AND p.tenant_id=$2
          AND ($3::uuid IS NULL OR EXISTS (SELECT 1 FROM warehouses wpt
                 WHERE wpt.id = p.warehouse_id AND wpt.point_id = $3::uuid))
        LIMIT 1`,
@@ -93,6 +95,7 @@ export class StockMovementsService {
     if (rows.length === 0) {
       throw new BadRequestException({ message: 'Товар не найден' });
     }
+    if (rows[0].assembly_id) throw kitConflict();
     return rows[0];
   }
 
@@ -127,7 +130,7 @@ export class StockMovementsService {
       if (rows.length === 0) throw new BadRequestException({ message: 'Склад не найден' });
       return rows[0].id;
     }
-    const w = await this.warehouses.resolveByKind(tenantID, fallbackKind, pointId);
+    const w = await this.warehouses.resolveByKind(tenantID, fallbackKind, pointId, client);
     return w.id;
   }
 
@@ -651,6 +654,8 @@ export class StockMovementsService {
     // describes the source warehouse (было → осталось на исходном).
     const stockAfter = stockBefore - qty;
     let targetProductId: string = dto.productId;
+    let targetStockBefore = 0,
+      targetStockAfter = qty;
     if (stockAfter === 0) {
       // 172 — ячейка принадлежит СКЛАДУ: строка уехала на другой склад (брак / Б-У /
       // другой филиал) — адрес прежнего склада там не существует, снимаем его.
@@ -674,7 +679,8 @@ export class StockMovementsService {
       );
       if (targetRows.length > 0) {
         targetProductId = targetRows[0].id;
-        const targetStockAfter = (parseFloat(targetRows[0].stock) || 0) + qty;
+        targetStockBefore = parseFloat(targetRows[0].stock) || 0;
+        targetStockAfter = targetStockBefore + qty;
         await client.query('UPDATE products SET stock=$1 WHERE id=$2 AND tenant_id=$3', [
           targetStockAfter,
           targetProductId,
@@ -684,10 +690,10 @@ export class StockMovementsService {
         // Copy the SKU onto the target warehouse. min_stock = 0 on the copy —
         // брак/Б-У stock must never ring low-stock alerts.
         const { rows: insRows } = await client.query(
-          `INSERT INTO products (name, category, photo, cost_price, sell_price, stock, min_stock, unit,
+          `INSERT INTO products (name, category, photo, photos, cost_price, sell_price, stock, min_stock, unit,
                                  is_bundle, bundle_items, supplier_id, tenant_id, warehouse_id, warranty_days, barcode,
                                      brand, article, packaging, source_url, sell_price_is_placeholder, cost_price_is_placeholder)
-           SELECT name, category, photo, cost_price, sell_price, $3, 0, unit,
+           SELECT name, category, photo, photos, cost_price, sell_price, $3, 0, unit,
                   is_bundle, bundle_items, supplier_id, tenant_id, $4, warranty_days, barcode,
                       brand, article, packaging, source_url, sell_price_is_placeholder, cost_price_is_placeholder
              FROM products WHERE id=$1 AND tenant_id=$2
@@ -701,8 +707,8 @@ export class StockMovementsService {
     const { rows: mvRows } = await client.query(
       `INSERT INTO stock_movements (
          product_id, type, quantity, stock_before, stock_after, reason,
-         tenant_id, user_id, warehouse_id, source_warehouse_id, target_warehouse_id
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         tenant_id, user_id, warehouse_id, source_warehouse_id, target_warehouse_id, source_product_id,target_product_id,target_stock_before,target_stock_after
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
        RETURNING id`,
       [
         dto.productId,
@@ -716,6 +722,10 @@ export class StockMovementsService {
         targetWarehouseId,
         sourceWarehouseId,
         targetWarehouseId,
+        dto.productId,
+        targetProductId,
+        targetStockBefore,
+        targetStockAfter,
       ],
     );
 
@@ -823,159 +833,26 @@ export class StockMovementsService {
     };
   }
 
-  // ── listing ────────────────────────────────────────────────────────────
-  async list(
-    tenantID: string,
-    query: {
-      warehouseId?: string;
-      productId?: string;
-      type?: string;
-      dateFrom?: string;
-      dateTo?: string;
-      includeSales?: boolean | string;
-    },
-    pointId: string | null = null,
-  ) {
-    let where = 'sm.tenant_id = $1';
-    const params: any[] = [tenantID];
-    let idx = 2;
+  async history(tenantID: string, query: StockHistoryQuery, pointId: string | null = null, actor?: JwtPayload) {
+    return loadStockHistory(this.pool, tenantID, query, pointId, actor);
+  }
 
-    if (isUuid(query.warehouseId)) {
-      where += ` AND sm.warehouse_id = $${idx++}`;
-      params.push(query.warehouseId.trim());
-    }
-    if (isUuid(query.productId)) {
-      where += ` AND sm.product_id = $${idx++}`;
-      params.push(query.productId.trim());
-    }
-    if (query.type) {
-      where += ` AND sm.type = $${idx++}`;
-      params.push(query.type);
-    }
-    if (query.dateFrom) {
-      where += ` AND sm.created_at >= $${idx++}`;
-      params.push(query.dateFrom);
-    }
-    if (query.dateTo) {
-      where += ` AND sm.created_at <= $${idx++}`;
-      params.push(query.dateTo);
-    }
-    // 169 — лента только по складам филиала сессии (последним: помощник
-    // нумерует плейсхолдер по params.length).
-    where += warehousePointFilterSql('sm', pointId, params);
-
-    const { rows } = await this.pool.query(
-      `SELECT sm.*, p.name as product_name, u.full_name as user_name,
-              w.name as warehouse_name, sw.name as source_name, tw.name as target_name,
-              s.name as supplier_name
-         FROM stock_movements sm
-         JOIN products p ON p.id = sm.product_id
-         LEFT JOIN users u ON u.id = sm.user_id
-         LEFT JOIN warehouses w  ON w.id  = sm.warehouse_id
-         LEFT JOIN warehouses sw ON sw.id = sm.source_warehouse_id
-         LEFT JOIN warehouses tw ON tw.id = sm.target_warehouse_id
-         LEFT JOIN suppliers  s  ON s.id  = sm.supplier_id
-        WHERE ${where}
-        ORDER BY sm.created_at DESC LIMIT 200`,
-      params,
+  // Existing clients retain their array response and 200-row preview. New clients
+  // follow the dedicated cursor endpoint until nextCursor is null.
+  async list(tenantID: string, query: StockHistoryQuery, pointId: string | null = null, actor?: JwtPayload) {
+    const result = await this.history(
+      tenantID,
+      {
+        ...query,
+        cursor: undefined,
+        limit: 200,
+        warehouseId: isUuid(query.warehouseId) ? query.warehouseId.trim() : undefined,
+        productId: isUuid(query.productId) ? query.productId.trim() : undefined,
+        includeSales: isUuid(query.productId) ? query.includeSales : false,
+      },
+      pointId,
+      actor,
     );
-
-    const stockRows = rows.map((row) => ({
-      id: row.id,
-      productId: row.product_id,
-      product: { id: row.product_id, name: row.product_name },
-      type: row.type,
-      quantity: parseFloat(row.quantity) || 0,
-      stockBefore: parseFloat(row.stock_before) || 0,
-      stockAfter: parseFloat(row.stock_after) || 0,
-      reason: row.reason,
-      userId: row.user_id,
-      user: row.user_id ? { id: row.user_id, fullName: row.user_name } : null,
-      warehouseId: row.warehouse_id ?? null,
-      warehouseName: row.warehouse_name ?? null,
-      sourceWarehouseId: row.source_warehouse_id ?? null,
-      sourceWarehouseName: row.source_name ?? null,
-      targetWarehouseId: row.target_warehouse_id ?? null,
-      targetWarehouseName: row.target_name ?? null,
-      supplierId: row.supplier_id ?? null,
-      supplierName: row.supplier_name ?? null,
-      recordAsExpense: !!row.record_as_expense,
-      linkedExpenseId: row.linked_expense_id ?? null,
-      // 034_used_purchase_movement_flag.sql adds this column. The journal
-      // (mobile + web) keys off it to render "Покупка Б/У" specially.
-      isUsedPurchase: !!row.is_used_purchase,
-      checkId: null as string | null,
-      checkNumber: null as number | null,
-      createdAt: row.created_at,
-    }));
-
-    // ── ПРОДАЖИ (волна G) — opt-in ──────────────────────────────────────────
-    // «Движение товара» показывает только складские операции (приёмка, списание,
-    // перенос). Владелец хочет видеть в той же ленте и ПРОДАЖИ этого товара с
-    // переходом в чек. Включается ТОЛЬКО при валидном productId (карточка одного
-    // товара) — на общей ленте всех товаров продажи не подмешиваем (это был бы
-    // весь журнал чеков). Строки продаж — тип 'sale', с checkId/checkNumber для
-    // навигации; на складские остатки они не влияют (stockBefore/After = null).
-    const includeSales = query.includeSales === true || query.includeSales === 'true';
-    if (!includeSales || !isUuid(query.productId)) {
-      return stockRows;
-    }
-
-    // 169 — продажи только чеками филиала сессии.
-    const saleParams: unknown[] = [tenantID, query.productId.trim()];
-    const salePointFilter = pointFilterSql('c', pointId, saleParams);
-    const { rows: saleRows } = await this.pool.query(
-      `SELECT cpl.id AS line_id, cpl.product_id, cpl.name AS product_name, cpl.quantity,
-              c.id AS check_id, c.number AS check_number,
-              COALESCE(c.date, c.created_at) AS created_at,
-              c.master_id, u.full_name AS master_name
-         FROM check_product_lines cpl
-         JOIN checks c ON c.id = cpl.check_id AND c.tenant_id = $1 AND c.deleted_at IS NULL${salePointFilter}
-         LEFT JOIN users u ON u.id = c.master_id
-        WHERE cpl.product_id = $2
-        ORDER BY COALESCE(c.date, c.created_at) DESC
-        LIMIT 200`,
-      saleParams,
-    );
-
-    const sales = saleRows.map((row) => ({
-      id: `sale:${row.line_id}`,
-      productId: row.product_id,
-      product: { id: row.product_id, name: row.product_name },
-      type: 'sale' as const,
-      quantity: parseFloat(row.quantity) || 0,
-      // Продажи не пишут stock_movements → историю остатка на момент продажи не
-      // восстановить. 0/0 — плейсхолдер; клиент строку 'sale' рендерит отдельно
-      // (по checkId), остаток для неё не показывает.
-      stockBefore: 0,
-      stockAfter: 0,
-      reason: null,
-      userId: row.master_id ?? null,
-      user: row.master_id ? { id: row.master_id, fullName: row.master_name } : null,
-      warehouseId: null,
-      warehouseName: null,
-      sourceWarehouseId: null,
-      sourceWarehouseName: null,
-      targetWarehouseId: null,
-      targetWarehouseName: null,
-      supplierId: null,
-      supplierName: null,
-      recordAsExpense: false,
-      linkedExpenseId: null,
-      isUsedPurchase: false,
-      checkId: row.check_id as string,
-      checkNumber: row.check_number ?? null,
-      createdAt: row.created_at,
-    }));
-
-    // Смёржить складские + продажи, отсортировать по времени (новые сверху),
-    // обрезать объединённый список до 200 (тот же лимит, что и по складу).
-    const merged = [...stockRows, ...sales];
-    merged.sort((a, b) => {
-      const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-      const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-      return tb - ta;
-    });
-    return merged.slice(0, 200);
+    return result.data;
   }
 }
