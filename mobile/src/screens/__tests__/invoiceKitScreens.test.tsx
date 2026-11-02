@@ -372,6 +372,17 @@ beforeEach(() => {
 });
 afterEach(resetHooks);
 
+it('native explicit suggestion confirmation remembers the name without receiving inventory', async () => {
+  render(InvoiceScreen);
+  await flush();
+  await press(InvoiceScreen, 'Сфотографировать');
+  await press(InvoiceScreen, 'Распознать накладную');
+  expect(mockMap).not.toHaveBeenCalled();
+  await press(InvoiceScreen, `Подтвердить: ${mockProduct.name}`);
+  expect(mockMap).toHaveBeenCalledWith(mockDocument.id, 'line', expect.objectContaining({ productId: mockProduct.id, remember: true }));
+  expect(mockConfirm).not.toHaveBeenCalled();
+});
+
 it('native invoice camera preserves the full page, uses authenticated previews, maps explicitly and receives once after confirmation', async () => {
   render(InvoiceScreen);
   await flush();
@@ -387,8 +398,9 @@ it('native invoice camera preserves the full page, uses authenticated previews, 
   expect(mockMap).toHaveBeenCalledWith(
     mockDocument.id,
     'line',
-    expect.objectContaining({ productId: mockProduct.id, remember: false }),
+    expect.objectContaining({ productId: mockProduct.id, remember: true }),
   );
+  expect(mockConfirm).not.toHaveBeenCalled();
   field(InvoiceScreen, 'Количество — Фильтр поставщика', '12,5');
   await press(InvoiceScreen, 'Проверить и принять');
   expect(mockConfirm).not.toHaveBeenCalled();

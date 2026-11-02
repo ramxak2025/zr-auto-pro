@@ -228,15 +228,16 @@ export default function SupplierInvoiceScreen() {
       const doc = documentRef.current;
       if (!doc) return;
       if (!isReceivableProduct(product, warehouses)) throw new Error('Выберите обычный товар для приёмки.');
+      const rememberAlias = remember && doc.lines.some((line) => line.id === lineId && line.origin !== 'manual');
       const result = await supplierInvoicesApi.mapLine(doc.id, lineId, {
         expectedVersion: doc.version,
         productId: product.id,
-        remember,
+        remember: rememberAlias,
       });
       if (current()) {
         apply(result.data);
         setRows((previous) => ({ ...previous, [lineId]: { ...previous[lineId], unitAcknowledged: false } }));
-        if (remember) Alert.alert('Соответствие сохранено', 'Название запомнено только для этого поставщика.');
+        if (rememberAlias) Alert.alert('Соответствие сохранено', 'Название запомнено только для этого поставщика.');
       }
     });
   const bridge: ProductPickerBridge = {
@@ -256,7 +257,7 @@ export default function SupplierInvoiceScreen() {
           price: '',
           requestId: randomUUID(),
         });
-      else if (target.lineId) map(target.lineId, product, false);
+      else if (target.lineId) map(target.lineId, product, true);
     },
     decrementProduct: () => undefined,
     showCostPrice: hasPermission('warehouse_manage'),
@@ -815,7 +816,7 @@ export default function SupplierInvoiceScreen() {
                         variant="ghost"
                         disabled={!editable}
                         onPress={() =>
-                          map(line.id, products.find((item) => item.id === line.suggestedProductId)!, false)
+                          map(line.id, products.find((item) => item.id === line.suggestedProductId)!, true)
                         }
                       />
                     ) : null}

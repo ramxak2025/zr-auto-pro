@@ -302,14 +302,15 @@ export default function SupplierInvoiceDialog({
     void run('Сопоставляем товар…', async (current) => {
       if (!document) return;
       if (!isReceivableProduct(product, warehouses)) throw new Error('Выберите обычный товар для приёмки.');
+      const rememberAlias = remember && document.lines.some((line) => line.id === lineId && line.origin !== 'manual');
       const result = await supplierInvoicesApi.mapLine(document.id, lineId, {
         expectedVersion: document.version,
         productId: product.id,
-        remember,
+        remember: rememberAlias,
       });
       if (current()) {
         apply(result.data);
-        if (remember) toast.success('Название запомнено для этого поставщика');
+        if (rememberAlias) toast.success('Название запомнено для этого поставщика');
         setRows((previous) => ({ ...previous, [lineId]: { ...previous[lineId], unitAcknowledged: false } }));
       }
     });
@@ -824,7 +825,7 @@ export default function SupplierInvoiceDialog({
                           variant="ghost"
                           size="sm"
                           disabled={!editable}
-                          onClick={() => map(line.id, suggestion, false)}
+                          onClick={() => map(line.id, suggestion, true)}
                         >
                           Подтвердить: {suggestion.name}
                         </Button>
@@ -924,7 +925,7 @@ export default function SupplierInvoiceDialog({
               price: '',
               requestId: newUuid(),
             });
-          } else if (id) map(id, product, false);
+          } else if (id) map(id, product, true);
         }}
       />
       <Modal

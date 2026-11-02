@@ -554,6 +554,22 @@ async function uploadAndRecognize(tree) {
   await uiClick(tree, 'Распознать');
 }
 
+test('confirming an OCR suggestion remembers the name without receiving inventory', async () => {
+  const h = reviewHarness();
+  const Dialog = load('frontend/src/components/supplierInvoices/SupplierInvoiceDialog.tsx', h.mocks, h.globals).default;
+  let tree;
+  await Renderer.act(async () => {
+    tree = Renderer.create(React.createElement(Dialog, { isOpen: true, supplierId: 'supplier', supplierName: 'Поставщик', onClose() {}, onReceived() {} }));
+  });
+  try {
+    await uploadAndRecognize(tree);
+    assert.equal(h.logs.map.length, 0);
+    await uiClick(tree, `Подтвердить: ${h.product.name}`);
+    assert.equal(h.logs.map[0].body.remember, true);
+    assert.equal(h.logs.confirm.length, 0);
+  } finally { tree.unmount(); }
+});
+
 test('actual OCR review requires explicit catalog mapping, preserves edited document date and never receives before final confirmation', async () => {
   const h = reviewHarness();
   const Dialog = load('frontend/src/components/supplierInvoices/SupplierInvoiceDialog.tsx', h.mocks, h.globals).default;
@@ -587,7 +603,8 @@ test('actual OCR review requires explicit catalog mapping, preserves edited docu
       picker.props.onSelectProduct(h.product);
       await new Promise((resolve) => setImmediate(resolve));
     });
-    assert.equal(h.logs.map[0].body.remember, false, 'no alias is stored implicitly');
+    assert.equal(h.logs.map[0].body.remember, true, 'explicit catalog choice remembers the supplier name');
+    assert.equal(h.logs.confirm.length, 0, 'mapping must not receive inventory');
     assert.equal(
       tree.root.findAllByType('input').find((node) => node.props['aria-label'] === 'Дата документа').props.value,
       '2026-10-20',
