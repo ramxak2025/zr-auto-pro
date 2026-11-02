@@ -67,8 +67,9 @@ export default function WarehouseSwitcher({
 
   return (
     <RNModal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
-      <Pressable style={[styles.overlay, { backgroundColor: 'rgba(0,0,0,0.45)' }]} onPress={onClose}>
+      <Pressable accessible={false} style={[styles.overlay, { backgroundColor: 'rgba(0,0,0,0.45)' }]} onPress={onClose}>
         <Pressable
+          accessible={false}
           onPress={(e) => e.stopPropagation?.()}
           style={[
             styles.sheet,
@@ -78,7 +79,9 @@ export default function WarehouseSwitcher({
             },
           ]}
         >
-          <View style={[styles.handle, { backgroundColor: palette.border.strong }]} />
+          <Pressable accessibilityRole="button" accessibilityLabel="Закрыть выбор склада" onPress={onClose} hitSlop={12}>
+            <View style={[styles.handle, { backgroundColor: palette.border.strong }]} />
+          </Pressable>
           <Text style={[styles.title, { color: palette.text.primary }]}>{'Выбор склада'}</Text>
           {sorted.length === 0 ? (
             <View style={styles.emptyWrap}>
@@ -94,6 +97,9 @@ export default function WarehouseSwitcher({
                 <TouchableOpacity
                   key={wh.id}
                   activeOpacity={0.6}
+                  accessibilityRole="button"
+                  accessibilityLabel={label}
+                  accessibilityState={{ selected: isSelected }}
                   onPress={() => {
                     onSelect(wh);
                     onClose();
