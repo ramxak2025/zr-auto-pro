@@ -79,7 +79,12 @@ export default function WarehouseSwitcher({
             },
           ]}
         >
-          <Pressable accessibilityRole="button" accessibilityLabel="Закрыть выбор склада" onPress={onClose} hitSlop={12}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Закрыть выбор склада"
+            onPress={onClose}
+            hitSlop={12}
+          >
             <View style={[styles.handle, { backgroundColor: palette.border.strong }]} />
           </Pressable>
           <Text style={[styles.title, { color: palette.text.primary }]}>{'Выбор склада'}</Text>

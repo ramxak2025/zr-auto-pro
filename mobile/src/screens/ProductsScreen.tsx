@@ -2943,7 +2943,7 @@ function ProductsScreenContents() {
               value={formBarcode}
               onChangeText={setFormBarcode}
               style={[styles.formInput, formInputThemed, { flex: 1 }]}
-              placeholder="EAN-13 / QR / \u0441\u0432\u043E\u0439 \u043A\u043E\u0434"
+              placeholder="EAN-13 / QR / свой код"
               placeholderTextColor={palette.text.tertiary}
               autoCapitalize="none"
               autoCorrect={false}
